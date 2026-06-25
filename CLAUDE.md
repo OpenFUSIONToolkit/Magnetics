@@ -1,0 +1,1 @@
+CLAUDE.md is the only canonical agent bootstrap file. All other files are symlinks to it. If you want to edit the agent bootstrap, edit CLAUDE.md in the root of the repository. 
