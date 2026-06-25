@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv / virtual environments  (uv.lock should be committed)
+.venv/
+venv/
+
+# Node / web
+node_modules/
+dist/
+.vite/
+*.local
+
+# Data caches (reduced shot bundles fetched from MDSplus)
+data/cache/
+*.nc
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
