@@ -24,3 +24,6 @@ data/cache/
 .DS_Store
 .idea/
 .vscode/
+
+# GA-copyrighted source docs — distributed via GitHub Release, not committed
+resources/
