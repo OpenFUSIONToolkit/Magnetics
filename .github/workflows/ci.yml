@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (analysis)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: analysis
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (Python 3.14 from .python-version)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install project + deps
+        run: uv sync
+
+      - name: Lint (ruff)
+        run: uvx ruff check .
+
+      - name: Tests (pytest; tolerate "no tests collected" while skeletal)
+        run: |
+          set +e
+          uv run --with pytest pytest -q
+          code=$?
+          set -e
+          # exit 5 = no tests collected yet (skeleton); treat as success
+          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+
+  web:
+    name: Web (gui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: gui/web/package-lock.json
+
+      - name: Install (clean)
+        run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Build (tsc + vite)
+        run: npm run build
