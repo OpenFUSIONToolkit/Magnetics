@@ -75,3 +75,8 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 
 .placeholder { color: var(--text-dim); font-size: 12px; line-height: 1.6; }
 .placeholder code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
+
+/* pull-control: speed-knob row + warning */
+.pull-row { display: flex; gap: 4px; }
+.pull-row .pull-input { width: auto; flex: 1; min-width: 0; }
+.pull-warn { color: var(--warn, #ffb454); }
