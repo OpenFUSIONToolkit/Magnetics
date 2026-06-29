@@ -1,9 +1,14 @@
 """Port of ``SCRIPTS/fit_magnetics.py`` — the SLCONTOUR-style spatial fit.
 
 This is the heart of the quasi-stationary analysis (VISION.md S4.1).  At each
-time slice it fits the spatial field pattern with a cylindrical-Fourier basis
+time slice it fits the spatial field pattern with either a cylindrical-Fourier
+basis
 
     dB(phi, theta) = Sum_nm  b_nm exp(i (n phi - m theta))
+
+or a Gaussian-RBF basis
+
+    dB(phi, theta) = Sum_k  a_k G(phi - phi_k, theta - theta_k; eps_phi, eps_theta)
 
 by SVD-conditioned least squares.  The design matrix ``A`` holds each basis
 function evaluated at every sensor (finite-extent sensors get the analytic
@@ -11,9 +16,13 @@ function evaluated at every sensor (finite-extent sensors get the analytic
 ``A`` (the central trust metric — warn K>10, error K>20), per-coefficient error
 bars, and reduced chi-squared.
 
-Only the ``sinusoidal-point`` / ``sinusoidal-integral`` bases and the
-``cylindrical`` / ``vertical`` geometries are ported (the Gaussian-RBF and
-spherical paths from OMFIT are omitted as out of scope here).
+Supported bases:
+  * ``sinusoidal-point``    — Fourier exp(i(n*phi + m*theta)) at sensor centre
+  * ``sinusoidal-integral`` — Fourier exp averaged over the sensor (phi,theta) area
+  * ``gaussian-point``      — Gaussian RBF evaluated at sensor centre
+  * ``gaussian-integral``   — Gaussian RBF integrated over the sensor area (using erf)
+
+Supported geometries: ``cylindrical`` (phi, theta) and ``vertical`` (phi, z).
 """
 
 from __future__ import annotations
@@ -26,18 +35,36 @@ import xarray as xr
 from omfit_compat import OMFITexception, delta_degrees, is_device, printe, printv, printw
 
 
-def form_basis_function(n, m, x1, x2, y1, y2, fit_basis="sinusoidal-integral"):
-    """Basis-function vector (one value per sensor) for toroidal/poloidal (n, m).
+def form_basis_function(
+    n,
+    m,
+    x1,
+    x2,
+    y1,
+    y2,
+    fit_basis="sinusoidal-integral",
+    ncycle=0,
+    mcycle=0,
+    nepsilon=np.inf,
+    mepsilon=np.inf,
+):
+    """Basis-function vector (one value per sensor) for mode/centre (n, m).
+
+    For sinusoidal bases ``n``/``m`` are toroidal/poloidal mode numbers and
+    the return is complex.  For Gaussian bases ``n``/``m`` are the RBF centre
+    positions in degrees and the return is real.
 
     ``x`` is the toroidal coordinate (phi), ``y`` the poloidal one (theta or z);
-    ``*1``/``*2`` are the sensor extents in **degrees**.  Direct port of the
-    OMFIT helper of the same name.
+    ``*1``/``*2`` are the sensor extents in **degrees**.
+    ``ncycle``/``mcycle`` are the number of periodic copies to sum for the
+    Gaussian bases (0 = no wrapping); ``nepsilon``/``mepsilon`` are the RBF
+    widths in degrees (``np.inf`` = uniform in that direction).
     """
     dx = delta_degrees(x1, x2)
     dy = delta_degrees(y1, y2)
 
+    # ── sinusoidal-point ──────────────────────────────────────────────────────
     if fit_basis == "sinusoidal-point":
-        # sinusoid evaluated at the sensor centre
         if n == 0:
             if m == 0:
                 return np.ones_like(dx, dtype=complex)
@@ -46,8 +73,8 @@ def form_basis_function(n, m, x1, x2, y1, y2, fit_basis="sinusoidal-integral"):
             return np.exp(1j * n * np.deg2rad(x1 + dx / 2.0))
         return np.exp(1j * m * np.deg2rad(y1 + dy / 2.0) + 1j * n * np.deg2rad(x1 + dx / 2.0))
 
+    # ── sinusoidal-integral ───────────────────────────────────────────────────
     if fit_basis == "sinusoidal-integral":
-        # sinusoid averaged across the sensor's (theta, phi) extent
         if n == 0:
             if m == 0:
                 return np.ones_like(dx, dtype=complex)
@@ -63,7 +90,62 @@ def form_basis_function(n, m, x1, x2, y1, y2, fit_basis="sinusoidal-integral"):
             * (np.exp(1j * n * np.deg2rad(x2)) - np.exp(1j * n * np.deg2rad(x1)))
         ) / (np.deg2rad(dx * dy) * n * m)
 
-    raise OMFITexception("Only 'sinusoidal-point' and 'sinusoidal-integral' bases are supported here.")
+    # ── gaussian-point ────────────────────────────────────────────────────────
+    if fit_basis == "gaussian-point":
+        xc = x1 + dx / 2.0  # sensor phi centre
+        yc = y1 + dy / 2.0  # sensor theta/z centre
+        fmn = np.zeros(len(np.atleast_1d(x1)), dtype=float)
+        for nc in range(-ncycle, ncycle + 1):
+            for mc in range(-mcycle, mcycle + 1):
+                xterm = (((n + nc * 360) - xc) / nepsilon) ** 2 if np.isfinite(nepsilon) else 0.0
+                yterm = (((m + mc * 360) - yc) / mepsilon) ** 2 if np.isfinite(mepsilon) else 0.0
+                fmn += np.exp(-(xterm + yterm))
+        return fmn
+
+    # ── gaussian-integral ─────────────────────────────────────────────────────
+    if fit_basis == "gaussian-integral":
+        from scipy.special import erf
+
+        fmn = np.zeros(len(np.atleast_1d(x1)), dtype=float)
+        for nc in range(-ncycle, ncycle + 1):
+            for mc in range(-mcycle, mcycle + 1):
+                cx = n + nc * 360  # phi centre (with periodic copy)
+                cy = m + mc * 360  # theta/z centre
+
+                if np.isfinite(nepsilon) and np.isfinite(mepsilon):
+                    # 2D integral: product of the two 1-D erf integrals.
+                    # OMFIT source had a `)(` typo here (function-call instead
+                    # of multiplication); fixed to `*`.
+                    fmn += (
+                        0.25
+                        * np.pi
+                        * nepsilon
+                        * mepsilon
+                        * (erf((x2 - cx) / nepsilon) - erf((x1 - cx) / nepsilon))
+                        * (erf((y2 - cy) / mepsilon) - erf((y1 - cy) / mepsilon))
+                    )
+                elif np.isfinite(nepsilon):
+                    # mepsilon = inf: ridge function in phi, uniform in theta/z
+                    fmn += (
+                        0.5
+                        * np.sqrt(np.pi)
+                        * nepsilon
+                        * (erf((x2 - cx) / nepsilon) - erf((x1 - cx) / nepsilon))
+                    )
+                else:
+                    # nepsilon = inf: ridge function in theta/z, uniform in phi
+                    fmn += (
+                        0.5
+                        * np.sqrt(np.pi)
+                        * mepsilon
+                        * (erf((y2 - cy) / mepsilon) - erf((y1 - cy) / mepsilon))
+                    )
+        return fmn
+
+    raise OMFITexception(
+        "fit_basis must be 'sinusoidal-point', 'sinusoidal-integral', "
+        "'gaussian-point', or 'gaussian-integral'."
+    )
 
 
 def fit(
@@ -75,18 +157,30 @@ def fit(
     fit_basis="sinusoidal-integral",
     fit_geometry="cylindrical",
     fit_cond=10.0,
+    ncenters=6,
+    mcenters=1,
+    nepsilon=None,
+    mepsilon=None,
     verbose=True,
 ):
     """Least-squares modal fit of the prepared data.
 
     :param prepared: PREPARED Dataset from :func:`prep.prepare`.
-    :param ns: toroidal mode numbers in the basis.
-    :param ms: poloidal mode numbers in the basis.
+    :param ns: sinusoidal — toroidal mode numbers; gaussian — ignored (centres
+        are computed from sensor extent + ``ncenters``).
+    :param ms: sinusoidal — poloidal mode numbers; gaussian — ignored.
     :param channel_filter: restrict to channels matching this regex/list.
     :param fit_exclude: regexes excluding channels.
-    :param fit_basis: 'sinusoidal-point' or 'sinusoidal-integral'.
-    :param fit_geometry: 'cylindrical' (phi, theta) or 'vertical' (phi, z).
+    :param fit_basis: ``'sinusoidal-point'``, ``'sinusoidal-integral'``,
+        ``'gaussian-point'``, or ``'gaussian-integral'``.
+    :param fit_geometry: ``'cylindrical'`` (phi, theta) or ``'vertical'`` (phi, z).
     :param fit_cond: condition-number cutoff for the lstsq inversion (= 1/rcond).
+    :param ncenters: **Gaussian only** — number of phi RBF centres.
+    :param mcenters: **Gaussian only** — number of theta/z RBF centres.
+    :param nepsilon: **Gaussian only** — phi RBF width in degrees; ``None`` =
+        auto (mean spacing between centres).
+    :param mepsilon: **Gaussian only** — theta/z RBF width in degrees; ``None``
+        = auto (``np.inf`` when ``mcenters == 1``).
     :param verbose: print progress.
     :return: FIT Dataset (mirrors OMFIT ``OUTPUTS/FIT[key]``).
     """
@@ -97,7 +191,7 @@ def fit(
 
     _printv("Fitting the prepared data")
 
-    # pick channels
+    # ── channel selection ─────────────────────────────────────────────────────
     patterns = np.atleast_1d(channel_filter)
     excludes = np.atleast_1d(fit_exclude)
     channels = []
@@ -112,13 +206,13 @@ def fit(
     time = ds["time"].values
     helicity = int(ds.attrs.get("helicity", -1))
 
-    # coordinate keys
+    # ── coordinate keys ───────────────────────────────────────────────────────
     if fit_geometry == "cylindrical":
         xkey, ykey = "phi", "theta"
     elif fit_geometry == "vertical":
         xkey, ykey = "phi", "z"
     else:
-        raise OMFITexception("fit_geometry must be 'cylindrical' or 'vertical' here.")
+        raise OMFITexception("fit_geometry must be 'cylindrical' or 'vertical'.")
 
     x1 = ds[f"{xkey}_end1"].values
     x2 = ds[f"{xkey}_end2"].values
@@ -133,76 +227,135 @@ def fit(
             fill = np.nanmean(sigma) if np.isfinite(np.nanmean(sigma)) else 1.0
         sigma[bad] = fill
 
-    # mode list, with helicity sign convention and (0,0) forced first
-    ms = np.atleast_1d(ms)
-    ns = np.atleast_1d(ns)
-    dp = None  # paired (differential) sensors not present in this dataset
-    if dp is None and 0 not in ns:
-        _printv("WARNING: Sensors are not paired! Consider including n=0.")
-    if not np.all(ms == 0) and not np.any(np.sign(ms) == helicity):
-        ms = ms * -1
-        _printv(f"WARNING: Flipping sign of m to conform to helicity {helicity:+}")
-    nms = [(n, m) for m in ms for n in ns]
-    if (0, 0) in nms:
-        nms.insert(0, nms.pop(nms.index((0, 0))))
-    nms_arr = np.array(nms)
+    # ── basis-specific mode / centre setup ────────────────────────────────────
+    is_sinusoidal = fit_basis.startswith("sinusoidal")
+    is_gaussian = fit_basis.startswith("gaussian")
 
-    if is_device(ds.attrs.get("device", ""), "DIII-D"):
-        if any(re.match(k, c) for k in ("C.*", "IL.*", "IU.*") for c in channels):
-            if fit_basis != "sinusoidal-point":
-                printe("WARNING: sinusoidal-point basis is used by DIII-D 3D coil operators")
+    if is_sinusoidal:
+        ms = np.atleast_1d(ms)
+        ns = np.atleast_1d(ns)
+        dp = None  # paired sensors not present in this dataset
+        if dp is None and 0 not in ns:
+            _printv("WARNING: Sensors are not paired! Consider including n=0.")
+        if not np.all(ms == 0) and not np.any(np.sign(ms) == helicity):
+            ms = ms * -1
+            _printv(f"WARNING: Flipping sign of m to conform to helicity {helicity:+}")
+        nms = [(n, m) for m in ms for n in ns]
+        if (0, 0) in nms:
+            nms.insert(0, nms.pop(nms.index((0, 0))))
+        nms_arr = np.array(nms)
+        _ncycle = _mcycle = 0
+        _nepsilon = _mepsilon = np.inf
 
-    # --- build the design (basis) matrix A -------------------------------- #
+        if is_device(ds.attrs.get("device", ""), "DIII-D"):
+            if any(re.match(k, c) for k in ("C.*", "IL.*", "IU.*") for c in channels):
+                if fit_basis != "sinusoidal-point":
+                    printe("WARNING: sinusoidal-point basis is used by DIII-D 3D coil operators")
+
+    elif is_gaussian:
+        # Derive RBF centres from sensor extent (mirrors OMFIT gaussian setup block)
+        x_all = np.hstack((x1, x2))
+        y_all = np.hstack((y1, y2))
+        xlim = (int(np.min(x_all) / 10.0) * 10, int(np.ceil(np.max(x_all) / 10.0)) * 10)
+        ylim = (int(np.min(y_all) / 10.0) * 10, int(np.ceil(np.max(y_all) / 10.0)) * 10)
+
+        xend = True
+        if xlim[1] - xlim[0] > 180:
+            xlim = (0, 360)
+            xend = False  # no duplicate at 0/360 for full-torus arrays
+        yend = True
+        if ylim[1] - ylim[0] > 180:
+            ylim = (0, 360)
+            yend = False
+
+        ns_cen = np.linspace(xlim[0], xlim[1], ncenters, endpoint=xend)
+        ms_cen = np.linspace(ylim[0], ylim[1], mcenters, endpoint=yend)
+
+        _nepsilon = nepsilon
+        if _nepsilon is None or _nepsilon == 0:
+            _nepsilon = float(np.mean(np.diff(ns_cen))) if len(ns_cen) > 1 else np.inf
+
+        _mepsilon = mepsilon
+        if _mepsilon is None or _mepsilon == 0:
+            _mepsilon = float(np.mean(np.diff(ms_cen))) if len(ms_cen) > 1 else np.inf
+
+        _ncycle = max(1, int(8 * _nepsilon / 360)) if np.isfinite(_nepsilon) else 0
+        _mcycle = max(1, int(8 * _mepsilon / 360)) if np.isfinite(_mepsilon) else 0
+
+        nms = [(float(n), float(m)) for m in ms_cen for n in ns_cen]
+        nms_arr = np.array(nms)
+        _printv(
+            f" - Gaussian RBF: {ncenters}×{mcenters} centres, "
+            f"eps_phi={_nepsilon:.1f}°, eps_theta={'inf' if not np.isfinite(_mepsilon) else f'{_mepsilon:.1f}'}°, "
+            f"ncycle={_ncycle}"
+        )
+    else:
+        raise OMFITexception(
+            f"fit_basis must start with 'sinusoidal' or 'gaussian', got {fit_basis!r}."
+        )
+
+    # ── design matrix A ───────────────────────────────────────────────────────
     A_cols = []
-    ncomp = []  # 1 (real-only) or 2 (real+imag) columns per mode
-    for n, m in nms:
-        fmn = form_basis_function(n, m, x1, x2, y1, y2, fit_basis) / sigma
-        if np.allclose(fmn.imag, 0):
-            A_cols.append(fmn.real)
+    ncomp = []
+
+    if is_sinusoidal:
+        for n, m in nms:
+            fmn = form_basis_function(n, m, x1, x2, y1, y2, fit_basis) / sigma
+            if np.allclose(fmn.imag, 0):
+                A_cols.append(fmn.real)
+                ncomp.append(1)
+            else:
+                A_cols.append(fmn.real)
+                A_cols.append(fmn.imag)
+                ncomp.append(2)
+                # guard against aliasing from equally-spaced probes
+                try:
+                    wtest = np.linalg.svd(np.array(A_cols).T, compute_uv=False)
+                    if np.abs(wtest[0] / wtest[-1]) > 1e19:
+                        raise ValueError("Bad sensor distribution")
+                except (ValueError, np.linalg.LinAlgError):
+                    printe(f" - Ill-conditioned mode ({n},{m}); fitting single component")
+                    x0 = x1[0] + delta_degrees(x1[0], x2[0]) / 2.0
+                    y0 = y1[0] + delta_degrees(y1[0], y2[0]) / 2.0
+                    fmn = form_basis_function(n, m, x1 + x0, x2 + x0, y1 + y0, y2 + y0, fit_basis) / sigma
+                    A_cols = A_cols[:-2] + [fmn.real]
+                    ncomp[-1] = 1
+    else:  # gaussian — basis functions are always real
+        for n, m in nms:
+            fmn = form_basis_function(
+                n, m, x1, x2, y1, y2, fit_basis,
+                ncycle=_ncycle, mcycle=_mcycle,
+                nepsilon=_nepsilon, mepsilon=_mepsilon,
+            ) / sigma
+            A_cols.append(fmn)
             ncomp.append(1)
-        else:
-            A_cols.append(fmn.real)
-            A_cols.append(fmn.imag)
-            ncomp.append(2)
-            # guard against aliasing from equally-spaced probes
-            try:
-                wtest = np.linalg.svd(np.array(A_cols).T, compute_uv=False)
-                if np.abs(wtest[0] / wtest[-1]) > 1e19:
-                    raise ValueError("Bad sensor distribution")
-            except (ValueError, np.linalg.LinAlgError):
-                printe(f" - Ill-conditioned mode ({n},{m}); fitting single component")
-                x0 = x1[0] + delta_degrees(x1[0], x2[0]) / 2.0
-                y0 = y1[0] + delta_degrees(y1[0], y2[0]) / 2.0
-                fmn = form_basis_function(n, m, x1 + x0, x2 + x0, y1 + y0, y2 + y0, fit_basis) / sigma
-                A_cols = A_cols[:-2] + [fmn.real]
-                ncomp[-1] = 1
 
     A = np.array(A_cols).T  # (n_sensors, n_columns)
     if A.shape[1] > A.shape[0]:
         printw(f"Fitting {A.shape[1]} basis functions with {A.shape[0]} sensors")
 
-    # --- SVD of A (condition number + per-coefficient error) -------------- #
+    # ── SVD of A (condition number + per-coefficient error bars) ──────────────
     U_a, w_a, Vh_a = np.linalg.svd(A)
     c_a = np.abs(w_a[0] / w_a)
     valid = c_a <= fit_cond
     raw_cn = float(np.abs(w_a[0] / w_a[-1]))
     eff_cn = float(np.max(c_a[valid]))
 
-    # --- least-squares fit at every time slice ---------------------------- #
+    # ── least-squares fit at every time slice ─────────────────────────────────
     _printv(" - Fitting signal")
     b = (ds["signal"] / xr.DataArray(sigma, coords={"channel": ds["channel"]}, dims=("channel",))).values
     x, residual, rank_fit, s_a = np.linalg.lstsq(A, b, rcond=1.0 / fit_cond)
     _printv(f" - Raw / effective condition number = {raw_cn:.3g} / {eff_cn:.3g}")
     fit_coeffs = np.asarray(x)  # (n_columns, n_time)
 
-    # per-coefficient sigma from the pseudo-inverse singular values
+    # per-coefficient sigma from pseudo-inverse singular values
     w_inv = 1.0 / w_a
     w_inv[~valid] = 0.0
     w_inv = np.hstack((w_inv, [0.0] * max(Vh_a.shape[0] - w_a.shape[0], 0)))
     fit_sigma2 = np.sum((Vh_a.T * w_inv) ** 2, axis=0)
     fit_sigmas = np.sqrt(fit_sigma2)  # (n_columns,)
 
-    # --- reform complex coefficients per mode ----------------------------- #
+    # ── reform per-mode complex (sinusoidal) or real (Gaussian) coefficients ──
     coeffs_c, sigmas_c = [], []
     j = 0
     for nc in ncomp:
@@ -216,7 +369,7 @@ def fit(
     coeffs_c = np.array(coeffs_c)  # (n_modes, n_time)
     sigmas_c = np.array(sigmas_c)[:, None] * np.ones_like(time)  # (n_modes, n_time)
 
-    # reconstructed signal, residual, chi-squared
+    # ── assemble output Dataset ───────────────────────────────────────────────
     fit_b = np.dot(A, fit_coeffs).real.reshape(ds["channel"].shape[0], -1)
     ds["fit_signal"] = xr.DataArray(fit_b, coords=ds["signal"].coords, dims=ds["signal"].dims) * ds[
         "signal_sigma"
@@ -244,18 +397,17 @@ def fit(
 
     _printv(f" - Mean reduced chi squared = {np.nanmean(ds['red_chi_sq'].values):.3e}")
 
-    # metadata needed by the plots / reconstruction
     ds.attrs.update(
         fit_basis=fit_basis,
         fit_geometry=fit_geometry,
         fit_condition=fit_cond,
         raw_cn=raw_cn,
         eff_cn=eff_cn,
-        condition_number=raw_cn,  # the VISION "K"
-        fit_ncycle=0,
-        fit_mcycle=0,
-        fit_neps=np.inf,
-        fit_meps=np.inf,
+        condition_number=raw_cn,
+        fit_ncycle=_ncycle,
+        fit_mcycle=_mcycle,
+        fit_neps=_nepsilon,
+        fit_meps=_mepsilon,
     )
     _condition_warning(raw_cn)
     return ds

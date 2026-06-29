@@ -174,6 +174,12 @@ def prepare(
 
     # remove the highpass padding
     tsel = t[(t >= time_trim[0]) & (t <= time_trim[1])]
+    if len(tsel) == 0:
+        raise ValueError(
+            f"time_trim={time_trim} left 0 samples after filter/downsample "
+            f"(downsampled dt≈{t[1]-t[0]:.4g} s, {len(t)} samples spanned "
+            f"{t[0]:.4g}–{t[-1]:.4g} s). Widen the window or reduce cutoff_hz[0]."
+        )
     ds = ds.sel(time=tsel)
 
     # ----- detrend -------------------------------------------------------- #
@@ -203,7 +209,7 @@ def _detrend(ds, channels, detrend_type, detrend_band, _printv):
         det_times = np.concatenate(
             [time[(time >= b[0]) & (time <= b[1])] for b in band]
         )
-        in_band = np.in1d(time, det_times)
+        in_band = np.isin(time, det_times)
         if detrend_type == "baseline":
             _printv(" - Removing baseline")
             for ch in range(len(channels)):
@@ -267,8 +273,8 @@ def _svd_condition(ds, energy, _printv):
     ds.attrs["signal_effective_rank"] = cut
     _printv(f"   > SVD found {cut} coherent structures of interest")
 
-    if energy < 1.0 and U.shape == (P, len(s)):
+    if energy < 1.0 and U.shape == (P, len(s)) and len(s) > 0:
         smat = np.zeros((len(s), len(s)))
-        for i in range(cut):
+        for i in range(min(cut, len(s))):
             smat[i, i] = s[i]
         ds["signal"].values = np.dot(U, np.dot(smat, Vh)) * np.sqrt(P * T)
