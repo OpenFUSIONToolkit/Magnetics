@@ -27,7 +27,7 @@ Hackathon.
 - Physics lives in `analysis/.../core` (pure, device-agnostic, testable); **no physics in the
   service routes**.
 - Analysis results use a self-describing `kind` contract so the GUI renders them generically.
-- Python via **`uv`** (pinned to 3.14, standard GIL build); commit `uv.lock`, never `.venv/`.
+- Python via **`uv`** (pinned to 3.14, standard GIL build); commit `uv.lock`, never `.venv/`. Always use uv venv to run python.
 - Paths in committed docs must be **repo-relative** — no machine-specific absolute paths.
 
 ---
