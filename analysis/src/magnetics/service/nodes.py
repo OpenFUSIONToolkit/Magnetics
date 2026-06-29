@@ -191,3 +191,50 @@ def build_node(shot: str, node_id: str, params: dict | None = None) -> dict:
                        f"have {', '.join(sorted(_BUILDERS))}")
     h5source.shot_file(shot)  # raises KeyError if the shot isn't available
     return _BUILDERS[node_id](shot)
+
+
+# ── frame-envelope compat (docs/CONTRACT.md) ────────────────────────────────
+# The gui-branch frontend streams `qs_fit`/`spectrogram`/`geometry` as frames
+# {type, progress, final, meta, data}. We serve a single final frame built from
+# the same real nodes, so that GUI works against this backend unchanged.
+def _qs_fit_data(shot) -> dict:
+    contour = _contour(shot)  # raw δBp(φ,t) — real data, fit pending
+    fq = _fit_quality(shot)
+    kval = next((f["value"] for f in fq["fields"]
+                 if str(f["label"]).startswith("condition number K")), 0)
+    nch = next((f["value"] for f in fq["fields"]
+                if f["label"] == "channels fetched"), 0)
+    return {
+        "contour": {"phi": contour["x"], "theta": contour["y"],
+                    "z": contour["z"], "units": "G"},
+        "sensors": contour.get("overlay", {}).get("points", []),
+        "modes": [],
+        "quality": {"K": kval if isinstance(kval, (int, float)) else 0.0,
+                    "chi2": 0.0, "n_channels": nch, "m_max": 0},
+    }
+
+
+def _spectrogram_data(shot) -> dict:
+    n = _spectrogram(shot)
+    return {"spectrogram": {"t_ms": n["x"], "f_kHz": n["y"], "power": n["z"]}}
+
+
+def _geometry_data(shot) -> dict:
+    n = _geometry(shot)
+    return {"sensors": n["points"]}
+
+
+_RESULTS = {
+    "qs_fit": _qs_fit_data,
+    "spectrogram": _spectrogram_data,
+    "geometry": _geometry_data,
+}
+
+
+def result_data(shot: str, result: str, params: dict | None = None) -> dict:
+    """CONTRACT.md frame `data` for a result name (qs_fit/spectrogram/geometry)."""
+    if result not in _RESULTS:
+        raise KeyError(f"unknown result {result!r}; "
+                       f"have {', '.join(sorted(_RESULTS))}")
+    h5source.shot_file(shot)
+    return _RESULTS[result](shot)

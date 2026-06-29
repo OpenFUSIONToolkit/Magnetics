@@ -11,8 +11,13 @@ in core/; all device specifics in data/.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..data import h5source
@@ -101,3 +106,49 @@ def post_fetch(req: FetchRequest) -> dict:
     h5source.refresh()
     return {"ok": True, "shot": str(req.shot), "file": out,
             "machines": nodes.machines()}
+
+
+# ── CONTRACT.md frame compat (so the gui-branch streaming views work here) ────
+# `{result}` ∈ qs_fit | spectrogram | geometry. Two segments after /api, so these
+# never shadow /api/machines, /api/fetch, /api/health, or /api/node/{m}/{id}.
+def _frame(result: str, machine: str, data: dict) -> dict:
+    return {"type": result, "progress": 1.0, "final": True,
+            "meta": {"machine": machine}, "data": data}
+
+
+def _result_or_http(machine: str, result: str) -> dict:
+    try:
+        return nodes.result_data(machine, result)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail=f"{type(exc).__name__}: {exc}") from exc
+
+
+@app.get("/api/{machine}/{result}")
+def one_shot(machine: str, result: str) -> dict:
+    return _frame(result, machine, _result_or_http(machine, result))
+
+
+@app.get("/api/{machine}/{result}/stream")
+def stream(machine: str, result: str) -> StreamingResponse:
+    # We compute a single final frame (no coarse→fine refinement yet); the GUI's
+    # EventSource handles a one-frame stream fine.
+    payload = _frame(result, machine, _result_or_http(machine, result))
+
+    def gen():
+        yield f"data: {json.dumps(payload)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+# Single-origin (cluster) deploy: serve the built GUI at / if it exists. Mounted
+# LAST so all /api/* routes win. Present only after `npm run build` (run.sh --prod).
+_DIST = Path(__file__).resolve().parents[4] / "gui" / "web" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="gui")

@@ -1,15 +1,17 @@
 // Sensors view — OWNED BY CAPTAIN.
-// Demo wiring: renders the live `geometry` node (φ–θ wall map; sensor angles
-// parsed from the fetched channel set). Extend with the R–Z cross-section and
-// visual array selection. Tools (src/lib): useNode / NodeView / Plot.
-import NodePanel from "../../lib/NodePanel";
-
+// Build the unrolled φ–θ wall map + R–Z cross-section with visual array selection.
+//
+// Tools available (src/lib): useNode(machine, "geometry") returns a kind-node;
+// render it with <NodeView/>, or build a custom Plotly figure via <Plot/>.
 export default function SensorsTab({ machine }: { machine: string }) {
   return (
     <div className="card">
-      <h2>Sensors — φ–θ wall map</h2>
-      <p className="desc">shot {machine} · sensor positions from the fetched channels</p>
-      <NodePanel machine={machine} nodeId="geometry" height={460} />
+      <h2>Sensors — φ–θ wall map + R–Z cross-section</h2>
+      <p className="desc">shot {machine} · build me (VISION §6.4 view 1)</p>
+      <div className="placeholder">
+        Empty by design. Fetch geometry with <code>useNode(machine, "geometry")</code> and
+        render via <code>&lt;NodeView/&gt;</code>, then add visual array selection.
+      </div>
     </div>
   );
 }

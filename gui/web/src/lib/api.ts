@@ -58,8 +58,8 @@ export interface FetchBody {
   decimate?: number;
 }
 
-/** Trigger a live toksearch/mdsthin pull on the backend, then get the refreshed
- * machine list. Requires a live backend (VITE_API_BASE set). */
+/** Trigger a live toksearch/mdsthin/remote pull on the backend, then get the
+ * refreshed machine list. Requires a live backend (VITE_API_BASE set). */
 export async function triggerFetch(
   body: FetchBody,
 ): Promise<{ ok: boolean; shot: string; machines: MachineInfo[] }> {

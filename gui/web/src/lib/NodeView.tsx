@@ -52,9 +52,19 @@ export default function NodeView({ node, height }: { node: Node; height?: number
 
     case "heatmap": {
       const colorscale = node.discrete
-        ? MODE_PALETTE.map((c, i) => [i / (MODE_PALETTE.length - 1), c] as [number, string])
+        ? (() => {
+            const n = MODE_PALETTE.length;
+            const s: [number, string][] = [];
+            for (let i = 0; i < n; i++) {
+              s.push([i / n, MODE_PALETTE[i]], [(i + 1) / n, MODE_PALETTE[i]]);
+            }
+            return s;
+          })()
         : POWER_SEQUENTIAL;
       const zr = node.zrange;
+      
+      const isSpecDiscrete = node.discrete && zr && Math.abs(zr[0] - (-6.5)) < 0.1;
+
       return (
         <Plot
           height={height}
@@ -62,19 +72,51 @@ export default function NodeView({ node, height }: { node: Node; height?: number
           data={[{
             type: "heatmap", x: node.x, y: node.y, z: node.z,
             colorscale, zmin: zr?.[0], zmax: zr?.[1], zsmooth: node.discrete ? false : "best",
-            colorbar: { title: { text: node.axes.z ?? "" }, thickness: 12, outlinewidth: 0 },
+            colorbar: isSpecDiscrete
+              ? {
+                  title: { text: node.axes.z ?? "" },
+                  thickness: 12,
+                  outlinewidth: 0,
+                  tickvals: [-6, -4, -2, 0, 2, 4, 6],
+                  ticktext: ["-6", "-4", "-2", "0", "2", "4", "6"],
+                  tickmode: "array" as const,
+                }
+              : { title: { text: node.axes.z ?? "" }, thickness: 12, outlinewidth: 0 },
           } as Partial<Plotly.PlotData>]}
         />
       );
     }
 
     case "scatter2d": {
+      const hasErrorY = node.points.some(p => p.error_y !== undefined);
+      const hasErrorX = node.points.some(p => p.error_x !== undefined);
+
       const traces: Partial<Plotly.PlotData>[] = [{
         type: "scatter", mode: "markers",
         x: node.points.map((p) => p.x), y: node.points.map((p) => p.y),
         text: node.points.map((p) => p.label ?? ""),
         marker: { size: 7, color: node.points.map((p) => groupColor(p.group)), line: { color: "#0a0f16", width: 0.5 } },
         hoverinfo: "x+y+text",
+        ...(hasErrorY ? {
+          error_y: {
+            type: "data" as const,
+            array: node.points.map((p) => p.error_y ?? 0),
+            visible: true,
+            color: "rgba(255, 255, 255, 0.45)",
+            thickness: 1,
+            width: 3,
+          }
+        } : {}),
+        ...(hasErrorX ? {
+          error_x: {
+            type: "data" as const,
+            array: node.points.map((p) => p.error_x ?? 0),
+            visible: true,
+            color: "rgba(255, 255, 255, 0.45)",
+            thickness: 1,
+            width: 3,
+          }
+        } : {}),
       } as Partial<Plotly.PlotData>];
       if (node.fit) {
         traces.push({
