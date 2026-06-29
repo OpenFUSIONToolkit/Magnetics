@@ -35,19 +35,10 @@ const LT_BASE: Partial<Plotly.Layout> = {
 };
 
 // ── Hooks & helpers ───────────────────────────────────────────────────
+// Follows the app-wide theme toggle (store), not the OS setting, so the
+// in-app light/dark switch re-skins this tab's plots along with everything else.
 function useDarkMode(): boolean {
-  const [dark, setDark] = useState(
-    () => typeof window !== "undefined"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches
-      : true,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return dark;
+  return useStore((s) => s.theme === "dark");
 }
 
 function themedLayout(
