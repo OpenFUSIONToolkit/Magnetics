@@ -1,10 +1,11 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
 import { MODE_PALETTE, POWER_SEQUENTIAL } from "../../lib/colormaps";
 import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
+import DraggableDivider from "../../lib/DraggableDivider";
 
 // Deterministic mock generator helper (keeps React render pure)
 function generateDeterministicTimeTrace(timeSlice: number, freqPeaks: number[]) {
@@ -32,7 +33,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
   
   // View states
   const [displayMode, setDisplayMode] = useState<"n" | "power">("n");
-  const [activeSubTab, setActiveSubTab] = useState<"subinterval" | "array" | "modestructure">("subinterval");
   const [sidebarExpanded, setSidebarExpanded] = useState<boolean>(true);
 
   // Control Parameter states
@@ -53,6 +53,42 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [pestLambda2, setPestLambda2] = useState<number>(0.05);
   const [btCompMode, setBtCompMode] = useState<"none" | "analog" | "digital">("digital");
   const [shieldingCutoff, setShieldingCutoff] = useState<number>(50); // 3dB shielding cutoff in kHz
+
+  // Resizable layout dimensions
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [specHeight, setSpecHeight] = useState(280);
+  const [panel1Height, setPanel1Height] = useState(290);
+  const [panel2Height, setPanel2Height] = useState(290);
+  const [panel3Height, setPanel3Height] = useState(290);
+  const [subintervalLeftWidth, setSubintervalLeftWidth] = useState(340);
+  const [arrayLeftWidth, setArrayLeftWidth] = useState(380);
+  const [modeLeftWidth, setModeLeftWidth] = useState(380);
+
+  // Drag handlers for resizable dividers — each adjusts adjacent pane sizes
+  const handleSidebarDelta = useCallback((d: number) => {
+    setSidebarWidth(w => Math.max(40, Math.min(500, w + d)));
+  }, []);
+  const handleSpecDelta = useCallback((d: number) => {
+    setSpecHeight(h => Math.max(200, h + d));
+    setPanel1Height(h => Math.max(150, h - d));
+  }, []);
+  const handlePanel12Delta = useCallback((d: number) => {
+    setPanel1Height(h => Math.max(150, h + d));
+    setPanel2Height(h => Math.max(150, h - d));
+  }, []);
+  const handlePanel23Delta = useCallback((d: number) => {
+    setPanel2Height(h => Math.max(150, h + d));
+    setPanel3Height(h => Math.max(150, h - d));
+  }, []);
+  const handleSubintervalSplit = useCallback((d: number) => {
+    setSubintervalLeftWidth(w => Math.max(100, Math.min(800, w + d)));
+  }, []);
+  const handleArraySplit = useCallback((d: number) => {
+    setArrayLeftWidth(w => Math.max(100, Math.min(800, w + d)));
+  }, []);
+  const handleModeSplit = useCallback((d: number) => {
+    setModeLeftWidth(w => Math.max(100, Math.min(800, w + d)));
+  }, []);
 
   // --- 1. DATA INGESTION & FALLBACKS ---
   // Fetch main spectrogram node (from static files if available)
@@ -560,14 +596,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
     };
 
     return (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr", gap: "16px", height: "240px" }}>
-        <div style={{ borderRight: "1px solid var(--border)", paddingRight: "16px" }}>
+      <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
+        <div style={{ width: subintervalLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Raw Signal dB/dt (4ms Window)
           </h4>
           <Plot data={rawPlotData} height={200} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} />
         </div>
-        <div>
+        <DraggableDivider direction="horizontal" onDelta={handleSubintervalSplit} />
+        <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Frequency Spectrum
           </h4>
@@ -608,14 +645,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
     };
 
     return (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", height: "240px" }}>
-        <div>
+      <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
+        <div style={{ width: arrayLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Array Waves dBp(φ, t)
           </h4>
           <Plot data={toroidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "φ (deg)" } } }} height={200} />
         </div>
-        <div>
+        <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
+        <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Poloidal Array Waves dBp(θ, t)
           </h4>
@@ -629,14 +667,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const toroidalMeta = processedToroidalNode.meta as Record<string, number> | undefined;
     const poloidalMeta = processedPoloidalNode.meta as Record<string, number> | undefined;
     return (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", height: "240px" }}>
-        <div>
+      <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
+        <div style={{ width: modeLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Phase Fit (n = {String(toroidalMeta?.n_fit ?? "")})
           </h4>
           <NodeView node={processedToroidalNode} height={200} />
         </div>
-        <div>
+        <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
+        <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Poloidal Phase Fit (m = {String(poloidalMeta?.m_fit ?? "")}, fittype = {fittype})
           </h4>
@@ -647,13 +686,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
   };
 
   return (
-    <div style={{ display: "flex", gap: "16px", height: "100%", position: "relative" }}>
+    <div style={{ display: "flex", gap: sidebarExpanded ? "0px" : "16px", height: "100%", position: "relative" }}>
       
       {/* 1. Collapsible Control Panel */}
       <div
         className="card"
         style={{
-          width: sidebarExpanded ? "260px" : "40px",
+          width: sidebarExpanded ? `${sidebarWidth}px` : "40px",
           transition: "width 0.2s ease-in-out",
           flexShrink: 0,
           overflow: "hidden",
@@ -719,31 +758,49 @@ export default function RotatingTab({ machine }: { machine: string }) {
             )}
 
             {/* Frequency limits */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <label htmlFor="fmin-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                f_min: <strong style={{ color: "var(--text)" }}>{fmin} kHz</strong>
-              </label>
-              <input
-                id="fmin-range"
-                type="range"
-                min="0"
-                max="20"
-                value={fmin}
-                onChange={(e) => setFmin(parseInt(e.target.value))}
-                style={{ accentColor: "var(--accent)" }}
-              />
-              <label htmlFor="fmax-range" style={{ fontSize: "11px", color: "var(--text-dim)", marginTop: "4px" }}>
-                f_max: <strong style={{ color: "var(--text)" }}>{fmax} kHz</strong>
-              </label>
-              <input
-                id="fmax-range"
-                type="range"
-                min="30"
-                max="100"
-                value={fmax}
-                onChange={(e) => setFmax(parseInt(e.target.value))}
-                style={{ accentColor: "var(--accent)" }}
-              />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+              <div>
+                <label htmlFor="fmin-input" style={{ fontSize: "11px", color: "var(--text-dim)", display: "block", marginBottom: "2px" }}>
+                  f_min (kHz)
+                </label>
+                <input
+                  id="fmin-input"
+                  type="number"
+                  value={fmin}
+                  onChange={(e) => setFmin(parseInt(e.target.value) || 0)}
+                  style={{
+                    width: "100%",
+                    background: "var(--panel-2)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border-2)",
+                    padding: "5px",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+              <div>
+                <label htmlFor="fmax-input" style={{ fontSize: "11px", color: "var(--text-dim)", display: "block", marginBottom: "2px" }}>
+                  f_max (kHz)
+                </label>
+                <input
+                  id="fmax-input"
+                  type="number"
+                  value={fmax}
+                  onChange={(e) => setFmax(parseInt(e.target.value) || 0)}
+                  style={{
+                    width: "100%",
+                    background: "var(--panel-2)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border-2)",
+                    padding: "5px",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
             </div>
 
             {/* fittype */}
@@ -1023,11 +1080,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
         )}
       </div>
 
-      {/* 2. Main Dashboard (Top Spectrogram / Bottom Detail Tabs) */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px", minWidth: 0 }}>
+      {sidebarExpanded && (
+        <DraggableDivider direction="horizontal" onDelta={handleSidebarDelta} />
+      )}
+
+      {/* 2. Main Dashboard (Top Spectrogram / Stacked Analysis Panels) */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0px", minWidth: 0, overflowY: "auto", paddingRight: "6px", height: "100%" }}>
         
         {/* Top: Spectrogram Heatmap */}
-        <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px", margin: 0 }}>
+        <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: 0, height: specHeight, minHeight: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <h3 style={{ margin: 0, fontWeight: 600, fontSize: "13px" }}>Spectrogram Ḃp(t, f)</h3>
@@ -1071,37 +1132,39 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <div style={{ flex: 1, minHeight: 0 }}>{renderSpectrogram()}</div>
         </div>
 
-        {/* Bottom: Linked Analysis Tabs */}
-        <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "12px", margin: 0 }}>
-          {/* Subtab Navigation */}
-          <div className="tabbar" style={{ marginBottom: "8px" }}>
-            <div
-              className={`tab${activeSubTab === "subinterval" ? " active" : ""}`}
-              onClick={() => setActiveSubTab("subinterval")}
-              style={{ padding: "6px 12px", fontSize: "12px" }}
-            >
-              Sub-Interval Spectrum (tslice)
-            </div>
-            <div
-              className={`tab${activeSubTab === "array" ? " active" : ""}`}
-              onClick={() => setActiveSubTab("array")}
-              style={{ padding: "6px 12px", fontSize: "12px" }}
-            >
-              Array Data Wave-Stripes
-            </div>
-            <div
-              className={`tab${activeSubTab === "modestructure" ? " active" : ""}`}
-              onClick={() => setActiveSubTab("modestructure")}
-              style={{ padding: "6px 12px", fontSize: "12px" }}
-            >
-              Mode Structure Fits
-            </div>
-          </div>
+        <DraggableDivider direction="vertical" onDelta={handleSpecDelta} />
 
+        {/* Panel 1: Sub-Interval Spectrum */}
+        <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel1Height, minHeight: 0 }}>
+          <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+            Sub-Interval Spectrum (tslice)
+          </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
-            {activeSubTab === "subinterval" && renderSubInterval()}
-            {activeSubTab === "array" && renderArrayContour()}
-            {activeSubTab === "modestructure" && renderModeStructure()}
+            {renderSubInterval()}
+          </div>
+        </div>
+
+        <DraggableDivider direction="vertical" onDelta={handlePanel12Delta} />
+
+        {/* Panel 2: Array Data Wave-Stripes */}
+        <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel2Height, minHeight: 0 }}>
+          <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+            Array Data Wave-Stripes
+          </h4>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {renderArrayContour()}
+          </div>
+        </div>
+
+        <DraggableDivider direction="vertical" onDelta={handlePanel23Delta} />
+
+        {/* Panel 3: Mode Structure Fits */}
+        <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel3Height, minHeight: 0 }}>
+          <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+            Mode Structure Fits (Error Bars Active)
+          </h4>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {renderModeStructure()}
           </div>
         </div>
       </div>
