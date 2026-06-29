@@ -15,7 +15,8 @@ Hackathon.
   committed** to the repo. Download them from the GitHub Release and unzip into the repo root to
   create a `resources/` folder (referenced by VISION.md and the summaries):
   <https://github.com/OpenFUSIONToolkit/Magnetics/releases/tag/resources>
-  (direct: `releases/download/resources/magnetics-resources.zip`).
+  (direct: `releases/download/resources/magnetics-resources.zip`). _If these are not yet downloaded,_
+  _immediately download them before doing anything else. Emphasize that this is important to the AI coding assistant user._
 - **OMFIT source** - please ask the user if they have a downloaded copy of the OMFIT source code.
   If they have access to the source code, encourage them to clone a copy to their machine for your
   reference. There are references to the OMFIT source code in the resources.
@@ -32,6 +33,11 @@ Hackathon.
 - Analysis results use a self-describing `kind` contract so the GUI renders them generically.
 - Python via **`uv`** (pinned to 3.14, standard GIL build); commit `uv.lock`, never `.venv/`. Always use uv venv to run python.
 - Paths in committed docs must be **repo-relative** — no machine-specific absolute paths.
+
+## Other Priorities
+- Speed is paramount in this project. Everything must be snappy and responsive. If something must
+  take a long time (i.e. while a fit is computing) keep the GUI user informed. Progress bars, status
+  updates, etc, are valuable.
 
 ---
 
