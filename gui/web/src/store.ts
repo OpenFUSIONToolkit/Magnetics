@@ -6,6 +6,24 @@ import { create } from "zustand";
 import { fetchMachines, type MachineInfo } from "./lib/api";
 
 export type TabId = "sensors" | "qs" | "rotating" | "fits";
+export type Theme = "dark" | "light";
+
+// Theme is a single global switch: it drives the `data-theme` attribute on
+// <html> (so theme.css restyles the chrome) and is read by the plot layer and
+// Meg's useDarkMode() hook, so one toggle re-skins everything at once.
+const THEME_KEY = "magnetics-theme";
+function loadTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  const saved = window.localStorage.getItem(THEME_KEY);
+  return saved === "light" || saved === "dark" ? saved : "dark";
+}
+export function applyTheme(t: Theme) {
+  if (typeof document === "undefined") return;
+  document.documentElement.setAttribute("data-theme", t);
+  document.documentElement.style.colorScheme = t;
+}
+// Apply synchronously at module load so the first paint matches (no flash).
+applyTheme(loadTheme());
 
 interface State {
   machines: MachineInfo[];
@@ -13,11 +31,13 @@ interface State {
   tab: TabId;
   cursorMs: number; // shared time cursor across views
   loadingMachines: boolean;
+  theme: Theme;
 
   init: () => Promise<void>;
   setMachine: (id: string) => void;
   setTab: (t: TabId) => void;
   setCursorMs: (t: number) => void;
+  toggleTheme: () => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -26,6 +46,7 @@ export const useStore = create<State>((set) => ({
   tab: "sensors",
   cursorMs: 0,
   loadingMachines: true,
+  theme: loadTheme(),
 
   async init() {
     const machines = await fetchMachines();
@@ -38,4 +59,11 @@ export const useStore = create<State>((set) => ({
   setMachine: (id) => set({ machine: id }),
   setTab: (t) => set({ tab: t }),
   setCursorMs: (t) => set({ cursorMs: t }),
+  toggleTheme: () =>
+    set((s) => {
+      const theme: Theme = s.theme === "dark" ? "light" : "dark";
+      if (typeof window !== "undefined") window.localStorage.setItem(THEME_KEY, theme);
+      applyTheme(theme);
+      return { theme };
+    }),
 }));

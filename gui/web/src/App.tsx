@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import "./theme.css";
 import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
+import ThemeToggle from "./components/ThemeToggle";
 import SensorsTab from "./components/tabs/SensorsTab";
 import QuasiStationaryTab from "./components/tabs/QuasiStationaryTab";
 import RotatingTab from "./components/tabs/RotatingTab";
@@ -32,6 +33,7 @@ export default function App() {
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
         <span className="badge">{usingLiveBackend() ? "● live backend" : "○ mock data"}</span>
+        <ThemeToggle />
       </header>
 
       <aside className="rail-left">

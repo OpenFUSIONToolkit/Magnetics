@@ -8,7 +8,8 @@
 // Plotly call so a transient throw can never blank the React tree.
 import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist-min";
-import { FONT } from "./colormaps";
+import { plotChrome } from "./colormaps";
+import { useStore } from "../store";
 
 export interface PlotProps {
   data: Partial<Plotly.PlotData>[];
@@ -17,28 +18,40 @@ export interface PlotProps {
   onClick?: (e: Plotly.PlotMouseEvent) => void;
 }
 
-const BASE_LAYOUT: Partial<Plotly.Layout> = {
-  paper_bgcolor: "rgba(0,0,0,0)",
-  plot_bgcolor: "#0a0f16",
-  font: FONT,
-  margin: { l: 60, r: 20, t: 16, b: 48 },
-  showlegend: false,
-  xaxis: { gridcolor: "#16202d", zerolinecolor: "#24323f", linecolor: "#24323f", ticks: "outside", tickcolor: "#24323f" },
-  yaxis: { gridcolor: "#16202d", zerolinecolor: "#24323f", linecolor: "#24323f", ticks: "outside", tickcolor: "#24323f" },
-};
+function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
+  const c = plotChrome(theme);
+  const axis = {
+    gridcolor: c.gridcolor,
+    zerolinecolor: c.zerolinecolor,
+    linecolor: c.linecolor,
+    ticks: "outside" as const,
+    tickcolor: c.tickcolor,
+  };
+  return {
+    paper_bgcolor: c.paper_bgcolor,
+    plot_bgcolor: c.plot_bgcolor,
+    font: c.font,
+    margin: { l: 60, r: 20, t: 16, b: 48 },
+    showlegend: false,
+    xaxis: axis,
+    yaxis: axis,
+  };
+}
 
 export default function Plot({ data, layout, height = 320, onClick }: PlotProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const theme = useStore((s) => s.theme);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const base = baseLayout(theme);
     const merged: Partial<Plotly.Layout> = {
-      ...BASE_LAYOUT,
+      ...base,
       ...layout,
       height,
-      xaxis: { ...BASE_LAYOUT.xaxis, ...(layout?.xaxis as object) },
-      yaxis: { ...BASE_LAYOUT.yaxis, ...(layout?.yaxis as object) },
+      xaxis: { ...base.xaxis, ...(layout?.xaxis as object) },
+      yaxis: { ...base.yaxis, ...(layout?.yaxis as object) },
     };
     try {
       Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true });
@@ -56,7 +69,7 @@ export default function Plot({ data, layout, height = 320, onClick }: PlotProps)
         /* noop */
       }
     };
-  }, [data, layout, height, onClick]);
+  }, [data, layout, height, onClick, theme]);
 
   useEffect(() => {
     const el = ref.current;

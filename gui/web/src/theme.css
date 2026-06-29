@@ -1,5 +1,9 @@
-/* Clean, scientific dark theme. Monospace for data, sans for chrome. */
-:root {
+/* Clean, scientific theme. Monospace for data, sans for chrome.
+   Dark is the default; [data-theme="light"] swaps the tokens to an
+   engineering-paper light mode. Everything below reads from these vars, so the
+   single toggle in the header re-skins the whole app. */
+:root,
+:root[data-theme="dark"] {
   --bg: #070b11;
   --panel: #0c131c;
   --panel-2: #0a0f16;
@@ -8,15 +12,44 @@
   --text: #c8d4e0;
   --text-dim: #7d8da0;
   --accent: #2ee6cf;
+  --accent-soft: rgba(46, 230, 207, 0.14);
   --good: #54e08a;
   --warn: #ffb454;
   --bad: #ff5c5c;
-  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  --shadow: none;
+  --header-bg: var(--panel);
 }
+
+/* Engineering-paper light mode: cool white panels on a slate "desk", ink text,
+   a deepened teal accent that holds contrast on white, and soft shadows to give
+   the flat cards depth the dark theme gets from its borders. */
+:root[data-theme="light"] {
+  --bg: #e9edf2;
+  --panel: #ffffff;
+  --panel-2: #f1f5f9;
+  --border: #d8e0ea;
+  --border-2: #c2cedb;
+  --text: #16222e;
+  --text-dim: #5d6f80;
+  --accent: #0a8d80;
+  --accent-soft: rgba(10, 141, 128, 0.1);
+  --good: #1f9d57;
+  --warn: #b9730a;
+  --bad: #d23b3b;
+  --shadow: 0 1px 2px rgba(15, 35, 60, 0.06), 0 1px 3px rgba(15, 35, 60, 0.05);
+  --header-bg: rgba(255, 255, 255, 0.85);
+}
+
+:root { font-family: "IBM Plex Sans", system-ui, sans-serif; }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
-body { background: var(--bg); color: var(--text); font-size: 13px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  transition: background 0.25s ease, color 0.25s ease;
+}
 code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 
 /* ── app shell: header / left rail / main / right rail ── */
@@ -31,7 +64,8 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
   grid-area: header;
   display: flex; align-items: center; gap: 16px;
   padding: 0 16px; border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--header-bg);
+  backdrop-filter: saturate(1.2) blur(6px);
 }
 .app-header .title { font-weight: 600; letter-spacing: 0.5px; }
 .app-header .sub { color: var(--text-dim); font-size: 11px; }
@@ -40,6 +74,19 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
   font-family: "IBM Plex Mono", monospace; font-size: 10px;
   padding: 2px 7px; border-radius: 3px; border: 1px solid var(--border-2); color: var(--text-dim);
 }
+
+/* theme toggle: minimal icon button; icon morphs sun<->moon on switch */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  background: var(--panel-2); color: var(--text-dim);
+  border: 1px solid var(--border-2); border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.theme-toggle:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.theme-toggle svg { width: 16px; height: 16px; transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.theme-toggle:hover svg { transform: rotate(25deg); }
 
 .rail-left { grid-area: left; border-right: 1px solid var(--border); background: var(--panel); overflow-y: auto; }
 .rail-right { grid-area: right; border-left: 1px solid var(--border); background: var(--panel); overflow-y: auto; }
@@ -62,7 +109,7 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 
 /* cards */
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 14px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 14px; box-shadow: var(--shadow); }
 .card h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
 .card .desc { color: var(--text-dim); font-size: 11px; margin: 0 0 10px; }
 
