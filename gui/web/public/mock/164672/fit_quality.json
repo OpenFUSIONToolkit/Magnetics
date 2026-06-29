@@ -1,0 +1,1 @@
+{"kind": "metrics", "title": "Fit quality", "fields": [{"label": "condition number K", "value": 6.7, "status": "good"}, {"label": "reduced \u03c7\u00b2", "value": 1.3, "status": "good"}, {"label": "channels fit", "value": 58}, {"label": "max |m|", "value": 5}], "meta": {}}

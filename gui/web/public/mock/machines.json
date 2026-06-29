@@ -1,0 +1,4 @@
+[
+  { "id": "MOCK-A", "label": "MOCK-A", "device": "synthetic", "note": "fake · dense array · m/n=2/1 LOCKED · well-conditioned (K~7)", "mock": true },
+  { "id": "MOCK-B", "label": "MOCK-B", "device": "synthetic", "note": "fake · sparse legacy array · ROTATING n=1 · ill-conditioned (K~21)", "mock": true }
+]
