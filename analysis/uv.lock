@@ -227,6 +227,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "h5py" },
     { name = "matplotlib" },
+    { name = "mdsthin" },
     { name = "numpy" },
     { name = "uvicorn" },
 ]
@@ -236,6 +237,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "h5py", specifier = ">=3.12.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
+    { name = "mdsthin", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -271,6 +273,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/f9/9b030b6088354acb0296871bb624b25befc1c42509d3c6cd17420c83a5b8/matplotlib-3.11.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:15b0d160079cb10699a0e98b5989c70677b2df7cacdc62af67c30f2facec46d9", size = 10939427, upload-time = "2026-06-12T02:29:02.527Z" },
     { url = "https://files.pythonhosted.org/packages/59/94/6b273eaee4ee250863567d100865da61a5c1527fa67f527b7ed22e0dd29c/matplotlib-3.11.0-cp314-cp314t-win_amd64.whl", hash = "sha256:446307e6b04b57b1f1239e228a1ec2af0d589a1008cebc3dfa3f5441d095cfb6", size = 9535809, upload-time = "2026-06-12T02:29:04.994Z" },
     { url = "https://files.pythonhosted.org/packages/60/95/1d36bddf2b7e2692c1540e78a6e5bc88bc1496b137e3e35a611f91b65ac3/matplotlib-3.11.0-cp314-cp314t-win_arm64.whl", hash = "sha256:652fb5696271d4c50f196d22a5ff4f8e4444c74f847423570d7dc0aa2bbd0159", size = 9209226, upload-time = "2026-06-12T02:29:07.033Z" },
+]
+
+[[package]]
+name = "mdsthin"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/8d/789312c8b09d41dd012e2c629a98218b345b41c675c4e895618d28ca9c49/mdsthin-1.7.0.tar.gz", hash = "sha256:39fa6b01b5fea3b92c595de2c97d8f34728a12a5178757d32e1e310e07268416", size = 74664, upload-time = "2026-06-15T15:02:54.137Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/99/450d376972f1b1929a26711ee2c07002d25c6aff5b7bb0d693ceebd8450e/mdsthin-1.7.0-py3-none-any.whl", hash = "sha256:f591a437674294f68873271131bcae369251382eb4b9da81a263f9e90bd2e8f2", size = 90799, upload-time = "2026-06-15T15:02:53.162Z" },
 ]
 
 [[package]]

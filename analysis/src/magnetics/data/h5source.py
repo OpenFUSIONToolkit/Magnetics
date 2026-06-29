@@ -40,7 +40,9 @@ def _shot_index() -> dict[str, Path]:
     """Map shot id (str) -> best HDF5 file (the one with the most channels)."""
     index: dict[str, Path] = {}
     best_count: dict[str, int] = {}
-    for path in sorted(data_dir().glob("*.h5")):
+    # recursive: shots written by the fetcher land in data/datafile/, while older
+    # files sit in data/ root — both should be discoverable.
+    for path in sorted(data_dir().rglob("*.h5")):
         try:
             with h5py.File(path, "r") as h5:
                 shot = str(int(np.asarray(h5.attrs.get("shot", 0))))

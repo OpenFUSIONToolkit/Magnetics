@@ -50,6 +50,9 @@ export interface FetchBody {
   shot: number;
   analysis?: string;
   backend?: string;
+  username?: string;
+  password?: string; // sent to the local backend only; not stored
+  duo?: string; // Duo passcode, or "1" for push
   tmin?: number;
   tmax?: number;
   decimate?: number;

@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=2.4.6",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "mdsthin>=1.0",
 ]
 
 [build-system]

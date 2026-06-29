@@ -61,6 +61,8 @@ class FetchRequest(BaseModel):
     tmax: float | None = None
     decimate: int = 1
     username: str | None = None
+    password: str | None = None  # fed to ssh via askpass; localhost only, not stored
+    duo: str | None = None       # Duo passcode, or "1" for push (default)
     # remote backend overrides (None → fetcher defaults: omega via cybele, conda)
     remote_host: str | None = None
     ssh_jump: str | None = None
@@ -89,6 +91,7 @@ def post_fetch(req: FetchRequest) -> dict:
     try:
         out = toksearch_fetch.fetch_shot(
             req.shot, req.analysis, backend=req.backend, username=req.username,
+            password=req.password, duo=req.duo,
             tmin=req.tmin, tmax=req.tmax, decimate=req.decimate, **remote_kw)
     except SystemExit as exc:  # fetcher uses sys.exit for missing deps/creds
         raise HTTPException(status_code=400, detail=str(exc)) from exc
