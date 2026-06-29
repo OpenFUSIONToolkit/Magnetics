@@ -1,6 +1,7 @@
 """Tests for magnetics.core.spectral — the MODESPEC-style spectral analysis."""
 
 import numpy as np
+import pytest
 
 from magnetics.core.spectral import (
     CrossSpectrumResult,
@@ -129,6 +130,11 @@ class TestCrossSpectrum:
         result = cross_spectrum(noise1, noise2, 10_000)
         assert np.mean(result.coherence) < 0.3
 
+    def test_delta_phi_zero_raises(self, synthetic_n2):
+        d = synthetic_n2
+        with pytest.raises(ValueError):
+            cross_spectrum(d["sig1"], d["sig2"], d["fs"], delta_phi=0.0)
+
 
 # -----------------------------------------------------------------------
 # compute_spectrogram
@@ -180,6 +186,51 @@ class TestComputeSpectrogram:
         assert result.power.shape[1] > 0
         assert np.all(np.isfinite(result.power))
         assert np.all(np.isfinite(result.coherence))
+
+
+# -----------------------------------------------------------------------
+# compute_spectrogram — batched-STFT engine specifics
+# -----------------------------------------------------------------------
+
+
+class TestComputeSpectrogramEngine:
+    def test_delta_phi_zero_raises(self, synthetic_n2):
+        d = synthetic_n2
+        with pytest.raises(ValueError):
+            compute_spectrogram(d["time"], d["sig1"], d["sig2"], 0.0)
+
+    def test_max_columns_caps_time_bins(self, synthetic_n2):
+        d = synthetic_n2
+        result = compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"],
+            slice_duration=0.001, max_columns=50,
+        )
+        assert result.time.size <= 50
+
+    def test_detrend_suppresses_dc(self, synthetic_n2):
+        d = synthetic_n2
+        result = compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"], slice_duration=0.01
+        )
+        # per-window detrend keeps the f=0 bin below the active mode band
+        dc = result.power[:, 0].mean()
+        band = result.power[:, result.frequency > 1e3].mean()
+        assert dc < band
+
+    def test_sign_agrees_with_cross_spectrum(self, synthetic_n2):
+        d = synthetic_n2
+        spec = compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"], slice_duration=0.01
+        )
+        # strongest off-DC cell of the spectrogram...
+        p = spec.power.copy()
+        p[:, spec.frequency < 1e3] = 0.0
+        it, iff = np.unravel_index(np.argmax(p), p.shape)
+        # ...must report the same signed n as the trusted single-window cross_spectrum
+        cs = cross_spectrum(d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"])
+        cp = cs.power.copy()
+        cp[cs.frequency < 1e3] = 0.0
+        assert spec.mode_number[it, iff] == cs.mode_number[np.argmax(cp)]
 
 
 # -----------------------------------------------------------------------

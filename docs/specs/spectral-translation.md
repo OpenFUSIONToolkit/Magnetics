@@ -40,12 +40,17 @@ Core 2-point spectral analysis for a single time window:
 
 Source: `calculate_fft()` in `spectrogram_useful_stuff.py`.
 
-### 4. `compute_spectrogram(time, sig1, sig2, delta_phi, slice_duration=0.001) → SpectrogramResult`
+### 4. `compute_spectrogram(time, sig1, sig2, delta_phi, slice_duration=0.001, window="hann", max_columns=2000, coherence_smooth=5) → SpectrogramResult`
 
-Sliding-window spectrogram with 50% overlap. Calls `cross_spectrum` for each window.
-Returns 2D arrays of power, coherence, and mode number indexed by (time, frequency).
+Cross-power spectrogram, coherence, and toroidal mode number vs (time, frequency). Uses a
+single **batched short-time FFT per probe** (the private `_stft` helper) rather than a
+per-window `cross_spectrum` loop — frames are windowed and rffted in one vectorized call,
+and the column count is decimated to `max_columns` so cost scales with the display, not the
+record length. The physics (cross-power, frequency-smoothed coherence, `n = round(phase/Δφ)`,
+per-mode RMS) matches the 2-point definitions in `cross_spectrum`, including the signed-`n`
+convention. Raises `ValueError` if `delta_phi == 0`.
 
-Source: `calculate_spectrogram()` in `spectrogram_prep.py`.
+Source: `calculate_spectrogram()` in `spectrogram_prep.py`, re-engined onto a batched STFT.
 
 ### 5. `extract_mode_at_frequency(signals, toroidal_angles, time, sample_rate?, frequency=0, t_range?, poloidal_angles?) → ModeAtFrequencyResult`
 
@@ -140,7 +145,7 @@ class ModeAtFrequencyResult:
 | `== None` | `is None` |
 | `/` integer division | `//` where integer division intended |
 | `scipy.integrate.cumtrapz` | `scipy.integrate.cumulative_trapezoid` |
-| `np.vstack` in a loop (grow arrays) | Pre-allocate output arrays |
+| `np.vstack` in a per-window loop | Single batched STFT, fully vectorized (no Python loop) |
 | Implicit `np`/`size` from star imports | Explicit `import numpy as np` |
 | `print(...)` status messages | No prints; let caller handle logging |
 | Returns loose tuples/dicts | Typed dataclasses with `kind` field |
@@ -154,7 +159,8 @@ class ModeAtFrequencyResult:
 
 - **numpy** — in `pyproject.toml`
 - **scipy** — in `pyproject.toml` (for `signal.csd`, `signal.coherence`,
-  `signal.resample`, `integrate.cumulative_trapezoid`, `ndimage.uniform_filter1d`)
+  `signal.resample`, `signal.get_window`, `fft.rfft`/`rfftfreq`/`next_fast_len`,
+  `integrate.cumulative_trapezoid`, `ndimage.uniform_filter1d`)
 
 ---
 
