@@ -23,6 +23,8 @@ data/cache/
 # HDF5 shot data — large, fetched/generated locally, not committed
 *.h5
 *.hdf5
+# example shot bundles (extensionless netCDF/HDF5: RAW, PLASMA_PARAMS, COUPLING)
+analysis/data/
 
 # OS / editor
 .DS_Store
