@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import socket
 import subprocess
 import sys
@@ -408,8 +409,12 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
         tb_cache: dict[tuple, str] = {}
         tb_n = 0
         for c in got:
-            key = (c.time.shape, float(c.time[0]), float(c.time[-1]),
-                   c.time.size)
+            # Content-address the time vector: identical vectors share storage,
+            # but two distinct vectors that happen to share (shape, endpoints, N)
+            # must NOT collide — a metadata-only key silently hard-links them and
+            # corrupts the second channel's timestamps.
+            key = (c.time.dtype.str, c.time.shape,
+                   hashlib.sha1(np.ascontiguousarray(c.time)).digest())
             tb_name = tb_cache.get(key)
             if tb_name is None:
                 tb_name = f"tb{tb_n}"
