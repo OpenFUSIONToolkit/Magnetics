@@ -1,6 +1,9 @@
 // App shell: header · left rail (shot picker) · tabbed main · right rail (quality).
 // The four tabs are independent files owned by different people — they read from
 // the store and render `kind`-nodes via <NodeView>. Adding a view = one file.
+//
+// `gui` is the GUI integration branch: teammates branch off it (gui-<view>) and
+// PR back here; `gui` itself PRs into `develop`.
 import { useEffect } from "react";
 import "./theme.css";
 import { useStore, type TabId } from "./store";
