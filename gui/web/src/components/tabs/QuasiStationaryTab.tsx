@@ -136,10 +136,12 @@ function useQsFit(machine: string, fetchCursor: number) {
 
   useEffect(() => {
     if (!isLive || !machine) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- reset before live stream; Meg's hookup, revisit later */
     setLiveLoading(true);
     setLiveError(null);
     setLiveContour(null);
     setLiveProgress(0);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     const base = import.meta.env.VITE_API_BASE as string;
     const es = new EventSource(`${base}/api/${machine}/qs_fit/stream`);
@@ -227,6 +229,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // Keep localCursor in sync when store changes (e.g. other tab seeks)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror external cursor; revisit later
     if (cursorMs !== 0) setLocalCursor(cursorMs);
   }, [cursorMs]);
 
