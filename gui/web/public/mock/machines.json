@@ -1,0 +1,4 @@
+[
+  { "id": "164672", "label": "DIII-D 164672 (mock)", "device": "DIII-D", "note": "MOCK · m/n=2/1 locked mode · well-conditioned", "mock": true },
+  { "id": "147131", "label": "DIII-D 147131 (mock)", "device": "DIII-D", "note": "MOCK · rotating n=1 · ill-conditioned", "mock": true }
+]

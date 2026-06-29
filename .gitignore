@@ -15,6 +15,13 @@ node_modules/
 dist/
 .vite/
 *.local
+*.log
+*.tsbuildinfo
+
+# Env / local config (VITE_API_BASE, backend hosts, tokens) — never commit
+.env
+.env.*
+!.env.example
 
 # Data caches (reduced shot bundles fetched from MDSplus)
 data/cache/
