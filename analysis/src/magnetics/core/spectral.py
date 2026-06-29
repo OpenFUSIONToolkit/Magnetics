@@ -70,7 +70,9 @@ def downsample(
         signal (ndarray): signal samples.
         t_range (tuple[float, float] | None): (start, stop) in s; None keeps all.
         sample_rate (float): target rate (Hz).
-    Returns: (time_new, signal_new) resampled arrays.
+    Returns:
+        time_new (ndarray): resampled sample times (s).
+        signal_new (ndarray): resampled signal.
     """
     if t_range is not None:
         mask = (time >= t_range[0]) & (time <= t_range[1])
@@ -95,7 +97,8 @@ def integrate_bdot(
         time (ndarray): sample times (s).
         signal (ndarray): dB/dt samples.
         highpass_window (float | None): running-average window (s); None subtracts the mean.
-    Returns: the integrated signal B (ndarray).
+    Returns:
+        B (ndarray): the integrated signal.
     """
     dt = (time[-1] - time[0]) / (len(time) - 1)
 
@@ -131,7 +134,9 @@ def cross_spectrum(
         sig2 (ndarray): second probe time series.
         sample_rate (float): sampling rate (Hz).
         delta_phi (float | None): toroidal separation (deg); enables mode-number output.
-    Returns: CrossSpectrumResult (mode_number/rms_by_mode/mode_indices set iff delta_phi given).
+    Returns:
+        result (CrossSpectrumResult): frequency/power/coherence/phase, plus
+            mode_number/rms_by_mode/mode_indices set iff delta_phi is given.
     """
     f, pxy = csd(sig2, sig1, fs=sample_rate)
     _, coh = scipy_coherence(sig2, sig1, fs=sample_rate)
@@ -193,7 +198,9 @@ def compute_spectrogram(
         sig2 (ndarray): second probe time series.
         delta_phi (float): toroidal separation (deg).
         slice_duration (float): FFT window width (s).
-    Returns: SpectrogramResult with power/coherence/mode_number as (n_times, n_freqs) arrays.
+    Returns:
+        result (SpectrogramResult): power/coherence/mode_number as (n_times, n_freqs)
+            arrays, with time/frequency/rms_by_mode/mode_indices.
     """
     nx = len(time)
     dt = (time[-1] - time[0]) / (nx - 1)
@@ -251,6 +258,55 @@ def compute_spectrogram(
 
 
 # ---------------------------------------------------------------------------
+# Spectrogram de-noising
+# ---------------------------------------------------------------------------
+
+
+def denoise_spectrogram(
+    result: SpectrogramResult,
+    *,
+    coherence_min: float = 0.5,
+    power_floor_k: float | None = 3.0,
+    floor_percentile: float = 50.0,
+) -> SpectrogramResult:
+    """Suppress low-amplitude / incoherent cells by coherence gating and a per-frequency
+    power floor; gated cells get power 0, and rms_by_mode is recomputed from what survives.
+
+    Inputs:
+        result (SpectrogramResult): spectrogram to clean.
+        coherence_min (float): drop cells with coherence below this (0–1).
+        power_floor_k (float | None): drop cells below k × per-frequency floor; None skips.
+        floor_percentile (float): percentile over time defining the floor (50 = median).
+    Returns:
+        result (SpectrogramResult): copy with gated power zeroed and rms_by_mode recomputed.
+    """
+    keep = result.coherence >= coherence_min
+
+    if power_floor_k is not None:
+        floor = np.percentile(result.power, floor_percentile, axis=0)  # (n_freqs,)
+        keep &= result.power >= power_floor_k * floor
+
+    power = np.where(keep, result.power, 0.0)
+
+    # Recompute per-mode RMS from the surviving power (gated cells contribute nothing).
+    df = result.frequency[1] - result.frequency[0]
+    rms = np.empty((power.shape[0], len(result.mode_indices)))
+    for j, m in enumerate(result.mode_indices):
+        rms[:, j] = np.sqrt(np.sum(power * (result.mode_number == m), axis=1) * df)
+
+    return SpectrogramResult(
+        kind="spectrogram",
+        time=result.time,
+        frequency=result.frequency,
+        power=power,
+        coherence=result.coherence,
+        mode_number=result.mode_number,
+        rms_by_mode=rms,
+        mode_indices=result.mode_indices,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Multi-probe mode extraction at a single frequency
 # ---------------------------------------------------------------------------
 
@@ -276,31 +332,32 @@ def extract_mode_at_frequency(
         frequency (float): frequency to evaluate (Hz); 0 selects the peak-power bin.
         t_range (tuple[float, float] | None): (start, stop) in s; None keeps all.
         poloidal_angles (ndarray | None): probe poloidal angles (deg).
-    Returns: ModeAtFrequencyResult with per-probe phase/amplitude/coherence.
+    Returns:
+        result (ModeAtFrequencyResult): per-probe phase/amplitude/coherence with the
+            frequency used and the toroidal (and optional poloidal) angles.
     """
     n_probes = signals.shape[0]
 
     if sample_rate is None:
         sample_rate = round(1.0 / (time[1] - time[0]))
 
-    ref_idx = 0
+    def prep(sig: NDArray[np.floating]) -> NDArray[np.floating]:
+        if t_range is None:
+            return sig
+        _, out = downsample(time, sig, t_range=t_range, sample_rate=sample_rate)
+        return out
+
+    ref_sig = prep(signals[0])
     phases = np.empty(n_probes)
     amplitudes = np.empty(n_probes)
     coherences = np.empty(n_probes)
 
     for i in range(n_probes):
-        if t_range is not None:
-            _, sig = downsample(time, signals[i], t_range=t_range, sample_rate=sample_rate)
-            if i == ref_idx:
-                _, ref_sig = downsample(time, signals[ref_idx], t_range=t_range, sample_rate=sample_rate)
-        else:
-            sig = signals[i]
-            if i == ref_idx:
-                ref_sig = signals[ref_idx]
+        sig = ref_sig if i == 0 else prep(signals[i])
 
         result = cross_spectrum(ref_sig, sig, sample_rate)
 
-        if i == ref_idx and frequency == 0.0:
+        if i == 0 and frequency == 0.0:
             frequency = float(np.round(result.frequency[np.argmax(result.power)]))
 
         freq_idx = int(np.argmin(np.abs(result.frequency - frequency)))

@@ -1,7 +1,6 @@
 """Tests for magnetics.core.spectral — the MODESPEC-style spectral analysis."""
 
 import numpy as np
-import pytest
 
 from magnetics.core.spectral import (
     CrossSpectrumResult,
@@ -9,6 +8,7 @@ from magnetics.core.spectral import (
     SpectrogramResult,
     compute_spectrogram,
     cross_spectrum,
+    denoise_spectrogram,
     downsample,
     extract_mode_at_frequency,
     integrate_bdot,
@@ -180,6 +180,74 @@ class TestComputeSpectrogram:
         assert result.power.shape[1] > 0
         assert np.all(np.isfinite(result.power))
         assert np.all(np.isfinite(result.coherence))
+
+
+# -----------------------------------------------------------------------
+# denoise_spectrogram
+# -----------------------------------------------------------------------
+
+
+class TestDenoiseSpectrogram:
+    def _spec(self, synthetic_n2):
+        d = synthetic_n2
+        return compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"], slice_duration=0.01
+        )
+
+    def test_returns_correct_kind_and_shapes(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        dn = denoise_spectrogram(spec)
+        assert dn.kind == "spectrogram"
+        assert isinstance(dn, SpectrogramResult)
+        assert dn.power.shape == spec.power.shape
+        assert dn.rms_by_mode.shape == spec.rms_by_mode.shape
+
+    def test_never_adds_power(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        dn = denoise_spectrogram(spec)
+        # de-noising only removes; every cell is <= original and total is not larger
+        assert np.all(dn.power <= spec.power + 1e-12)
+        assert dn.power.sum() <= spec.power.sum() + 1e-9
+
+    def test_coherence_gate_zeros_low_coherence_cells(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        dn = denoise_spectrogram(spec, coherence_min=0.5, power_floor_k=None)
+        assert np.all(dn.power[spec.coherence < 0.5] == 0.0)
+
+    def test_passes_through_coherence_and_mode(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        dn = denoise_spectrogram(spec)
+        np.testing.assert_array_equal(dn.coherence, spec.coherence)
+        np.testing.assert_array_equal(dn.mode_number, spec.mode_number)
+
+    def test_preserves_dominant_mode_peak(self, synthetic_n2):
+        d = synthetic_n2
+        spec = self._spec(d)
+        # The synthetic mode is perfectly stationary, so the per-frequency power
+        # floor would treat it as its own background; coherence gating is the
+        # correct denoiser for a persistent mode and must keep the peak.
+        dn = denoise_spectrogram(spec, coherence_min=0.5, power_floor_k=None)
+        peak = np.unravel_index(np.argmax(spec.power), spec.power.shape)
+        assert dn.power[peak] > 0
+        assert abs(dn.mode_number[peak]) == d["n_true"]
+
+    def test_power_floor_removes_more_than_coherence_alone(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        coh_only = denoise_spectrogram(spec, coherence_min=0.5, power_floor_k=None)
+        with_floor = denoise_spectrogram(spec, coherence_min=0.5, power_floor_k=3.0)
+        assert np.count_nonzero(with_floor.power) <= np.count_nonzero(coh_only.power)
+
+    def test_on_real_data(self, shot_174446):
+        d = shot_174446
+        delta_phi = d["phi_307"] - d["phi_340"]
+        spec = compute_spectrogram(
+            d["time_s"], d["sig_307"], d["sig_340"], delta_phi, slice_duration=0.004
+        )
+        dn = denoise_spectrogram(spec)
+        # background suppressed, but the bulk of the power (real modes) retained
+        assert np.count_nonzero(dn.power) < np.count_nonzero(spec.power)
+        assert dn.power.sum() > 0.8 * spec.power.sum()
+        assert np.all(np.isfinite(dn.rms_by_mode))
 
 
 # -----------------------------------------------------------------------

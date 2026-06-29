@@ -13,7 +13,8 @@ device-agnostic module for the new magnetics platform.*
 
 ## In scope
 
-Five functions covering the full MODESPEC-style rotating-mode pipeline:
+Five functions translated from OMFIT, covering the full MODESPEC-style rotating-mode
+pipeline (plus one new de-noising extension — see "Extensions beyond the translation"):
 
 ### 1. `downsample(time, signal, t_range?, sample_rate=2e5) → (time, signal)`
 
@@ -53,6 +54,25 @@ to extract phase, amplitude, and coherence vs. toroidal/poloidal angle. Enables 
 phase-vs-φ and phase-vs-θ mode-number fits.
 
 Source: `get_mode_2d()` in `spectrogram_useful_stuff.py`.
+
+---
+
+## Extensions beyond the translation
+
+New capability not present in the OMFIT source, added to the same module:
+
+### `denoise_spectrogram(result, coherence_min=0.5, power_floor_k=3.0, floor_percentile=50) → SpectrogramResult`
+
+Suppress low-amplitude / incoherent cells in a computed spectrogram via two complementary
+gates: a **coherence gate** (drop cells below `coherence_min` — incoherent cells carry no
+real toroidal mode) and a **per-frequency power floor** (drop cells below
+`power_floor_k × percentile(power, axis=time)`). Gated cells get power 0 and `rms_by_mode`
+is recomputed from what survives.
+
+Note: the per-frequency floor assumes modes are *transient* relative to the window — a
+perfectly persistent mode raises its own per-frequency median, so lean on the coherence
+gate for steady/locked modes. (Broadband-transient ELM filtering is a possible future
+addition, acting per-time-slice rather than per-frequency.)
 
 ---
 
@@ -132,9 +152,9 @@ class ModeAtFrequencyResult:
 
 ## Dependencies
 
-- **numpy** — already in `pyproject.toml`
-- **scipy** — needs to be added to `pyproject.toml` (for `signal.csd`, `signal.coherence`,
-  `signal.resample`, `integrate.cumulative_trapezoid`, `ndimage.uniform_filter`)
+- **numpy** — in `pyproject.toml`
+- **scipy** — in `pyproject.toml` (for `signal.csd`, `signal.coherence`,
+  `signal.resample`, `integrate.cumulative_trapezoid`, `ndimage.uniform_filter1d`)
 
 ---
 
