@@ -52,6 +52,17 @@ class ModeAtFrequencyResult:
     poloidal_angle: NDArray[np.floating] | None = None
 
 
+@dataclass(slots=True)
+class ToroidalFitResult:
+    kind: str
+    n: int                      # best-fit toroidal mode number
+    intercept_deg: float        # fitted phase at phi = 0 (deg), in [0, 360)
+    resultant: float            # clustering quality in [0, 1] (1 = perfect fit)
+    frequency: float            # Hz, the frequency the fit was evaluated at
+    toroidal_angle: NDArray[np.floating]   # measured probe angles (deg)
+    phase: NDArray[np.floating]            # measured phases (deg), wrapped [0, 360)
+
+
 # ---------------------------------------------------------------------------
 # Signal conditioning
 # ---------------------------------------------------------------------------
@@ -126,6 +137,7 @@ def cross_spectrum(
     sample_rate: float,
     *,
     delta_phi: float | None = None,
+    nperseg: int | None = None,
 ) -> CrossSpectrumResult:
     """2-point cross-power spectral density, coherence, and phase between two probes.
     With delta_phi, also returns mode number n = round(phase / delta_phi) and per-mode RMS.
@@ -135,12 +147,15 @@ def cross_spectrum(
         sig2 (ndarray): second probe time series.
         sample_rate (float): sampling rate (Hz).
         delta_phi (float | None): toroidal separation (deg); enables mode-number output.
+        nperseg (int | None): Welch segment length for csd/coherence; None uses scipy's
+            default (256). Set below the signal length on short slices to keep multiple
+            averaging segments — coherence is meaningless from a single segment.
     Returns:
         result (CrossSpectrumResult): frequency/power/coherence/phase, plus
             mode_number/rms_by_mode/mode_indices set iff delta_phi is given.
     """
-    f, pxy = csd(sig2, sig1, fs=sample_rate)
-    _, coh = scipy_coherence(sig2, sig1, fs=sample_rate)
+    f, pxy = csd(sig2, sig1, fs=sample_rate, nperseg=nperseg)
+    _, coh = scipy_coherence(sig2, sig1, fs=sample_rate, nperseg=nperseg)
 
     power = np.abs(pxy)
     phase = np.rad2deg(np.angle(pxy))
@@ -232,6 +247,28 @@ def _stft(
 # ---------------------------------------------------------------------------
 
 
+def stft_layout(
+    n_samples: int, sample_rate: float, slice_duration: float
+) -> tuple[int, int, int]:
+    """FFT length, native 50%-overlap hop, and natural column count for an STFT.
+
+    Single source of truth for the sliding-window geometry, shared by
+    ``compute_spectrogram`` and the streaming/contract layer so the two cannot drift.
+
+    Inputs:
+        n_samples (int): signal length (samples).
+        sample_rate (float): sampling rate (Hz).
+        slice_duration (float): FFT window width (s).
+    Returns:
+        (n_fft, natural_hop, n_cols_natural): window length, 50%-overlap stride, and
+        the number of windows at that stride.
+    """
+    n_fft = max(8, int(next_fast_len(int(round(slice_duration * sample_rate)))))
+    natural_hop = max(1, n_fft // 2)
+    n_cols_natural = max(1, (n_samples - n_fft) // natural_hop + 1)
+    return n_fft, natural_hop, n_cols_natural
+
+
 def compute_spectrogram(
     time: NDArray[np.floating],
     sig1: NDArray[np.floating],
@@ -275,9 +312,7 @@ def compute_spectrogram(
     dt = float(np.median(np.diff(time)))
     sample_rate = 1.0 / dt
 
-    n_fft = max(8, int(next_fast_len(int(round(slice_duration * sample_rate)))))
-    natural_hop = max(1, n_fft // 2)  # 50 % overlap
-    n_cols_natural = (n - n_fft) // natural_hop + 1
+    n_fft, natural_hop, n_cols_natural = stft_layout(n, sample_rate, slice_duration)
     if n_cols_natural > max_columns:
         hop = max(natural_hop, (n - n_fft) // max(1, max_columns - 1))
     else:
@@ -391,21 +426,25 @@ def extract_mode_at_frequency(
     time: NDArray[np.floating],
     *,
     sample_rate: float | None = None,
-    frequency: float = 0.0,
+    frequency: float | None = None,
     t_range: tuple[float, float] | None = None,
     poloidal_angles: NDArray[np.floating] | None = None,
+    nperseg: int | None = None,
 ) -> ModeAtFrequencyResult:
     """Phase, amplitude, and coherence at one frequency for each probe vs. the first,
-    for phase-vs-angle mode fitting; frequency=0 picks the reference's peak-power bin.
+    for phase-vs-angle mode fitting; frequency=None picks the reference's peak-power bin.
 
     Inputs:
         signals (ndarray): probe time series, shape (n_probes, n_samples).
         toroidal_angles (ndarray): probe toroidal angles (deg).
         time (ndarray): sample times (s).
         sample_rate (float | None): sampling rate (Hz); inferred from time if None.
-        frequency (float): frequency to evaluate (Hz); 0 selects the peak-power bin.
+        frequency (float | None): frequency to evaluate (Hz); None selects the
+            peak-power bin. An explicit 0.0 means DC, not auto-select.
         t_range (tuple[float, float] | None): (start, stop) in s; None keeps all.
         poloidal_angles (ndarray | None): probe poloidal angles (deg).
+        nperseg (int | None): Welch segment length passed to ``cross_spectrum``; None
+            uses scipy's default. Set on short ``t_range`` slices to keep averaging.
     Returns:
         result (ModeAtFrequencyResult): per-probe phase/amplitude/coherence with the
             frequency used and the toroidal (and optional poloidal) angles.
@@ -429,9 +468,9 @@ def extract_mode_at_frequency(
     for i in range(n_probes):
         sig = ref_sig if i == 0 else prep(signals[i])
 
-        result = cross_spectrum(ref_sig, sig, sample_rate)
+        result = cross_spectrum(ref_sig, sig, sample_rate, nperseg=nperseg)
 
-        if i == 0 and frequency == 0.0:
+        if i == 0 and frequency is None:
             frequency = float(np.round(result.frequency[np.argmax(result.power)]))
 
         freq_idx = int(np.argmin(np.abs(result.frequency - frequency)))
@@ -455,4 +494,66 @@ def extract_mode_at_frequency(
         coherence=coherences,
         toroidal_angle=tor,
         poloidal_angle=pol,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Toroidal mode-number fit (phase vs angle)
+# ---------------------------------------------------------------------------
+
+
+def fit_toroidal_mode(
+    mode_result: ModeAtFrequencyResult,
+    *,
+    n_range: tuple[int, int] = (-6, 6),
+    weights: str = "amplitude",
+) -> ToroidalFitResult:
+    """Fit a toroidal mode number to per-probe phase-vs-angle data.
+
+    A rotating mode of toroidal number n imprints a linear phase ramp across the
+    toroidal array: ``phase(phi) = c - n * phi`` (deg). Rather than unwrap the
+    (mod-360) phases — ill-posed for sparse arrays — this scans integer candidates
+    and picks the n whose residual ``phase + n * phi`` clusters most tightly on the
+    circle (largest amplitude-weighted resultant). The intercept c is the angle of
+    that resultant, giving a wrap-free fit line for the GUI to draw.
+
+    Inputs:
+        mode_result (ModeAtFrequencyResult): per-probe phase/amplitude/angle, e.g.
+            from ``extract_mode_at_frequency``.
+        n_range (tuple[int, int]): inclusive candidate range of toroidal numbers.
+        weights ("amplitude" | "coherence" | "uniform"): per-probe fit weighting.
+    Returns:
+        result (ToroidalFitResult): best-fit n, intercept, and clustering quality.
+    """
+    phi = np.asarray(mode_result.toroidal_angle, dtype=np.float64)
+    phase = np.asarray(mode_result.phase, dtype=np.float64)
+
+    if weights == "coherence":
+        w = np.asarray(mode_result.coherence, dtype=np.float64)
+    elif weights == "uniform":
+        w = np.ones_like(phi)
+    else:
+        w = np.asarray(mode_result.amplitude, dtype=np.float64)
+    # nan_to_num before the all-zero check: a NaN weight survives clip and would
+    # silently poison the resultant for every n candidate (NaN > best_R is False).
+    w = np.nan_to_num(np.clip(w, 0.0, None), nan=0.0, posinf=0.0, neginf=0.0)
+    if not np.any(w > 0):
+        w = np.ones_like(phi)
+
+    best_n, best_R, best_c = n_range[0], -1.0, 0.0
+    for n in range(n_range[0], n_range[1] + 1):
+        resultant = np.sum(w * np.exp(1j * np.deg2rad(phase + n * phi))) / w.sum()
+        R = float(np.abs(resultant))
+        if R > best_R:
+            best_R, best_n = R, n
+            best_c = float(np.rad2deg(np.angle(resultant)))
+
+    return ToroidalFitResult(
+        kind="toroidal_fit",
+        n=int(best_n),
+        intercept_deg=best_c % 360.0,
+        resultant=best_R,
+        frequency=float(mode_result.frequency),
+        toroidal_angle=phi,
+        phase=phase % 360.0,
     )

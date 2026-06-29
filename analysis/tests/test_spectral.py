@@ -321,7 +321,7 @@ class TestExtractModeAtFrequency:
         d = synthetic_n2
         signals = np.vstack([d["sig1"], d["sig2"]])
         tor = np.array([30.0, 120.0])
-        result = extract_mode_at_frequency(signals, tor, d["time"], frequency=0.0)
+        result = extract_mode_at_frequency(signals, tor, d["time"], frequency=None)
         assert abs(result.frequency - d["f_mode"]) < 200
 
     def test_output_lengths_match_probes(self, synthetic_n2):

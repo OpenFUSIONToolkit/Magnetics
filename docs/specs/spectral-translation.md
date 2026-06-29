@@ -66,6 +66,15 @@ Source: `get_mode_2d()` in `spectrogram_useful_stuff.py`.
 
 New capability not present in the OMFIT source, added to the same module:
 
+### `fit_toroidal_mode(mode_result, n_range=(-6,6), weights="amplitude") → ToroidalFitResult`
+
+Fit a toroidal mode number to the per-probe phase-vs-angle data from
+`extract_mode_at_frequency`. A mode of number n imprints `phase(phi) = c - n·phi`;
+rather than unwrap (mod-360) phases on a sparse array, it scans integer candidates
+and selects the n whose residual `phase + n·phi` clusters most tightly on the circle
+(largest amplitude-weighted resultant). Returns the best-fit n, the intercept c, and
+a clustering quality in [0, 1]. Feeds the contract `phase_fit` block.
+
 ### `denoise_spectrogram(result, coherence_min=0.5, power_floor_k=3.0, floor_percentile=50) → SpectrogramResult`
 
 Suppress low-amplitude / incoherent cells in a computed spectrogram via two complementary
@@ -80,6 +89,28 @@ gate for steady/locked modes. (Broadband-transient ELM filtering is a possible f
 addition, acting per-time-slice rather than per-frequency.)
 
 ---
+
+## Contract adapter (`magnetics/contract.py`)
+
+Serializes the core results into the GUI⇄analysis frame shapes from `docs/CONTRACT.md`
+(PR #4). Pure and JSON-able (dicts of lists/floats/ints) — **no FastAPI**; the service
+layer (Interfacers) wraps `stream_spectrogram` in the SSE endpoint.
+
+- `build_spectrogram_data(spec, …) → dict` — one contract `data` block: s→ms, Hz→kHz,
+  crops to `[fmin,fmax]`/`[tmin,tmax]`, orients 2-D arrays `[i_f][i_t]`, attaches
+  `n_map` (same grid), 1-D `coherence` (at the `t0` slice), and `phase_fit`.
+- `build_phase_fit(signals, toroidal_angles, time, t0_ms, f_khz?, …) → dict` —
+  the `phase_fit` block via `extract_mode_at_frequency` + `fit_toroidal_mode`.
+- `stream_spectrogram(…) → Iterator[dict]` — coarse→fine frames (`max_columns` ramp,
+  fixed frequency axis), monotonic `progress`, one `final=True`.
+- `spectrogram_oneshot(…) → dict` — the single final frame (one-shot / tests / mock).
+
+**Contract decisions encoded** (answers to the doc's open questions): `power` is
+**linear** (tagged `scale="linear"`); `n_map` shares the **exact** `(t_ms, f_kHz)`
+grid; arrays oriented `[i_f][i_t]` (Plotly `z` = y:freq, x:time); `phase_fit (t0,f)`
+is param-driven, `f` defaulting to the peak-power bin **within `[fmin,fmax]`** at the
+`t0` column (cursor-ready); 1-D `coherence` at `t0` included. Caveat: a 2-probe pair
+(Δφ≈33°) aliases `|n|>5` — the full MPI66M array is needed for the contract's −6..6.
 
 ## Out of scope
 
@@ -133,6 +164,16 @@ class ModeAtFrequencyResult:
     coherence: ndarray      # (n_probes,), 0–1
     toroidal_angle: ndarray # (n_probes,), degrees
     poloidal_angle: ndarray | None  # (n_probes,), degrees, if provided
+
+@dataclass
+class ToroidalFitResult:
+    kind: str               # "toroidal_fit"
+    n: int                  # best-fit toroidal mode number
+    intercept_deg: float    # fitted phase at phi=0 (deg), [0, 360)
+    resultant: float        # clustering quality, [0, 1]
+    frequency: float        # Hz, the frequency fit was evaluated at
+    toroidal_angle: ndarray # (n_probes,), degrees
+    phase: ndarray          # (n_probes,), degrees, wrapped [0, 360)
 ```
 
 ---
