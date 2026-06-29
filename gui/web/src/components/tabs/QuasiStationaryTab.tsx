@@ -79,7 +79,7 @@ function lineTraces(node: LineNode): Partial<Plotly.PlotData>[] {
       traces.push({
         type: "scatter", mode: "lines", x: s.x,
         y: s.y.map((v, j) => v - sig[j]),
-        fill: "tonexty", fillcolor: hexToRgba(color, 0.18),
+        fill: "tonexty", fillcolor: hexToRgba(color, 0.35),
         line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
       } as Partial<Plotly.PlotData>);
     }
@@ -106,6 +106,25 @@ function ColorScale({ zrange, dark }: { zrange: [number, number]; dark: boolean 
       <span style={{ marginLeft: 4 }}>δB<sub>p</sub></span>
     </div>
   );
+}
+
+// ── -180→180 angle remapping ─────────────────────────────────────────
+// Shifts a sorted 0-360 angle array to -180-180 and reorders the
+// corresponding z dimension so the grid stays consistent.
+function remapAxis180(
+  vals: number[], z: number[][], axis: "x" | "y",
+): { vals: number[]; z: number[][] } {
+  const split = vals.findIndex(v => v > 180);
+  if (split === -1) return { vals, z };
+  const newVals = [...vals.slice(split).map(v => v - 360), ...vals.slice(0, split)];
+  const newZ = axis === "x"
+    ? z.map(row => [...row.slice(split), ...row.slice(0, split)])
+    : [...z.slice(split), ...z.slice(0, split)];
+  return { vals: newVals, z: newZ };
+}
+function remapOverlay(ov: ContourNode["overlay"]): ContourNode["overlay"] {
+  if (!ov) return ov;
+  return { ...ov, points: ov.points.map(p => ({ ...p, x: p.x > 180 ? p.x - 360 : p.x, y: p.y > 180 ? p.y - 360 : p.y })) };
 }
 
 // ── Live API types (frame envelope from /api/{machine}/qs_fit/stream) ─
@@ -250,6 +269,89 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const { node: ampNode }       = useNode(machine, "amplitude");
   const { node: phaseTimeNode } = useNode(machine, "phase_t");
 
+  // ── Remap phi/theta from 0-360 → -180-180 ──────────────────────────
+  const heroContour = useMemo((): ContourNode | null => {
+    if (!contourNode) return null;
+    const rx = remapAxis180(contourNode.x, contourNode.z, "x");
+    const ry = remapAxis180(contourNode.y, rx.z, "y");
+    return { ...contourNode, x: rx.vals, y: ry.vals, z: ry.z, overlay: remapOverlay(contourNode.overlay) };
+  }, [contourNode]);
+
+  const phiTimeRemapped = useMemo((): ContourNode | null => {
+    if (phiTimeNode?.kind !== "contour") return null;
+    const ry = remapAxis180(phiTimeNode.y, phiTimeNode.z, "y");
+    return { ...phiTimeNode, y: ry.vals, z: ry.z };
+  }, [phiTimeNode]);
+
+  const phaseFitRemapped = useMemo((): Scatter2DNode | null => {
+    if (phaseFitNode?.kind !== "scatter2d") return null;
+    const pts = phaseFitNode.points.map(p => ({ ...p, x: p.x > 180 ? p.x - 360 : p.x }));
+    let fit = phaseFitNode.fit;
+    if (fit) {
+      const pairs = fit.x.map((x, i) => [x > 180 ? x - 360 : x, fit!.y[i]] as [number, number])
+        .sort((a, b) => a[0] - b[0]);
+      fit = { x: pairs.map(p => p[0]), y: pairs.map(p => p[1]) };
+    }
+    return { ...phaseFitNode, points: pts, fit };
+  }, [phaseFitNode]);
+
+  // ── φ-space Plot props (own Plot calls so we can set dtick: 90) ──────
+  const heroData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!heroContour) return [];
+    const [zmin, zmax] = heroContour.zrange ?? [-42, 42];
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "contour" as const, x: heroContour.x, y: heroContour.y, z: heroContour.z,
+      colorscale: dark ? CB_DIV_DARK : CB_DIV_LIGHT, zmin, zmax,
+      contours: { coloring: "fill" as const },
+      colorbar: { title: { text: heroContour.axes.z ?? "" }, thickness: 12, outlinewidth: 0 },
+    } as Partial<Plotly.PlotData>];
+    if (heroContour.overlay) {
+      traces.push({
+        type: "scatter" as const, mode: "markers" as const,
+        x: heroContour.overlay.points.map(p => p.x),
+        y: heroContour.overlay.points.map(p => p.y),
+        marker: { symbol: (heroContour.overlay.symbol ?? "square") as string, size: 6, color: "rgba(255,255,255,0.85)", line: { color: "#000", width: 0.5 } },
+        hoverinfo: "x+y" as const,
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [dark, heroContour]);
+
+  const heroLayout = useMemo(() =>
+    heroContour ? themedLayout(dark, {
+      xaxis: { title: { text: heroContour.axes.x }, dtick: 90 },
+      yaxis: { title: { text: heroContour.axes.y }, dtick: 90 },
+    } as Partial<Plotly.Layout>) : {},
+  [dark, heroContour]);
+
+  const phaseFitData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!phaseFitRemapped) return [];
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "scatter" as const, mode: "markers" as const,
+      x: phaseFitRemapped.points.map(p => p.x),
+      y: phaseFitRemapped.points.map(p => p.y),
+      text: phaseFitRemapped.points.map(p => p.label ?? ""),
+      marker: { size: 7, color: "#4aa3ff", line: { color: "#0a0f16", width: 0.5 } },
+      hoverinfo: "x+y+text" as const,
+    } as Partial<Plotly.PlotData>];
+    if (phaseFitRemapped.fit) {
+      traces.push({
+        type: "scatter" as const, mode: "lines" as const,
+        x: phaseFitRemapped.fit.x, y: phaseFitRemapped.fit.y,
+        line: { color: "#54e08a", width: 1.5, dash: "dot" as const },
+        hoverinfo: "skip" as const,
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [phaseFitRemapped]);
+
+  const phaseFitLayout = useMemo(() =>
+    phaseFitRemapped ? themedLayout(dark, {
+      xaxis: { title: { text: phaseFitRemapped.axes.x }, dtick: 90 },
+      yaxis: { title: { text: phaseFitRemapped.axes.y }, dtick: 90 },
+    } as Partial<Plotly.Layout>) : {},
+  [dark, phaseFitRemapped]);
+
   const modeTag = contourNode?.meta?.m != null
     ? `m/n = ${contourNode.meta.m}/${contourNode.meta.n} locked mode`
     : null;
@@ -280,16 +382,16 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }), [fetchCursor, dark]);
 
   const phiTimeData = useMemo(() =>
-    phiTimeNode?.kind === "contour" ? [{
+    phiTimeRemapped ? [{
       type: "contour" as const,
-      x: phiTimeNode.x, y: phiTimeNode.y, z: phiTimeNode.z,
+      x: phiTimeRemapped.x, y: phiTimeRemapped.y, z: phiTimeRemapped.z,
       colorscale: dark ? CB_DIV_DARK : CB_DIV_LIGHT,
-      zmin: (phiTimeNode.zrange ?? [-42, 42])[0],
-      zmax: (phiTimeNode.zrange ?? [-42, 42])[1],
+      zmin: (phiTimeRemapped.zrange ?? [-42, 42])[0],
+      zmax: (phiTimeRemapped.zrange ?? [-42, 42])[1],
       contours: { coloring: "fill" as const },
       showscale: false,
     } as Partial<Plotly.PlotData>] : [],
-  [dark, phiTimeNode]);
+  [dark, phiTimeRemapped]);
 
   // Slider / shared axis bounds — derived from loaded data
   const tMin = useMemo(() =>
@@ -303,12 +405,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const timeXAxis = useMemo(() => ({ range: [tMin, tMax] }), [tMin, tMax]);
 
   const phiTimeLayout = useMemo(() =>
-    phiTimeNode?.kind === "contour" ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: phiTimeNode.axes.x } },
-      yaxis: { title: { text: phiTimeNode.axes.y } },
+    phiTimeRemapped ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: phiTimeRemapped.axes.x } },
+      yaxis: { title: { text: phiTimeRemapped.axes.y }, dtick: 90 },
       shapes: [cursorLine],
     } as Partial<Plotly.Layout>) : {},
-  [dark, phiTimeNode, cursorLine, timeXAxis]);
+  [dark, phiTimeRemapped, cursorLine, timeXAxis]);
 
   const ampData = useMemo(() =>
     ampNode?.kind === "line" ? lineTraces(ampNode) : [],
@@ -365,23 +467,23 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
           {contourLoading && <div className="placeholder">loading contour…</div>}
           {contourError && <div className="placeholder" style={{ color: "var(--bad)" }}>{contourError}</div>}
-          {contourNode && <NodeView node={contourNode} height={280} />}
+          {heroContour && <Plot height={280} data={heroData} layout={heroLayout} />}
 
-          {phaseFitNode?.kind === "scatter2d" && (
+          {phaseFitRemapped && (
             <div>
-              <div className="metrics-title">phase vs φ · n = {String(phaseFitNode.meta?.n_fit ?? "?")}</div>
-              <NodeView node={phaseFitNode} height={175} />
+              <div className="metrics-title">phase vs φ · n = {String(phaseFitRemapped.meta?.n_fit ?? "?")}</div>
+              <Plot height={175} data={phaseFitData} layout={phaseFitLayout} />
             </div>
           )}
         </div>
 
         {/* RIGHT — time-series plots stacked, all sharing the same x range */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {phiTimeNode?.kind === "contour" && (
+          {phiTimeRemapped && (
             <div>
               <div className="metrics-title">δB<sub>p</sub> vs time — toroidal array</div>
               <Plot height={200} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} />
-              <ColorScale zrange={(phiTimeNode.zrange ?? [-42, 42]) as [number, number]} dark={dark} />
+              <ColorScale zrange={(phiTimeRemapped.zrange ?? [-42, 42]) as [number, number]} dark={dark} />
             </div>
           )}
 
