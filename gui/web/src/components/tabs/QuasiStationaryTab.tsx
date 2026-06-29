@@ -1,4 +1,5 @@
 // Quasi-stationary view — OWNED BY TEAMMATE A.
+// Branch: gui-quasistationary — build here, PR into `gui`.
 // Build the SLCONTOUR φ–θ δBp contour (sensor markers overlaid), a time-slice
 // scrubber, n/m amplitude & phase vs time, and the K/χ² quality panel.
 // VISION §4.1, §7. Summaries: 04_SLCONTOUR_summary2019, 08_Slcontour_II_2023, 12_RSI2016.
