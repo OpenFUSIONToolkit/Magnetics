@@ -433,7 +433,7 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
 
 
 # --- public API ---------------------------------------------------------------
-def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "auto",
+def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                username: str | None = None, password: str | None = None,
                duo: str | None = None, gateway: str = "cybele.gat.com",
                server: str = "atlas.gat.com:8000", tcp: bool = False,
@@ -445,9 +445,11 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "auto",
                progress: Progress | None = None) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
 
-    Returns the output path. `backend` is "auto" (toksearch if importable, else
-    mdsthin), "toksearch", "mdsthin", or "remote" (auto-sync the fetcher to the GA
-    cluster, run the toksearch pull there, copy the .h5 back — no manual copying).
+    Returns the output path. `backend` defaults to "mdsthin" (laptop → DIII-D, the
+    proven path). Other backends: "toksearch" (cluster, **work in progress**),
+    "remote" (auto-sync the fetcher to the GA cluster, run the toksearch pull
+    there, copy the .h5 back — no manual copying; also WIP since it relies on
+    toksearch), or "auto" (toksearch if importable, else mdsthin).
     GUI callers pass `username` and a `progress` callback instead of relying on the
     CLI prompt/stderr bar.
     """
@@ -539,10 +541,11 @@ def main(argv=None) -> int:
     ap.add_argument("--analysis", choices=ms.ANALYSES, default="both",
                     help="downselect signals by analysis type")
     ap.add_argument("--backend",
-                    choices=("auto", "toksearch", "mdsthin", "remote"),
-                    default="auto",
-                    help="'remote' = auto-sync to the cluster, run toksearch "
-                         "there, copy the .h5 back")
+                    choices=("mdsthin", "toksearch", "remote", "auto"),
+                    default="mdsthin",
+                    help="default mdsthin (laptop → DIII-D). 'toksearch' (cluster) "
+                         "and 'remote' (auto-sync + run on the cluster) are WIP. "
+                         "'auto' = toksearch if importable, else mdsthin")
     ap.add_argument("--tmin", type=float, default=None,
                     help="window start (ms); reduces data moved")
     ap.add_argument("--tmax", type=float, default=None, help="window end (ms)")

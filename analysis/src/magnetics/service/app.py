@@ -61,7 +61,7 @@ def get_node(machine: str, node_id: str, request: Request) -> dict:
 class FetchRequest(BaseModel):
     shot: int
     analysis: str = "both"
-    backend: str = "auto"  # auto|toksearch|mdsthin|remote
+    backend: str = "mdsthin"  # mdsthin (default) | toksearch (WIP) | remote (WIP) | auto
     tmin: float | None = None
     tmax: float | None = None
     decimate: int = 1

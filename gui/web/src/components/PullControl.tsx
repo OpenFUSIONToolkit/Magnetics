@@ -95,7 +95,7 @@ export default function PullControl() {
         onChange={(e) => setBackend(e.target.value)}
       >
         <option value="mdsthin">mdsthin (laptop → DIII-D)</option>
-        <option value="remote">remote (run on cluster)</option>
+        <option value="remote">remote (run on cluster · WIP)</option>
         <option value="auto">auto</option>
       </select>
 

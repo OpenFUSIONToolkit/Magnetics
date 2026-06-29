@@ -12,8 +12,10 @@ in `core/`, device specifics in `data/`; routes here stay thin.
   `contour` (raw δBp(φ,t)), `fit_quality` (metrics, real condition number K),
   `phase_fit` (scatter2d + fit).
 - `POST /api/fetch` — body `{shot, analysis, backend?, tmin?, tmax?, decimate?}`;
-  pulls a fresh shot via the fetcher, then exposes it. Needs GA creds/cluster to
-  actually pull; offline it returns a clear error and cached shots keep serving.
+  pulls a fresh shot via the fetcher, then exposes it. Default backend is
+  **`mdsthin`** (laptop → DIII-D). The `toksearch` and `remote` backends are
+  **work in progress**. Needs GA creds to pull; offline it returns a clear error
+  and cached shots keep serving.
 
 ## Run it locally (two terminals)
 
