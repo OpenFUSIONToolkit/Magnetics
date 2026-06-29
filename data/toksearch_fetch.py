@@ -41,14 +41,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import socket
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
 
 import magnetics_signals as ms
+
+# All fetched shot files land here: data/datafile/ (next to this script).
+DATA_DIR = Path(__file__).resolve().parent / "datafile"
 
 # A progress callback: (fraction_done in [0,1], human message) -> None.
 Progress = Callable[[float, str], None]
@@ -91,9 +98,59 @@ def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
     return t, y
 
 
+@contextlib.contextmanager
+def _ssh_tunnel(username, gateway, mds_host, mds_port):
+    """Open ONE authenticated SSH local-forward to the mdsip server.
+
+    Off-cluster, parallel mdsip needs parallelism WITHOUT N separate logins: with
+    2FA/Duo you can only authenticate once. So we forward a local port through the
+    gateway to the mdsip host a single time (one interactive password + Duo
+    prompt), and every worker then opens a plain-TCP mdsip connection to
+    127.0.0.1:<lport>, multiplexed over the one ssh connection.
+
+    Yields the local port. The ssh subprocess inherits the terminal so its
+    password/Duo prompt works; it is torn down on exit.
+    """
+    # grab a free local port
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    lport = s.getsockname()[1]
+    s.close()
+
+    cmd = ["ssh", "-o", "ExitOnForwardFailure=yes", "-o",
+           "ServerAliveInterval=30", "-N",
+           "-L", f"{lport}:{mds_host}:{mds_port}", f"{username}@{gateway}"]
+    sys.stderr.write(
+        f"Opening one SSH tunnel via {gateway} -> {mds_host}:{mds_port} "
+        f"(local :{lport}).\n(your terminal will prompt for password + Duo "
+        f"once)\n")
+    proc = subprocess.Popen(cmd)  # inherit stdio -> interactive auth on the tty
+    try:
+        ready = False
+        for _ in range(1200):  # up to ~120s to complete Duo + open the forward
+            if proc.poll() is not None:
+                raise SystemExit("SSH tunnel exited before it was ready "
+                                 "(auth failed or forward refused).")
+            with socket.socket() as probe:
+                probe.settimeout(0.5)
+                if probe.connect_ex(("127.0.0.1", lport)) == 0:
+                    ready = True
+                    break
+            time.sleep(0.1)
+        if not ready:
+            raise SystemExit("SSH tunnel did not become ready in time.")
+        yield lport
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+
+
 # --- mdsthin backend (laptop / remote, parallel across channels) --------------
 def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
-                   tmin, tmax, stride, workers, progress):
+                   tmin, tmax, stride, workers, batch_size, progress):
     """Pull pointnames concurrently over a pool of mdsthin connections.
 
     Each worker owns its own connection (mdsthin Connections are not thread-safe
@@ -101,8 +158,10 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     server-I/O bound, so N connections give a near-linear speedup over the
     sequential one-connection loop in pull_shot_h5.py.
 
-    Reduction (window + stride) is pushed server-side via a TDI subscript so only
-    the reduced samples cross the wire.
+    Off-cluster (the default, not --tcp) all workers share ONE SSH tunnel so there
+    is a single password/Duo prompt; on-network (--tcp) each worker connects to
+    mdsip directly. Reduction (window + stride) is pushed server-side via a TDI
+    subscript so only the reduced samples cross the wire.
     """
     try:
         from mdsthin import Connection
@@ -114,48 +173,96 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     mds_host, _, mds_port = mds.partition(":")
     mds_port = int(mds_port or 8000)
 
-    def connect():
-        if tcp:
-            return Connection(f"{username}@{mds_host}:{mds_port}")
-        return Connection(f"sshp://{username}@{gateway}:{mds_port}",
-                          sshp_host=mds_host)
-
-    # Build a server-side reducing expression so PTDATA returns only what we keep.
-    # ptdata2 gives a *signal*; all reduction happens on `_s` (a signal slices by
-    # its own dimension's units for a value window, by index for a strided range),
-    # then we read its dimension back with dim_of -- so the time axis always
-    # matches the reduced data. (Slicing dim_of() directly would be index-based
-    # and mismatch the value window.)
-    def fetch_one(conn, pt):
-        conn.get(f'_s = ptdata2("{pt}", {shot})')
+    # The link is latency-bound, not bandwidth-bound: over the laptop->cybele->
+    # atlas double hop, wall-clock is dominated by the NUMBER of round trips. So we
+    # batch many channels into a single `getMany().execute()` -- one round trip per
+    # batch instead of two per channel (~344 -> a handful for a 172-channel pull).
+    #
+    # The server-side reduction is the suffix appended to ptdata2: a signal slices
+    # by its dimension's units for a value window, by index for a strided range, and
+    # dim_of() recovers the matching time axis. Pointname + shot go in as `$`
+    # placeholders (bound to descriptors) so nothing is string-injected.
+    def _reduce_suffix():
+        sfx = ""
         if tmin is not None or tmax is not None:
             lo = "*" if tmin is None else repr(float(tmin))
             hi = "*" if tmax is None else repr(float(tmax))
-            # window in engineering units (ms) via the signal's own time axis
-            conn.get(f"_s = _s[{lo} : {hi}]")
+            sfx += f"[{lo} : {hi}]"
         if stride > 1:
-            conn.get(f"_s = _s[0 : * : {stride}]")  # decimate by index
-        data = np.atleast_1d(conn.get("_s").data())
+            sfx += f"[0 : * : {stride}]"
+        return sfx
+
+    suffix = _reduce_suffix()
+    data_expr = f"(ptdata2($, $)){suffix}"          # $1=pointname, $2=shot
+    time_expr = f"dim_of((ptdata2($, $)){suffix})"
+
+    def _arr(x):
+        # getMany values and conn.get() results are Descriptors -> ndarray
+        return np.atleast_1d(x.data() if hasattr(x, "data") else np.asarray(x))
+
+    def _good(arr):
         # ptdata2 returns a length-1 [0] when a pointname has no data
-        if data.size <= 1 and (data.size == 0 or data[0] == 0):
+        return not (arr.size <= 1 and (arr.size == 0 or arr[0] == 0))
+
+    n = len(pointnames)
+
+    # Split channels into batches; spread batches across a small pool of
+    # connections (each connection runs its batches serially, one round trip each).
+    batch_size = max(1, batch_size)
+    batches = [pointnames[i:i + batch_size]
+               for i in range(0, n, batch_size)]
+    workers = max(1, min(workers, len(batches)))
+
+    import threading
+    lock = threading.Lock()
+    state = {"done": 0}
+
+    def tick(name, k=1):
+        with lock:
+            state["done"] += k
+            frac = state["done"] / n
+        progress(frac, name)
+
+    def fetch_one(conn, pt):  # per-channel fallback (2 round trips)
+        data = np.atleast_1d(conn.get(f"_s = {data_expr}", pt, shot).data())
+        if not _good(data):
             return None, None, False
         t = np.atleast_1d(conn.get("dim_of(_s)").data())
         return t, data, True
 
-    n = len(pointnames)
-    done = 0
-    results: list[Channel] = []
+    def fetch_batch(conn, batch, use_many):
+        """Return (list[Channel], use_many) for one batch.
 
-    # Partition channels across `workers` connections.
-    workers = max(1, min(workers, n))
-    chunks: list[list[str]] = [[] for _ in range(workers)]
-    for i, pt in enumerate(pointnames):
-        chunks[i % workers].append(pt)
-
-    def run_chunk(chunk):
-        conn = connect()
-        out = []
-        for pt in chunk:
+        Tries getMany (one round trip); on failure flips to the per-channel path
+        for the rest of the run.
+        """
+        out: list[Channel] = []
+        if use_many:
+            try:
+                gm = conn.getMany()
+                for i, pt in enumerate(batch):
+                    gm.append(f"d{i}", data_expr, pt, shot)
+                    gm.append(f"t{i}", time_expr, pt, shot)
+                gm.execute()
+                for i, pt in enumerate(batch):
+                    try:
+                        y = _arr(gm.get(f"d{i}"))  # raises if this channel errored
+                        if not _good(y):
+                            out.append(Channel(pt, ok=False, error="no data"))
+                            continue
+                        t = _arr(gm.get(f"t{i}"))
+                        out.append(Channel(
+                            pt, t, y.astype(np.float32, copy=False), ok=True))
+                    except Exception as exc:  # per-channel error in the batch
+                        out.append(Channel(pt, ok=False, error=str(exc)))
+                tick(batch[-1], k=len(batch))
+                return out, True
+            except Exception as exc:  # whole-batch failure -> fall back
+                sys.stderr.write(
+                    f"\ngetMany unavailable ({exc}); using per-channel fetch.\n")
+                use_many = False
+        # per-channel fallback
+        for pt in batch:
             try:
                 t, y, ok = fetch_one(conn, pt)
                 if ok:
@@ -163,22 +270,44 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                                        ok=True))
                 else:
                     out.append(Channel(pt, ok=False, error="no data"))
-            except Exception as exc:  # broad: record and keep going
+            except Exception as exc:
                 out.append(Channel(pt, ok=False, error=str(exc)))
+            tick(pt)
+        return out, False
+
+    def run_worker(connect, my_batches):
+        conn = connect()
+        use_many = True
+        out: list[Channel] = []
+        for batch in my_batches:
+            got, use_many = fetch_batch(conn, batch, use_many)
+            out.extend(got)
         return out
 
-    progress(0.0, f"connecting ({workers} conns)")
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(run_chunk, c) for c in chunks if c]
-        for fut in as_completed(futures):
-            for ch in fut.result():
-                results.append(ch)
-                done += 1
-                progress(done / n, ch.name)
-    # restore catalog order for deterministic output
-    order = {pt: i for i, pt in enumerate(pointnames)}
-    results.sort(key=lambda c: order[c.name])
-    return results
+    def run_all(connect, label):
+        progress(0.0, label)
+        # round-robin batches to workers
+        assigned: list[list[list[str]]] = [[] for _ in range(workers)]
+        for i, b in enumerate(batches):
+            assigned[i % workers].append(b)
+        results: list[Channel] = []
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(run_worker, connect, a)
+                       for a in assigned if a]
+            for fut in as_completed(futures):
+                results.extend(fut.result())
+        order = {pt: i for i, pt in enumerate(pointnames)}  # deterministic output
+        results.sort(key=lambda c: order[c.name])
+        return results
+
+    if tcp:
+        # On-network: each worker dials mdsip directly (no gateway, no auth race).
+        return run_all(lambda: Connection(f"{username}@{mds_host}:{mds_port}"),
+                       f"{len(batches)} batches x{batch_size} ({workers} conns)")
+    # Off-network: one SSH tunnel, then a few TCP mdsip conns through it.
+    with _ssh_tunnel(username, gateway, mds_host, mds_port) as lport:
+        return run_all(lambda: Connection(f"{username}@127.0.0.1:{lport}"),
+                       f"{len(batches)} batches x{batch_size} via tunnel")
 
 
 # --- toksearch backend (cluster, parallel across shots) -----------------------
@@ -240,8 +369,24 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
     import h5py
 
     comp = None if compression in (None, "none") else compression
-    got = [c for c in channels if c.ok]
     missing = [c for c in channels if not c.ok]
+
+    # A channel can fetch data samples yet come back with a degenerate time axis
+    # (dim_of/times empty or None -> an object-dtype array holding None). Such a
+    # channel has no usable time base, so reclassify it as missing instead of
+    # crashing the writer on float(c.time[0]).
+    got = []
+    for c in (ch for ch in channels if ch.ok):
+        t = None if c.time is None else np.asarray(c.time)
+        if (t is None or t.size == 0
+                or not np.issubdtype(t.dtype, np.number)
+                or not np.all(np.isfinite(t))):
+            c.ok = False
+            c.error = "no usable time axis"
+            missing.append(c)
+        else:
+            c.time = t
+            got.append(c)
 
     with h5py.File(path, "w") as h5:
         h5.attrs["shot"] = shot
@@ -289,7 +434,7 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "auto",
                username: str | None = None, gateway: str = "cybele.gat.com",
                server: str = "atlas.gat.com:8000", tcp: bool = False,
                tmin: float | None = None, tmax: float | None = None,
-               decimate: int = 1, workers: int = 8,
+               decimate: int = 1, workers: int = 4, batch_size: int = 40,
                out: str | None = None, compression: str = "lzf",
                progress: Progress | None = None) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
@@ -330,12 +475,15 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "auto",
         channels = _fetch_mdsthin(
             shot, pointnames, username=username, gateway=gateway, server=server,
             tcp=tcp, tmin=tmin, tmax=tmax, stride=stride, workers=workers,
-            progress=progress)
+            batch_size=batch_size, progress=progress)
     else:
         raise ValueError(f"unknown backend {backend!r}")
     elapsed = time.perf_counter() - t0
 
-    out = out or f"shot_{shot}.h5"
+    # Default output lives under data/datafile/; honor an explicit --out as given.
+    out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out = str(out_path)
     got, missing = _write_h5(out, shot, analysis, backend, channels,
                              compression=compression, tmin=tmin, tmax=tmax,
                              stride=stride)
@@ -343,7 +491,13 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "auto",
         f"Saved {len(got)}/{len(pointnames)} channels to {out} "
         f"({len(missing)} missing, {backend}, {elapsed:.1f}s)\n")
     if missing:
-        sys.stderr.write("Missing: " + ", ".join(c.name for c in missing) + "\n")
+        # group missing channels by reason so a re-run is self-diagnosing
+        by_reason: dict[str, list[str]] = {}
+        for c in missing:
+            by_reason.setdefault(c.error or "unknown", []).append(c.name)
+        for reason, names in sorted(by_reason.items()):
+            shown = ", ".join(names[:12]) + (" ..." if len(names) > 12 else "")
+            sys.stderr.write(f"  missing [{reason}] x{len(names)}: {shown}\n")
     return out
 
 
@@ -361,8 +515,11 @@ def main(argv=None) -> int:
     ap.add_argument("--tmax", type=float, default=None, help="window end (ms)")
     ap.add_argument("--decimate", type=int, default=1,
                     help="keep every Nth sample (quasi-stationary only)")
-    ap.add_argument("--workers", type=int, default=8,
-                    help="mdsthin: parallel connections")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="mdsthin: parallel connections (each runs whole batches)")
+    ap.add_argument("--batch-size", type=int, default=40,
+                    help="mdsthin: channels per getMany round trip (bigger=fewer "
+                         "round trips; smaller=finer progress/less memory)")
     ap.add_argument("--compression", choices=("none", "lzf", "gzip"),
                     default="lzf")
     ap.add_argument("--gateway", default="cybele.gat.com",
@@ -379,7 +536,8 @@ def main(argv=None) -> int:
     fetch_shot(args.shot, args.analysis, backend=args.backend,
                username=args.username, gateway=args.gateway, server=args.server,
                tcp=args.tcp, tmin=args.tmin, tmax=args.tmax,
-               decimate=args.decimate, workers=args.workers, out=args.out,
+               decimate=args.decimate, workers=args.workers,
+               batch_size=args.batch_size, out=args.out,
                compression=args.compression)
     return 0
 

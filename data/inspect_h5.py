@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Print the contents of an HDF5 file (e.g. one written by pull_shot_h5.py).
+Print the contents of an HDF5 file (e.g. one written by toksearch_fetch.py).
 
 Usage:
-    python data/inspect_h5.py                      # defaults to data/shot_184927.h5
     python data/inspect_h5.py path/to/file.h5
+    python data/inspect_h5.py                      # defaults to data/shot_184927.h5
 """
-import sys
+import argparse
 from pathlib import Path
 
 import h5py
@@ -14,8 +14,16 @@ import h5py
 DEFAULT_H5 = Path(__file__).resolve().parent / "shot_184927.h5"
 
 
-def main() -> int:
-    path = sys.argv[1] if len(sys.argv) > 1 else str(DEFAULT_H5)
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Print the contents of an HDF5 file.")
+
+    ap.add_argument("path", nargs="?", default=str(DEFAULT_H5),
+                    help=f"HDF5 file to inspect (default: {DEFAULT_H5})")
+    args = ap.parse_args(argv)
+    path = args.path
+
+    if not Path(path).is_file():
+        ap.error(f"no such file: {path}")
 
     with h5py.File(path, "r") as h5:
         print(f"File: {path}\n")
