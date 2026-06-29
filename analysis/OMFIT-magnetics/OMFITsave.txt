@@ -1,0 +1,68 @@
+['INPUTS'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['OUTPUTS'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['DATA'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['DATA']['DIII-D'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['DATA']['DIII-D']['sensors'] <-:-:-> OMFITasciitable <-:-:-> ./DATA/DIII-D/diiid_sensors.txt <-:-:-> {}
+['DATA']['DIII-D']['bdots'] <-:-:-> OMFITasciitable <-:-:-> ./DATA/DIII-D/diiid_bdots.txt <-:-:-> {}
+['DATA']['DIII-D']['machine'] <-:-:-> OMFITnamelist <-:-:-> ./DATA/DIII-D/diiid.txt <-:-:-> {}
+['DATA']['DIII-D']['channel_filters'] <-:-:-> OMFITnamelist <-:-:-> ./DATA/DIII-D/channel_filters.txt <-:-:-> {}
+['DATA']['DIII-D']['coil_filters'] <-:-:-> OMFITnamelist <-:-:-> ./DATA/DIII-D/coil_filters.txt <-:-:-> {}
+['DATA']['DIII-D']['channel_alternates'] <-:-:-> OMFITnamelist <-:-:-> ./DATA/DIII-D/channel_alternates.txt <-:-:-> {}
+['SCRIPTS'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['SCRIPTS']['init'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/init_magnetics.py <-:-:-> {}
+['SCRIPTS']['fetch'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/fetch_magnetics.py <-:-:-> {}
+['SCRIPTS']['prep'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/prep_magnetics.py <-:-:-> {}
+['SCRIPTS']['fit'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/fit_magnetics.py <-:-:-> {}
+['SCRIPTS']['run_steps'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/run_magnetics.py <-:-:-> {}
+['SCRIPTS']['run_coils'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/run_coils_3D.py <-:-:-> {}
+['SCRIPTS']['slcontour'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/slcontour.py <-:-:-> {}
+['SCRIPTS']['restore'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/restore_magnetics.py <-:-:-> {}
+['SCRIPTS']['stress'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/stress.py <-:-:-> {}
+['SCRIPTS']['SPECTROGRAM'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['SCRIPTS']['SPECTROGRAM']['spectrogram_init'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/SPECTROGRAM/spectrogram_init.py <-:-:-> {}
+['SCRIPTS']['SPECTROGRAM']['get_bdot_info'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/SPECTROGRAM/get_bdot_info_NSTX.py <-:-:-> {}
+['SCRIPTS']['SPECTROGRAM']['fetch_NSTX'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/SPECTROGRAM/get_bdot_data_NSTX.py <-:-:-> {}
+['SCRIPTS']['SPECTROGRAM']['spectrogram_prep'] <-:-:-> OMFITpythonTask <-:-:-> ./SCRIPTS/SPECTROGRAM/spectrogram_prep.py <-:-:-> {}
+['PLOTS'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['PLOTS']['plot_sensors'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_sensors.py <-:-:-> {}
+['PLOTS']['plot_signal'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_signal.py <-:-:-> {}
+['PLOTS']['plot_fit'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_fit.py <-:-:-> {}
+['PLOTS']['plot_fit_modes'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_fit_modes.py <-:-:-> {}
+['PLOTS']['plot_coil_modes'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_coil_modes.py <-:-:-> {}
+['PLOTS']['plot_svds'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_svds.py <-:-:-> {}
+['PLOTS']['plot_slcontour_fit'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_slcontour_fit.py <-:-:-> {}
+['PLOTS']['plot_stress'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_stress.py <-:-:-> {}
+['PLOTS']['plot_slice'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/plot_magnetics_slice.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_spectrogram'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/spectrogram_plot_modespec.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_spectrogram_actual_plots'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/spectrogram_plot_modespec_actual_plots.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_radial_profiles'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/spectrogram_plot_radial_profiles.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_bdots'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/spectrogram_plot_bdots.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_phases'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/spectrogram_plot_phases.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_fft'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/spectrogram_plot_fft.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_velocities_on_spectrogram'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/plot_velocities_on_spectrogram.py <-:-:-> {}
+['PLOTS']['SPECTROGRAM']['plot_auto_spectrogram'] <-:-:-> OMFITpythonTask <-:-:-> ./PLOTS/SPECTROGRAM/plot_auto_spectrogram.py <-:-:-> {}
+['GUIS'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['GUIS']['main_gui'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/main_gui.py <-:-:-> {}
+['GUIS']['coil_gui'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/coil_gui.py <-:-:-> {}
+['GUIS']['slcontour_gui'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/slcontour_gui.py <-:-:-> {}
+['GUIS']['stress_gui'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/stress_gui.py <-:-:-> {}
+['GUIS']['SPECTROGRAM'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['GUIS']['SPECTROGRAM']['spectrogram_driver'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/SPECTROGRAM/spectrogram_driver.py <-:-:-> {}
+['GUIS']['SPECTROGRAM']['spectrogram_n_to_plot'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/SPECTROGRAM/spectrogram_select_n_GUI.py <-:-:-> {}
+['GUIS']['3D_mag_gui'] <-:-:-> OMFITpythonGUI <-:-:-> ./GUIS/magnetics_gui.py <-:-:-> {}
+['LIB'] <-:-:-> OMFITtree <-:-:->  <-:-:-> {}
+['LIB']['OMFITlib_startup'] <-:-:-> OMFITpythonTask <-:-:-> ./LIB/OMFITlib_startup.py <-:-:-> {}
+['LIB']['OMFITlib_spectrogram_utilities'] <-:-:-> OMFITpythonTask <-:-:-> ./LIB/spectrogram_useful_stuff.py <-:-:-> {}
+['SETTINGS'] <-:-:-> OMFITsettings <-:-:-> ./SettingsNamelist.txt <-:-:-> {}
+['SETTINGS']['SETUP']['workDir'] <-:-:-> OMFITexpression <-:-:-> _"OMFITworkDir(root,'')" <-:-:-> {}
+['SETTINGS']['EXPERIMENT']['shot'] <-:-:-> OMFITexpression <-:-:-> _"try:\n    return_variable=OMFITmodules[-2]['SETTINGS']['EXPERIMENT']['shot']\nexcept Exception:\n    return_variable=MainSettings['EXPERIMENT']['shot']\n" <-:-:-> {}
+['SETTINGS']['EXPERIMENT']['time'] <-:-:-> OMFITexpression <-:-:-> _"try:\n    return_variable=OMFITmodules[-2]['SETTINGS']['EXPERIMENT']['time']\nexcept Exception:\n    return_variable=MainSettings['EXPERIMENT']['time']\n" <-:-:-> {}
+['SETTINGS']['EXPERIMENT']['device'] <-:-:-> OMFITexpression <-:-:-> _"try:\n    return_variable=OMFITmodules[-2]['SETTINGS']['EXPERIMENT']['device']\nexcept Exception:\n    return_variable=MainSettings['EXPERIMENT']['device']\n" <-:-:-> {}
+['SETTINGS']['EXPERIMENT']['shots'] <-:-:-> OMFITexpression <-:-:-> _"try:\n    return_variable=OMFITmodules[-2]['SETTINGS']['EXPERIMENT']['shots']\nexcept Exception:\n    return_variable=MainSettings['EXPERIMENT']['shots']\n" <-:-:-> {}
+['SETTINGS']['EXPERIMENT']['times'] <-:-:-> OMFITexpression <-:-:-> _"try:\n    return_variable=OMFITmodules[-2]['SETTINGS']['EXPERIMENT']['times']\nexcept Exception:\n    return_variable=MainSettings['EXPERIMENT']['times']\n" <-:-:-> {}
+['SETTINGS']['EXPERIMENT']['runid'] <-:-:-> OMFITexpression <-:-:-> _"try:\n    return_variable=OMFITmodules[-2]['SETTINGS']['EXPERIMENT']['runid']\nexcept Exception:\n    return_variable=MainSettings['EXPERIMENT']['runid']\n" <-:-:-> {}
+['SETTINGS']['REMOTE_SETUP']['workDir'] <-:-:-> OMFITexpression <-:-:-> _"OMFITworkDir(root,parent['serverPicker'])" <-:-:-> {}
+['SETTINGS']['REMOTE_SETUP']['server'] <-:-:-> OMFITexpression <-:-:-> _"SERVER[parent['serverPicker']]['server']" <-:-:-> {}
+['SETTINGS']['REMOTE_SETUP']['tunnel'] <-:-:-> OMFITexpression <-:-:-> _"SERVER[parent['serverPicker']]['tunnel']" <-:-:-> {}
+['help'] <-:-:-> OMFIThelp <-:-:-> ./help.rst <-:-:-> {}

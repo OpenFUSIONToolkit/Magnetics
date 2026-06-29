@@ -1,0 +1,220 @@
+{
+ "PHYSICS": {
+  "run_steps": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "fetch_sigma": 2e-05,
+  "prep_time_trim": {
+   "__ndarray_tolist__": [
+    0,
+    10
+   ],
+   "dtype": "int64",
+   "shape": [
+    2
+   ]
+  },
+  "prep_detrend_band": {
+   "__ndarray_tolist__": [
+    0,
+    10
+   ],
+   "dtype": "int64",
+   "shape": [
+    2
+   ]
+  },
+  "prep_detrend_type": "None",
+  "prep_cutoff_hz": {
+   "__ndarray_tolist__": [
+    0.0,
+    400.0
+   ],
+   "dtype": "float64",
+   "shape": [
+    2
+   ]
+  },
+  "prep_energy": 1.0,
+  "prep_dc_comp": false,
+  "fit_lsv": false,
+  "fit_cond": 10.0,
+  "fit_ms": {
+   "__ndarray_tolist__": [
+    0
+   ],
+   "dtype": "int64",
+   "shape": [
+    1
+   ]
+  },
+  "fit_ns": {
+   "__ndarray_tolist__": [
+    1,
+    2,
+    3
+   ],
+   "dtype": "int64",
+   "shape": [
+    3
+   ]
+  },
+  "fit_geometry": "cylindrical",
+  "fit_basis": "sinusoidal-integral",
+  "fit_key": "initial_fit",
+  "fit_omega_hz": null,
+  "fit_exclude": [],
+  "fit_C": true,
+  "fit_IU": true,
+  "fit_IL": true,
+  "channels_C": "C.*",
+  "channels_IL": "IL.*",
+  "channels_IU": "IU.*",
+  "fit_meps": 0,
+  "fit_mcenters": 1,
+  "fit_neps": 0,
+  "fit_ncenters": 12,
+  "plot_fix_value": 0,
+  "plot_fix_coord": "theta"
+ },
+ "SETUP": {
+  "workDir": null,
+  "executable": null,
+  "inputs_persistent": false
+ },
+ "EXPERIMENT": {
+  "shot": null,
+  "time": null,
+  "device": null,
+  "shots": null,
+  "times": null,
+  "runid": null
+ },
+ "REMOTE_SETUP": {
+  "serverPicker": "omega",
+  "workDir": null,
+  "server": null,
+  "tunnel": null
+ },
+ "MODULE": {
+  "defaultGUI": "root['GUIS']['main_gui']",
+  "contact": [
+   "richnern@fusion.gat.com",
+   "nikolas.logan@columbia.edu"
+  ],
+  "ID": "magnetics",
+  "python3": "3.6"
+ },
+ "DEPENDENCIES": {},
+ "SLCONTOUR": {
+  "nmin": 1,
+  "interactive": false,
+  "nmax": 3,
+  "base": 100,
+  "btype": 1,
+  "smooth": 0,
+  "compensate": "N",
+  "array": "MPID",
+  "runid": "",
+  "doplot": true
+ },
+ "SPECTROGRAM": {
+  "p1": {
+   "tag": "\\top.mirnov.rawdata:fm_dt216_01:input_09",
+   "phi": 176.5,
+   "theta": 26.01
+  },
+  "p2": {
+   "tag": "\\top.mirnov.rawdata:fm_dt216_01:input_05",
+   "phi": 153.0,
+   "theta": 26.22
+  },
+  "2pt": true,
+  "highn": false,
+  "highf": false,
+  "integrate": false,
+  "FFTinterval": [
+   0.54,
+   0.55
+  ],
+  "newsampling": 200000.0,
+  "SpecSingleDt": 0.01,
+  "SpecTotalDt": [
+   0,
+   1
+  ],
+  "name": "intial",
+  "prop_to_power": true,
+  "plotting_parameters": {
+   "nrange": [
+    1
+   ],
+   "ncolor": [
+    "black"
+   ]
+  },
+  "frequency": 0,
+  "MDSplus": {
+   "tmin": 0,
+   "tmax": 1,
+   "tdelta": 2e-06
+  },
+  "levels": 4,
+  "what_to_plot": "1,2,3,4",
+  "EFIT": "EFIT01",
+  "plot_together": true,
+  "xaxis": "psin",
+  "time_of_interest": [
+   0.5
+  ],
+  "levels_auto": {
+   "__ndarray_tolist__": [
+    1e-05,
+    1.62377673918872e-05,
+    2.63665089873036e-05,
+    4.2813323987194e-05,
+    6.95192796177561e-05,
+    0.000112883789168469,
+    0.000183298071083244,
+    0.000297635144163132,
+    0.000483293023857175,
+    0.000784759970351461,
+    0.00127427498570313,
+    0.00206913808111479,
+    0.00335981828628378,
+    0.00545559478116851,
+    0.00885866790410082,
+    0.0143844988828766,
+    0.0233572146909012,
+    0.0379269019073225,
+    0.0615848211066026,
+    0.1
+   ],
+   "dtype": "float64",
+   "shape": [
+    20
+   ]
+  },
+  "acknowledge": false,
+  "log_plot": true,
+  "lev_min": -5,
+  "lev_max": -1,
+  "qtoplot": {
+   "0": true,
+   "1": false,
+   "2": false,
+   "3": false,
+   "4": false,
+   "5": false
+  },
+  "nforradprof": {
+   "0": true,
+   "1": false,
+   "2": false
+  },
+  "forceupdate": false
+ }
+}
