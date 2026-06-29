@@ -1,6 +1,6 @@
 """Compatibility shim for the OMFIT runtime symbols used by the magnetics scripts.
 
-The OMFIT magnetics module (``analysis/OMFIT-magnetics/``) runs inside the OMFIT
+The OMFIT magnetics module runs inside the OMFIT
 framework, which injects a large namespace (``root[...]``, ``defaultVars``,
 ``OMFITx``, ``printi``/``printw``, ``cornernote``, ``uband``, ``is_device`` ...)
 into every script.  When we port those scripts to run locally we only need a
@@ -144,17 +144,17 @@ def uband(x, y, yerr, ax=None, label=None, color=None, **kwargs):
 # --------------------------------------------------------------------------- #
 # Device reference data (sensor geometry tables / wall / channel filters)
 # --------------------------------------------------------------------------- #
-# These live in the copied OMFIT module under DATA/<device>/.  We read them
-# directly rather than duplicating them.
+# These reference tables are bundled with this package under ./DATA/<device>/,
+# so nothing here depends on any sibling directory at runtime.
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-#: DATA root of the copied OMFIT magnetics module.
-OMFIT_DATA_DIR = os.path.normpath(os.path.join(_THIS_DIR, "..", "OMFIT-magnetics", "DATA"))
+#: Root of the bundled device reference tables (see DATA/README.md for provenance).
+DATA_DIR = os.path.join(_THIS_DIR, "DATA")
 
 
 def device_data_dir(device):
     """Directory holding the reference tables for ``device`` (e.g. 'DIII-D')."""
-    return os.path.join(OMFIT_DATA_DIR, str(device))
+    return os.path.join(DATA_DIR, str(device))
 
 
 def _extract_quoted(s):
@@ -162,13 +162,12 @@ def _extract_quoted(s):
     return re.findall(r"'([^']*)'", s)
 
 
-def load_channel_filters(device="DIII-D"):
-    """Parse ``channel_filters.txt`` into ``{name: [regex, ...]}``.
+def _load_named_filters(path):
+    """Parse a ``name = 'regex' ['regex' ...]`` table into ``{name: [regex, ...]}``.
 
     Handles the line-continuation used for multi-array filters (a wrapped line
     with no ``=`` continues the previous entry).
     """
-    path = os.path.join(device_data_dir(device), "channel_filters.txt")
     out = {}
     last = None
     with open(path) as fh:
@@ -184,13 +183,34 @@ def load_channel_filters(device="DIII-D"):
     return out
 
 
-def resolve_channel_filter(channel_filter, device="DIII-D"):
-    """Map a friendly filter name (e.g. ``'Bp_LFS_midplane'``) to its regex list.
+def load_channel_filters(device="DIII-D"):
+    """Named **sensor** subsets from ``channel_filters.txt`` -> ``{name: [regex, ...]}``."""
+    return _load_named_filters(os.path.join(device_data_dir(device), "channel_filters.txt"))
 
-    If ``channel_filter`` is already a regex (or list of regexes), it is returned
-    unchanged as a list.
+
+def load_coil_filters(device="DIII-D"):
+    """Named **3D-coil** subsets from ``coil_filters.txt`` -> ``{name: [regex, ...]}``."""
+    return _load_named_filters(os.path.join(device_data_dir(device), "coil_filters.txt"))
+
+
+def list_sensor_subsets(device="DIII-D"):
+    """All named sensor + coil subsets, merged -> ``{name: [regex, ...]}``.
+
+    This is the discoverability entry point: every key here is a valid
+    ``channel_filter`` argument.
     """
-    filters = load_channel_filters(device)
+    subsets = load_channel_filters(device)
+    subsets.update(load_coil_filters(device))
+    return subsets
+
+
+def resolve_channel_filter(channel_filter, device="DIII-D"):
+    """Map a friendly subset name (e.g. ``'Bp_LFS_midplane'``, ``'3D_coils'``) to its regex list.
+
+    Consults both the sensor and coil subset tables.  If ``channel_filter`` is
+    already a regex (or list of regexes), it is returned unchanged as a list.
+    """
+    filters = list_sensor_subsets(device)
     if isinstance(channel_filter, str):
         if channel_filter in filters:
             return list(filters[channel_filter])
@@ -200,6 +220,103 @@ def resolve_channel_filter(channel_filter, device="DIII-D"):
     for cf in channel_filter:
         out += filters.get(cf, [cf])
     return out
+
+
+def load_channel_alternates(device="DIII-D"):
+    """new -> old PTDATA channel-name map from ``channel_alternates.txt``.
+
+    Used in OMFIT as an MDSplus name fallback; unused locally but kept for
+    posterity / reference.
+    """
+    path = os.path.join(device_data_dir(device), "channel_alternates.txt")
+    out = {}
+    with open(path) as fh:
+        for line in fh:
+            if "=" not in line:
+                continue
+            name, rhs = line.split("=", 1)
+            quoted = _extract_quoted(rhs)
+            if quoted:
+                out[name.strip()] = quoted[0]
+    return out
+
+
+def load_sensor_table(device="DIII-D"):
+    """Master sensor geometry table (``diiid_sensors.txt``) as an ``xarray.Dataset``.
+
+    Columns: ``r, z, phi, tilt, length, delta_phi, na, pair`` indexed by
+    ``channel``.  This mirrors what ``init_magnetics.py`` starts from (minus the
+    derived ``*_end1/2`` coordinates).
+
+    Reference loader only — the local pipeline reads geometry from the RAW
+    netCDF, not this table.  Deriving the ``*_end`` coordinates from this table
+    (the ``init`` step) is future work, useful only if a shot file ever lacks
+    geometry.
+    """
+    import numpy as np
+    import xarray as xr
+
+    path = os.path.join(device_data_dir(device), "diiid_sensors.txt")
+    numeric = ["r", "z", "phi", "tilt", "length", "delta_phi", "na"]
+    channels, rows, pairs = [], [], []
+    with open(path) as fh:
+        header = fh.readline().split()  # channel r z phi tilt length delta_phi na pair
+        cols = header[1:]
+        for line in fh:
+            tok = line.split()
+            if len(tok) < len(header):
+                continue
+            channels.append(tok[0])
+            vals = dict(zip(cols, tok[1:]))
+            rows.append([_to_float(vals[c]) for c in numeric])
+            pairs.append(vals.get("pair", "None"))
+    arr = np.array(rows, dtype=float)
+    ds = xr.Dataset(
+        {name: ("channel", arr[:, i]) for i, name in enumerate(numeric)},
+        coords={"channel": channels},
+    )
+    ds["pair"] = ("channel", np.array(pairs, dtype=object))
+    ds.attrs["device"] = device
+    return ds
+
+
+def load_bdot_table(device="DIII-D"):
+    """Bdot sensor positions/sizes (``diiid_bdots.txt``) as a list of dicts.
+
+    Tolerant best-effort parse: skips the 2 header lines, ignores the irregular
+    ``id``/``d`` flag column, and returns one record per sensor with its name and
+    the numeric ``R, Z, tor, tilt, L, W, NA`` it could read.  Reference only.
+    """
+    path = os.path.join(device_data_dir(device), "diiid_bdots.txt")
+    fields = ["R", "Z", "tor", "tilt", "L", "W", "NA"]
+    out = []
+    with open(path) as fh:
+        lines = fh.readlines()[2:]  # drop the 2 header rows
+    for line in lines:
+        tok = line.split()
+        if not tok:
+            continue
+        name = tok[0]
+        nums = [t for t in tok[1:] if _to_float(t) == _to_float(t) and _is_number(t)]
+        rec = {"name": name}
+        rec.update({f: _to_float(v) for f, v in zip(fields, nums)})
+        out.append(rec)
+    return out
+
+
+def _to_float(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _is_number(s):
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _parse_namelist_array(text):

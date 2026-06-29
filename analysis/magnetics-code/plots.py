@@ -42,7 +42,6 @@ def plot_sensors(raw, channel_filter=".*", geometry="rz", ax=None, device=None, 
     """
     if ax is None:
         _, ax = plt.subplots(1, 1)
-    fig = ax.get_figure()
     device = device or str(raw.attrs.get("device", "DIII-D"))
 
     channels = [c for c in raw["channel"].values if re.match(channel_filter, c)]

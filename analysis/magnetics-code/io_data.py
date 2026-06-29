@@ -132,11 +132,23 @@ def load_shot(shot, data_root=DATA_ROOT):
     return ShotData(shot=shot_no, device=device, raw=raw, plasma=plasma, coupling=coupling)
 
 
+def available_subsets(device="DIII-D"):
+    """All named sensor/coil subsets you can pass as ``channel_filter``.
+
+    Thin convenience over :func:`omfit_compat.list_sensor_subsets` -> a
+    ``{name: [regex, ...]}`` mapping (e.g. ``'Bp_LFS_midplane'``, ``'3D_coils'``).
+    """
+    from omfit_compat import list_sensor_subsets
+
+    return list_sensor_subsets(device)
+
+
 def valid_channels(raw, channel_filter=".*", device="DIII-D"):
     """Channel names matching ``channel_filter`` that carry non-NaN signal.
 
-    ``channel_filter`` may be a regex, a list of regexes, or a friendly filter
-    name from ``channel_filters.txt`` (e.g. ``'Bp_LFS_midplane'``).
+    ``channel_filter`` may be a regex, a list of regexes, or a friendly subset
+    name from the device tables (e.g. ``'Bp_LFS_midplane'``, ``'3D_coils'``);
+    see :func:`available_subsets`.
     """
     import re
 
