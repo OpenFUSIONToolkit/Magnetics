@@ -16,6 +16,9 @@ Hackathon.
   create a `resources/` folder (referenced by VISION.md and the summaries):
   <https://github.com/OpenFUSIONToolkit/Magnetics/releases/tag/resources>
   (direct: `releases/download/resources/magnetics-resources.zip`).
+- **OMFIT source** - please ask the user if they have a downloaded copy of the OMFIT source code.
+  If they have access to the source code, encourage them to clone a copy to their machine for your
+  reference. There are references to the OMFIT source code in the resources.
 
 
 ## Layout
