@@ -1,39 +1,36 @@
 #!/usr/bin/env bash
 #
-# One command to run the whole app — the mock analysis service + the GUI, wired
-# together. This is also how it runs on a cluster: a single entry point that
-# brings up the program and prints a URL to open (forward that one port).
+# One command to run the GUI.
 #
-#   ./run.sh           dev mode  — FastAPI on :8000 + Vite dev (hot reload) on :5173
-#   ./run.sh --prod    cluster   — build the GUI, FastAPI serves it on :8000 (ONE port)
+# The working GUI runs on STATIC mock data (gui/web/public/mock/) — no backend
+# needed. Live streaming from the FastAPI service is a stub for now, behind --live.
 #
-# Press Ctrl-C to stop everything.
+#   ./run.sh           static  — GUI on :5173, reads static mock data (default)
+#   ./run.sh --live    stub    — also start the FastAPI service and point the GUI
+#                                 at it (live streaming; currently a stub)
+#   ./run.sh --prod    deploy  — build the GUI and serve it on one port (:8000)
 #
-# Prereqs (one-time): uv (https://docs.astral.sh/uv), Node.js 22. This script
-# installs/syncs all Python + JS packages itself.
+# Press Ctrl-C to stop. Prereqs: Node.js 22 (and uv, for --live/--prod).
 
 set -euo pipefail
 cd "$(dirname "$0")"
-MODE="${1:-dev}"
-
-echo "▶ syncing Python deps (uv)…"
-( cd analysis && uv sync --extra service --quiet )
+MODE="${1:-static}"
 
 echo "▶ ensuring GUI deps (npm)…"
 [ -d gui/web/node_modules ] || ( cd gui/web && npm install )
 
 case "$MODE" in
-  --prod|prod)
-    echo "▶ building GUI…"
-    ( cd gui/web && npm run build )
+  static|dev|"")
     echo ""
-    echo "  ✓ open  http://127.0.0.1:8000   (single origin — GUI + API on one port)"
+    echo "  ✓ open  http://localhost:5173   (GUI, hot-reload; STATIC mock data)"
     echo ""
-    cd analysis
-    exec uv run --extra service magnetics-service
+    cd gui/web
+    exec npm run dev
     ;;
 
-  dev|"")
+  --live|live)
+    echo "▶ syncing Python deps (uv)…"
+    ( cd analysis && uv sync --extra service --quiet )
     echo "▶ starting service (:8000) + GUI dev server (:5173)…"
     ( cd analysis && uv run --extra service magnetics-service ) &
     SERVICE_PID=$!
@@ -41,13 +38,25 @@ case "$MODE" in
     GUI_PID=$!
     trap 'echo; echo "▶ stopping…"; kill "$SERVICE_PID" "$GUI_PID" 2>/dev/null || true' EXIT INT TERM
     echo ""
-    echo "  ✓ open  http://localhost:5173   (GUI, hot-reload; API proxied to :8000)"
+    echo "  ✓ open  http://localhost:5173   (GUI live against :8000 — live streaming is a stub)"
     echo ""
     wait
     ;;
 
+  --prod|prod)
+    echo "▶ syncing Python deps (uv)…"
+    ( cd analysis && uv sync --extra service --quiet )
+    echo "▶ building GUI…"
+    ( cd gui/web && npm run build )
+    echo ""
+    echo "  ✓ open  http://127.0.0.1:8000   (single origin — GUI served on one port)"
+    echo ""
+    cd analysis
+    exec uv run --extra service magnetics-service
+    ;;
+
   *)
-    echo "usage: ./run.sh [--prod]" >&2
+    echo "usage: ./run.sh [--live | --prod]" >&2
     exit 2
     ;;
 esac

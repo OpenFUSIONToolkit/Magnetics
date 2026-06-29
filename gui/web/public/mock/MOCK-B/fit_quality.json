@@ -1,0 +1,23 @@
+{
+ "kind": "metrics",
+ "title": "fit quality",
+ "fields": [
+  {
+   "label": "K (cond.)",
+   "value": 21.2,
+   "status": "bad"
+  },
+  {
+   "label": "\u03c7\u00b2",
+   "value": 0.3
+  },
+  {
+   "label": "channels",
+   "value": 10
+  },
+  {
+   "label": "m max",
+   "value": 1
+  }
+ ]
+}
