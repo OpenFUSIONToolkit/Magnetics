@@ -11,6 +11,7 @@ export default function PullControl() {
   const setMachine = useStore((s) => s.setMachine);
   const [shot, setShot] = useState("184927");
   const [analysis, setAnalysis] = useState("rotating");
+  const [backend, setBackend] = useState("remote");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -20,7 +21,7 @@ export default function PullControl() {
     setBusy(true);
     setMsg("pulling… (may prompt for creds in the backend terminal)");
     try {
-      const r = await triggerFetch({ shot: Number(shot), analysis });
+      const r = await triggerFetch({ shot: Number(shot), analysis, backend });
       await init();
       setMachine(r.shot);
       setMsg(`pulled shot ${r.shot}`);
@@ -48,6 +49,15 @@ export default function PullControl() {
         <option value="rotating">rotating</option>
         <option value="quasi-stationary">quasi-stationary</option>
         <option value="both">both</option>
+      </select>
+      <select
+        className="pull-input"
+        value={backend}
+        onChange={(e) => setBackend(e.target.value)}
+      >
+        <option value="remote">remote (run on cluster)</option>
+        <option value="mdsthin">mdsthin (laptop → DIII-D)</option>
+        <option value="auto">auto</option>
       </select>
       <button className="pull-btn" disabled={busy} onClick={pull}>
         {busy ? "pulling…" : "Pull"}

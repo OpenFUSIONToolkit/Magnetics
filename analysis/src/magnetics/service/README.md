@@ -37,3 +37,21 @@ real STFT spectrogram, and **Fits** shows the real condition number K.
 
 `MAGNETICS_DATA_DIR` defaults to the repo's `data/` dir, so the env var is only
 needed if your shot files live elsewhere.
+
+## Pull a shot with no manual copying (`backend: "remote"`)
+
+A new user does **not** rsync anything by hand. The `remote` backend, from your
+laptop, opens one authenticated SSH connection to the GA cluster, auto-syncs the
+fetcher, runs the toksearch pull where PTDATA is local, and copies the `.h5` back
+to `data/datafile/`. In the GUI's **Pull a shot** control pick `remote (run on
+cluster)`, or from the CLI:
+
+```bash
+uv run python data/toksearch_fetch.py --backend remote --shot 184927 --analysis rotating
+```
+
+Defaults: run on `omega` via the `cybele.gat.com` jump host, loading toksearch
+with `module purge && module load conda && conda activate toksearch_env`. Override
+with `--remote-host / --ssh-jump / --remote-dir / --remote-setup` (or the matching
+`/api/fetch` body fields). Auth (password + Duo) is interactive in the terminal
+running the fetch — for the GUI that's the **uvicorn** terminal.

@@ -56,11 +56,16 @@ def get_node(machine: str, node_id: str, request: Request) -> dict:
 class FetchRequest(BaseModel):
     shot: int
     analysis: str = "both"
-    backend: str = "auto"
+    backend: str = "auto"  # auto|toksearch|mdsthin|remote
     tmin: float | None = None
     tmax: float | None = None
     decimate: int = 1
     username: str | None = None
+    # remote backend overrides (None → fetcher defaults: omega via cybele, conda)
+    remote_host: str | None = None
+    ssh_jump: str | None = None
+    remote_dir: str | None = None
+    remote_setup: str | None = None
 
 
 @app.post("/api/fetch")
@@ -76,10 +81,15 @@ def post_fetch(req: FetchRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500,
                             detail=f"fetcher unavailable: {exc}") from exc
+    # only pass remote overrides the caller actually set, so fetcher defaults hold
+    remote_kw = {k: v for k, v in {
+        "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
+        "remote_dir": req.remote_dir, "remote_setup": req.remote_setup,
+    }.items() if v is not None}
     try:
         out = toksearch_fetch.fetch_shot(
             req.shot, req.analysis, backend=req.backend, username=req.username,
-            tmin=req.tmin, tmax=req.tmax, decimate=req.decimate)
+            tmin=req.tmin, tmax=req.tmax, decimate=req.decimate, **remote_kw)
     except SystemExit as exc:  # fetcher uses sys.exit for missing deps/creds
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

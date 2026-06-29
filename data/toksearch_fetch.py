@@ -436,17 +436,32 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "auto",
                tmin: float | None = None, tmax: float | None = None,
                decimate: int = 1, workers: int = 4, batch_size: int = 40,
                out: str | None = None, compression: str = "lzf",
+               remote_host: str = "omega", ssh_jump: str = "cybele.gat.com",
+               remote_dir: str = "~/magnetics_fetch", remote_setup: str | None = None,
                progress: Progress | None = None) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
 
     Returns the output path. `backend` is "auto" (toksearch if importable, else
-    mdsthin), "toksearch", or "mdsthin". GUI callers pass `username` and a
-    `progress` callback instead of relying on the CLI prompt/stderr bar.
+    mdsthin), "toksearch", "mdsthin", or "remote" (auto-sync the fetcher to the GA
+    cluster, run the toksearch pull there, copy the .h5 back — no manual copying).
+    GUI callers pass `username` and a `progress` callback instead of relying on the
+    CLI prompt/stderr bar.
     """
     if analysis not in ms.ANALYSES:
         raise ValueError(f"unknown analysis {analysis!r}; "
                          f"choose from {', '.join(ms.ANALYSES)}")
     progress = progress or _default_progress
+
+    if backend == "remote":
+        # Orchestrate a pull on the cluster from here; remote side runs this same
+        # script with --backend toksearch and writes the file we copy back.
+        import remote_run
+        kw = {} if remote_setup is None else {"setup": remote_setup}
+        return remote_run.run_remote(
+            shot, analysis, host=remote_host, jump=ssh_jump, username=username,
+            remote_dir=remote_dir, tmin=tmin, tmax=tmax, decimate=decimate,
+            local_out_dir=(str(Path(out).parent) if out else None),
+            progress=progress, **kw)
 
     # Per-analysis reduction policy: never decimate FFT-critical signals.
     stride = max(1, int(decimate))
@@ -508,8 +523,11 @@ def main(argv=None) -> int:
     ap.add_argument("--shot", type=int, default=184927)
     ap.add_argument("--analysis", choices=ms.ANALYSES, default="both",
                     help="downselect signals by analysis type")
-    ap.add_argument("--backend", choices=("auto", "toksearch", "mdsthin"),
-                    default="auto")
+    ap.add_argument("--backend",
+                    choices=("auto", "toksearch", "mdsthin", "remote"),
+                    default="auto",
+                    help="'remote' = auto-sync to the cluster, run toksearch "
+                         "there, copy the .h5 back")
     ap.add_argument("--tmin", type=float, default=None,
                     help="window start (ms); reduces data moved")
     ap.add_argument("--tmax", type=float, default=None, help="window end (ms)")
@@ -529,8 +547,18 @@ def main(argv=None) -> int:
     ap.add_argument("--tcp", action="store_true",
                     help="mdsthin: direct TCP mdsip instead of SSH gateway")
     ap.add_argument("--username", default=None,
-                    help="GA username (mdsthin); prompted if omitted")
+                    help="GA username (mdsthin/remote); prompted if omitted")
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
+    # remote backend (run the pull on the GA cluster, auto-syncing the code)
+    ap.add_argument("--remote-host", default="omega",
+                    help="remote: cluster host to run toksearch on")
+    ap.add_argument("--ssh-jump", default="cybele.gat.com",
+                    help="remote: SSH jump/gateway host (empty to disable)")
+    ap.add_argument("--remote-dir", default="~/magnetics_fetch",
+                    help="remote: dir on the cluster to sync the fetcher into")
+    ap.add_argument("--remote-setup", default=None,
+                    help="remote: shell to load toksearch (default: module purge "
+                         "&& module load conda && conda activate toksearch_env)")
     args = ap.parse_args(argv)
 
     fetch_shot(args.shot, args.analysis, backend=args.backend,
@@ -538,7 +566,9 @@ def main(argv=None) -> int:
                tcp=args.tcp, tmin=args.tmin, tmax=args.tmax,
                decimate=args.decimate, workers=args.workers,
                batch_size=args.batch_size, out=args.out,
-               compression=args.compression)
+               compression=args.compression, remote_host=args.remote_host,
+               ssh_jump=args.ssh_jump, remote_dir=args.remote_dir,
+               remote_setup=args.remote_setup)
     return 0
 
 
