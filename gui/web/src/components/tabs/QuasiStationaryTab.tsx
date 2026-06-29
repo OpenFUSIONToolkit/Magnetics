@@ -102,6 +102,21 @@ function lineTraces(node: LineNode): Partial<Plotly.PlotData>[] {
   return traces;
 }
 
+// ── Standalone CSS color scale bar ───────────────────────────────────
+function ColorScale({ zrange, dark }: { zrange: [number, number]; dark: boolean }) {
+  const stops = (dark ? CB_DIV_DARK : CB_DIV_LIGHT)
+    .map(([pos, color]) => `${color} ${pos * 100}%`).join(", ");
+  const [lo, hi] = zrange;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px 4px", fontSize: 10, color: "var(--text-dim)" }}>
+      <span style={{ minWidth: 32, textAlign: "right" }}>{lo} G</span>
+      <div style={{ flex: 1, height: 10, background: `linear-gradient(to right, ${stops})`, borderRadius: 2 }} />
+      <span style={{ minWidth: 32 }}>+{hi} G</span>
+      <span style={{ marginLeft: 4 }}>δB<sub>p</sub></span>
+    </div>
+  );
+}
+
 // ── Live API types (frame envelope from /api/{machine}/qs_fit/stream) ─
 interface QsFitFrame {
   progress: number;
@@ -157,7 +172,7 @@ function useQsFit(machine: string, fetchCursor: number) {
         x: d.contour.phi,
         y: d.contour.theta,
         z: d.contour.z,
-        axes: { x: "φ (deg)", y: "θ (deg)", z: `δBp (${d.contour.units})` },
+        axes: { x: "φ (deg)", y: "θ (deg)", z: `δB<sub>p</sub> (${d.contour.units})` },
         zrange: [-absMax, absMax],
         overlay: {
           points: d.sensors.map(s => ({ x: s.phi, y: s.theta })),
@@ -281,47 +296,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       zmin: (phiTimeNode.zrange ?? [-42, 42])[0],
       zmax: (phiTimeNode.zrange ?? [-42, 42])[1],
       contours: { coloring: "fill" as const },
-      colorbar: { title: { text: "δBp (G)" }, thickness: 12, outlinewidth: 0 },
+      showscale: false,
     } as Partial<Plotly.PlotData>] : [],
   [dark, phiTimeNode]);
 
-  const phiTimeLayout = useMemo(() =>
-    phiTimeNode?.kind === "contour" ? themedLayout(dark, {
-      xaxis: { title: { text: phiTimeNode.axes.x } },
-      yaxis: { title: { text: phiTimeNode.axes.y } },
-      shapes: [cursorLine],
-    } as Partial<Plotly.Layout>) : {},
-  [dark, phiTimeNode, cursorLine]);
-
-  const ampData = useMemo(() =>
-    ampNode?.kind === "line" ? lineTraces(ampNode) : [],
-  [ampNode]);
-
-  const ampLayout = useMemo(() =>
-    ampNode?.kind === "line" ? themedLayout(dark, {
-      xaxis: { title: { text: ampNode.axes.x } },
-      yaxis: { title: { text: ampNode.axes.y } },
-      showlegend: true,
-      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
-      shapes: [cursorLine],
-    } as Partial<Plotly.Layout>) : {},
-  [dark, ampNode, cursorLine]);
-
-  const phaseTimeData = useMemo(() =>
-    phaseTimeNode?.kind === "line" ? lineTraces(phaseTimeNode) : [],
-  [phaseTimeNode]);
-
-  const phaseTimeLayout = useMemo(() =>
-    phaseTimeNode?.kind === "line" ? themedLayout(dark, {
-      xaxis: { title: { text: phaseTimeNode.axes.x } },
-      yaxis: { title: { text: phaseTimeNode.axes.y } },
-      showlegend: true,
-      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
-      shapes: [cursorLine],
-    } as Partial<Plotly.Layout>) : {},
-  [dark, phaseTimeNode, cursorLine]);
-
-  // Derive slider bounds from loaded time-series data
+  // Slider / shared axis bounds — derived from loaded data
   const tMin = useMemo(() =>
     ampNode?.kind === "line" ? Math.round(ampNode.series[0]?.x[0] ?? 800) : 800,
   [ampNode]);
@@ -329,10 +308,49 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     ampNode?.kind === "line" ? Math.round(ampNode.series[0]?.x.at(-1) ?? 6100) : 6100,
   [ampNode]);
 
+  // Shared xaxis range keeps all three time plots visually aligned
+  const timeXAxis = useMemo(() => ({ range: [tMin, tMax] }), [tMin, tMax]);
+
+  const phiTimeLayout = useMemo(() =>
+    phiTimeNode?.kind === "contour" ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: phiTimeNode.axes.x } },
+      yaxis: { title: { text: phiTimeNode.axes.y } },
+      shapes: [cursorLine],
+    } as Partial<Plotly.Layout>) : {},
+  [dark, phiTimeNode, cursorLine, timeXAxis]);
+
+  const ampData = useMemo(() =>
+    ampNode?.kind === "line" ? lineTraces(ampNode) : [],
+  [ampNode]);
+
+  const ampLayout = useMemo(() =>
+    ampNode?.kind === "line" ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: ampNode.axes.x } },
+      yaxis: { title: { text: ampNode.axes.y } },
+      showlegend: true,
+      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
+      shapes: [cursorLine],
+    } as Partial<Plotly.Layout>) : {},
+  [dark, ampNode, cursorLine, timeXAxis]);
+
+  const phaseTimeData = useMemo(() =>
+    phaseTimeNode?.kind === "line" ? lineTraces(phaseTimeNode) : [],
+  [phaseTimeNode]);
+
+  const phaseTimeLayout = useMemo(() =>
+    phaseTimeNode?.kind === "line" ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: phaseTimeNode.axes.x } },
+      yaxis: { title: { text: phaseTimeNode.axes.y } },
+      showlegend: true,
+      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
+      shapes: [cursorLine],
+    } as Partial<Plotly.Layout>) : {},
+  [dark, phaseTimeNode, cursorLine, timeXAxis]);
+
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
-        <h2>Quasi-stationary — spatial fit δBp(φ, θ)</h2>
+        <h2>Quasi-stationary — spatial fit δB<sub>p</sub>(φ, θ)</h2>
         <p className="desc" style={{ margin: 0 }}>shot {machine}{modeTag ? ` · ${modeTag}` : ""}</p>
       </div>
 
@@ -352,6 +370,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
         {/* LEFT — φ-space plots stacked */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {qualityNode?.kind === "metrics" && <NodeView node={qualityNode} />}
+
           {contourLoading && <div className="placeholder">loading contour…</div>}
           {contourError && <div className="placeholder" style={{ color: "var(--bad)" }}>{contourError}</div>}
           {contourNode && <NodeView node={contourNode} height={280} />}
@@ -364,14 +384,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           )}
         </div>
 
-        {/* RIGHT — time-series plots stacked */}
+        {/* RIGHT — time-series plots stacked, all sharing the same x range */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {qualityNode?.kind === "metrics" && <NodeView node={qualityNode} />}
-
           {phiTimeNode?.kind === "contour" && (
             <div>
-              <div className="metrics-title">δBp vs time — toroidal array</div>
-              <Plot height={150} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} />
+              <div className="metrics-title">δB<sub>p</sub> vs time — toroidal array</div>
+              <Plot height={200} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} />
+              <ColorScale zrange={(phiTimeNode.zrange ?? [-42, 42]) as [number, number]} dark={dark} />
             </div>
           )}
 
