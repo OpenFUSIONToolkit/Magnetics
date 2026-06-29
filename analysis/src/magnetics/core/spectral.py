@@ -10,10 +10,11 @@ from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.fft import next_fast_len, rfft, rfftfreq
 from scipy.integrate import cumulative_trapezoid
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import coherence as scipy_coherence
-from scipy.signal import csd, resample
+from scipy.signal import csd, get_window, resample
 
 
 @dataclass(slots=True)
@@ -153,6 +154,9 @@ def cross_spectrum(
             phase=phase,
         )
 
+    if delta_phi == 0:
+        raise ValueError("delta_phi must be non-zero to compute mode numbers")
+
     mode = np.rint(phase / delta_phi).astype(np.intp)
 
     n_modes = int(np.ceil(180.0 / abs(delta_phi) - 0.5) * 2)
@@ -178,7 +182,53 @@ def cross_spectrum(
 
 
 # ---------------------------------------------------------------------------
-# Sliding-window spectrogram
+# Short-time FFT engine
+# ---------------------------------------------------------------------------
+
+
+def _stft(
+    signal: NDArray[np.floating],
+    n_fft: int,
+    hop: int,
+    window: NDArray[np.floating],
+    *,
+    detrend: bool = True,
+) -> tuple[NDArray[np.complexfloating], NDArray[np.intp]]:
+    """Batched single-pass short-time FFT.
+
+    Frames the signal at the given hop, applies the window, and rffts every frame in
+    one vectorized call — no per-window Python loop, no per-window FFT planning.
+
+    Inputs:
+        signal (ndarray): 1-D real signal (single precision recommended).
+        n_fft (int): window length (samples).
+        hop (int): stride between window starts (samples).
+        window (ndarray): taper of length n_fft.
+        detrend (bool): subtract each window's mean before the FFT, suppressing the
+            DC / slow-drift band (matches scipy.signal.csd's detrend='constant').
+    Returns:
+        spec (ndarray): complex STFT, shape (n_frames, n_fft // 2 + 1).
+        starts (ndarray): frame start indices into signal.
+    """
+    n = signal.size
+    if n < n_fft:
+        frame = np.zeros((1, n_fft), dtype=signal.dtype)
+        frame[0, :n] = signal
+        if detrend:
+            frame[0, :n] -= frame[0, :n].mean()
+        return rfft(frame * window, axis=1), np.array([0], dtype=np.intp)
+
+    starts = np.arange(0, n - n_fft + 1, hop, dtype=np.intp)
+    idx = starts[:, None] + np.arange(n_fft)[None, :]
+    frames = signal[idx]
+    if detrend:
+        frames = frames - frames.mean(axis=1, keepdims=True)
+    frames = frames * window[None, :]
+    return rfft(frames, axis=1), starts
+
+
+# ---------------------------------------------------------------------------
+# Spectrogram
 # ---------------------------------------------------------------------------
 
 
@@ -189,71 +239,95 @@ def compute_spectrogram(
     delta_phi: float,
     *,
     slice_duration: float = 0.001,
+    window: str = "hann",
+    max_columns: int = 2000,
+    coherence_smooth: int = 5,
 ) -> SpectrogramResult:
-    """Sliding-window spectrogram with 50% overlap, calling cross_spectrum per window.
+    """Cross-power spectrogram, coherence, and toroidal mode number vs (time, frequency).
+
+    Engine: one batched, single-precision short-time FFT per probe (no per-window loop),
+    with the column count decimated to ``max_columns`` so cost scales with the display,
+    not the record length. Physics: cross-power = |conj(S1)·S2|, frequency-smoothed
+    coherence, n = round(phase / delta_phi), and per-mode RMS — identical to the 2-point
+    definitions in ``cross_spectrum``.
 
     Inputs:
-        time (ndarray): sample times (s).
+        time (ndarray): sample times (s); assumed uniformly sampled.
         sig1 (ndarray): first probe time series.
         sig2 (ndarray): second probe time series.
-        delta_phi (float): toroidal separation (deg).
-        slice_duration (float): FFT window width (s).
+        delta_phi (float): toroidal separation (deg); must be non-zero.
+        slice_duration (float): FFT window width (s) — sets the frequency resolution.
+        window (str): scipy window name for the taper.
+        max_columns (int): cap on spectrogram time columns (decimation lever).
+        coherence_smooth (int): frequency-bin width for the coherence estimate (>1).
     Returns:
         result (SpectrogramResult): power/coherence/mode_number as (n_times, n_freqs)
             arrays, with time/frequency/rms_by_mode/mode_indices.
     """
-    nx = len(time)
-    dt = (time[-1] - time[0]) / (nx - 1)
-    samples_per_slice = int(np.round(slice_duration / dt))
-    sample_rate = round(1.0 / dt)
+    if delta_phi == 0:
+        raise ValueError("delta_phi must be non-zero to compute mode numbers")
 
-    # 50 % overlap → step = half a slice
-    n_slices = (nx - samples_per_slice) * 2 // samples_per_slice + 1
-    starts = np.arange(n_slices, dtype=np.intp) * (samples_per_slice // 2)
-    t_centers = time[starts] + slice_duration / 2.0
+    time = np.asarray(time)
+    s1 = np.ascontiguousarray(sig1, dtype=np.float32)
+    s2 = np.ascontiguousarray(sig2, dtype=np.float32)
+    n = s1.size
 
-    # Run the first slice to discover output shapes
-    first = cross_spectrum(
-        sig1[starts[0] : starts[0] + samples_per_slice - 1],
-        sig2[starts[0] : starts[0] + samples_per_slice - 1],
-        sample_rate,
-        delta_phi=delta_phi,
-    )
-    n_freqs = len(first.frequency)
-    n_modes = len(first.mode_indices)
+    dt = float(np.median(np.diff(time)))
+    sample_rate = 1.0 / dt
 
-    power = np.empty((n_slices, n_freqs))
-    coh = np.empty((n_slices, n_freqs))
-    mode = np.empty((n_slices, n_freqs), dtype=np.intp)
-    rms = np.empty((n_slices, n_modes))
+    n_fft = max(8, int(next_fast_len(int(round(slice_duration * sample_rate)))))
+    natural_hop = max(1, n_fft // 2)  # 50 % overlap
+    n_cols_natural = (n - n_fft) // natural_hop + 1
+    if n_cols_natural > max_columns:
+        hop = max(natural_hop, (n - n_fft) // max(1, max_columns - 1))
+    else:
+        hop = natural_hop
 
-    power[0] = first.power
-    coh[0] = first.coherence
-    mode[0] = first.mode_number
-    rms[0] = first.rms_by_mode
+    win = get_window(window, n_fft, fftbins=True).astype(np.float32)
 
-    for idx in range(1, n_slices):
-        i = starts[idx]
-        result = cross_spectrum(
-            sig1[i : i + samples_per_slice - 1],
-            sig2[i : i + samples_per_slice - 1],
-            sample_rate,
-            delta_phi=delta_phi,
+    spec1, starts = _stft(s1, n_fft, hop, win)
+    spec2, _ = _stft(s2, n_fft, hop, win)
+
+    # Cross-power / phase (vectorized over every window at once). The conjugation
+    # order matches cross_spectrum's scipy.signal.csd(sig2, sig1) convention so the
+    # spectrogram and the single-window 2-point analysis report the same *signed* n.
+    cross = np.conj(spec2) * spec1
+    power = np.abs(cross)
+    phase = np.rad2deg(np.angle(cross))
+
+    # Coherence needs averaging; smooth the auto/cross spectra over frequency bins.
+    if coherence_smooth > 1:
+        sxx = uniform_filter1d(np.abs(spec1) ** 2, coherence_smooth, axis=1)
+        syy = uniform_filter1d(np.abs(spec2) ** 2, coherence_smooth, axis=1)
+        sxy = uniform_filter1d(cross.real, coherence_smooth, axis=1) + 1j * uniform_filter1d(
+            cross.imag, coherence_smooth, axis=1
         )
-        power[idx] = result.power
-        coh[idx] = result.coherence
-        mode[idx] = result.mode_number
-        rms[idx] = result.rms_by_mode
+        coh = (np.abs(sxy) ** 2) / (sxx * syy + 1e-30)
+    else:
+        coh = np.ones_like(power)
+
+    mode = np.rint(phase / delta_phi).astype(np.intp)
+
+    frequency = rfftfreq(n_fft, d=dt)
+    t_centers = time[starts] + (n_fft / 2.0) * dt
+
+    n_modes = int(np.ceil(180.0 / abs(delta_phi) - 0.5) * 2)
+    mode_indices = np.arange(-(n_modes // 2), n_modes // 2 + 1, dtype=np.intp)
+
+    df = frequency[1] - frequency[0]
+    rms = np.empty((power.shape[0], mode_indices.size))
+    for j, m in enumerate(mode_indices):
+        rms[:, j] = np.sqrt(np.sum(power * (mode == m), axis=1) * df)
 
     return SpectrogramResult(
         kind="spectrogram",
         time=t_centers,
-        frequency=first.frequency,
+        frequency=frequency,
         power=power,
         coherence=coh,
         mode_number=mode,
         rms_by_mode=rms,
-        mode_indices=first.mode_indices,
+        mode_indices=mode_indices,
     )
 
 
