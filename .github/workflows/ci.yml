@@ -11,8 +11,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Detect which areas changed so each suite runs only when relevant.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'analysis/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'gui/web/**'
+              - '.github/workflows/ci.yml'
+
   python:
     name: Python (analysis)
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,6 +64,8 @@ jobs:
 
   web:
     name: Web (gui)
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,6 +84,9 @@ jobs:
 
       - name: Lint (eslint)
         run: npm run lint
+
+      - name: Tests (vitest)
+        run: npm test
 
       - name: Build (tsc + vite)
         run: npm run build
