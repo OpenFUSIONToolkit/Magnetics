@@ -79,7 +79,7 @@ function lineTraces(node: LineNode): Partial<Plotly.PlotData>[] {
       traces.push({
         type: "scatter", mode: "lines", x: s.x,
         y: s.y.map((v, j) => v - sig[j]),
-        fill: "tonexty", fillcolor: hexToRgba(color, 0.35),
+        fill: "tonexty", fillcolor: hexToRgba(color, 0.45),
         line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
       } as Partial<Plotly.PlotData>);
     }
@@ -285,12 +285,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const phaseFitRemapped = useMemo((): Scatter2DNode | null => {
     if (phaseFitNode?.kind !== "scatter2d") return null;
-    const pts = phaseFitNode.points.map(p => ({ ...p, x: p.x > 180 ? p.x - 360 : p.x }));
+    const pts = phaseFitNode.points.map(p => ({
+      ...p,
+      x: p.x > 180 ? p.x - 360 : p.x,
+      y: p.y > 180 ? p.y - 360 : p.y,
+    }));
     let fit = phaseFitNode.fit;
-    if (fit) {
-      const pairs = fit.x.map((x, i) => [x > 180 ? x - 360 : x, fit!.y[i]] as [number, number])
-        .sort((a, b) => a[0] - b[0]);
-      fit = { x: pairs.map(p => p[0]), y: pairs.map(p => p[1]) };
+    if (fit && fit.x.length >= 2) {
+      const x0 = fit.x[0], x1 = fit.x[fit.x.length - 1];
+      const slope = (fit.y[fit.y.length - 1] - fit.y[0]) / (x1 - x0);
+      const intercept = fit.y[0] - slope * x0;
+      fit = { x: [-180, 180], y: [slope * -180 + intercept, slope * 180 + intercept] };
     }
     return { ...phaseFitNode, points: pts, fit };
   }, [phaseFitNode]);
@@ -319,8 +324,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const heroLayout = useMemo(() =>
     heroContour ? themedLayout(dark, {
-      xaxis: { title: { text: heroContour.axes.x }, dtick: 90 },
-      yaxis: { title: { text: heroContour.axes.y }, dtick: 90 },
+      xaxis: { title: { text: heroContour.axes.x }, dtick: 90, range:[-180,180] },
+      yaxis: { title: { text: heroContour.axes.y }, dtick: 90, range:[-180,180] },
     } as Partial<Plotly.Layout>) : {},
   [dark, heroContour]);
 
@@ -347,8 +352,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const phaseFitLayout = useMemo(() =>
     phaseFitRemapped ? themedLayout(dark, {
-      xaxis: { title: { text: phaseFitRemapped.axes.x }, dtick: 90 },
-      yaxis: { title: { text: phaseFitRemapped.axes.y }, dtick: 90 },
+      xaxis: { title: { text: phaseFitRemapped.axes.x }, dtick: 90, range:[-180,180] },
+      yaxis: { title: { text: phaseFitRemapped.axes.y }, dtick: 90, range:[-180,180] },
     } as Partial<Plotly.Layout>) : {},
   [dark, phaseFitRemapped]);
 
@@ -407,7 +412,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const phiTimeLayout = useMemo(() =>
     phiTimeRemapped ? themedLayout(dark, {
       xaxis: { ...timeXAxis, title: { text: phiTimeRemapped.axes.x } },
-      yaxis: { title: { text: phiTimeRemapped.axes.y }, dtick: 90 },
+      yaxis: { title: { text: phiTimeRemapped.axes.y }, dtick: 90, range:[-180,180] },
       shapes: [cursorLine],
     } as Partial<Plotly.Layout>) : {},
   [dark, phiTimeRemapped, cursorLine, timeXAxis]);
