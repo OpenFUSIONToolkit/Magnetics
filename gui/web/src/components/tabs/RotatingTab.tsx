@@ -1,4 +1,5 @@
 // Rotating-modes view — OWNED BY TEAMMATE B.
+// Branch: gui-rotating — build here, PR into `gui`.
 // Build the MODESPEC n-colored spectrogram (Ḃ vs time & frequency), a power↔n
 // display toggle, a shared time cursor, and phase-vs-φ / phase-vs-θ mode-number
 // fits (slope = n, m). VISION §4.2, §7. Summaries: 02_MODESPEC2012,
