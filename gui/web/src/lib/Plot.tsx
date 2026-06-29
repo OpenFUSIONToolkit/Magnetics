@@ -2,6 +2,10 @@
 // one component, so theming and lifecycle (resize, cleanup) live in exactly one
 // place. Build your traces + layout, hand them here. See <NodeView> for the
 // generic kind→trace mapping.
+//
+// Plotly's imperative API can throw transiently when react/purge race (concurrent
+// plots, fast re-renders) — the `_redrawFromAutoMarginCount` crash. We guard every
+// Plotly call so a transient throw can never blank the React tree.
 import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist-min";
 import { FONT } from "./colormaps";
@@ -27,7 +31,8 @@ export default function Plot({ data, layout, height = 320, onClick }: PlotProps)
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!ref.current) return;
+    const el = ref.current;
+    if (!el) return;
     const merged: Partial<Plotly.Layout> = {
       ...BASE_LAYOUT,
       ...layout,
@@ -35,23 +40,33 @@ export default function Plot({ data, layout, height = 320, onClick }: PlotProps)
       xaxis: { ...BASE_LAYOUT.xaxis, ...(layout?.xaxis as object) },
       yaxis: { ...BASE_LAYOUT.yaxis, ...(layout?.yaxis as object) },
     };
-    Plotly.react(ref.current, data as Plotly.Data[], merged, {
-      displayModeBar: false,
-      responsive: true,
-    });
-    const el = ref.current;
-    const handler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
-    // @ts-expect-error plotly event typing is loose on the dist build
-    if (onClick) el.on("plotly_click", handler);
+    try {
+      Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true });
+      const handler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
+      // @ts-expect-error plotly event typing is loose on the dist build
+      if (onClick) el.on("plotly_click", handler);
+    } catch {
+      /* transient Plotly layout race (e.g. StrictMode remount); next render re-syncs */
+    }
     return () => {
-      // @ts-expect-error plotly cleanup helper is untyped on the dist build
-      el.removeAllListeners?.("plotly_click");
+      try {
+        // @ts-expect-error plotly cleanup helper is untyped on the dist build
+        el.removeAllListeners?.("plotly_click");
+      } catch {
+        /* noop */
+      }
     };
   }, [data, layout, height, onClick]);
 
   useEffect(() => {
     const el = ref.current;
-    return () => { if (el) Plotly.purge(el); };
+    return () => {
+      try {
+        if (el) Plotly.purge(el);
+      } catch {
+        /* noop */
+      }
+    };
   }, []);
 
   return <div ref={ref} style={{ height, width: "100%" }} />;
