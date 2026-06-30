@@ -10,7 +10,7 @@
 // The node is a scatter2d (R-Z points) whose `meta` carries the full per-sensor
 // records + the vessel outline; the backend owns every device specific (which
 // family is Bp vs a saddle loop, the wall shape), so this view is device-agnostic.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
@@ -87,12 +87,11 @@ export default function SensorsTab({ machine }: { machine: string }) {
   // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
   // is shown if it belongs to ANY checked set. Default: the broadest Bp + Br set.
   const sets = useMemo<SensorSet[]>(() => meta?.sensor_sets ?? [], [meta]);
-  const [selectedSets, setSelectedSets] = useState<Record<string, boolean>>({});
-  const toggleSet = (name: string) =>
-    setSelectedSets((s) => ({ ...s, [name]: !s[name] }));
-
-  useEffect(() => {
-    if (!sets.length || Object.keys(selectedSets).length) return;
+  // User's explicit checkbox overrides; null until the first toggle, before which
+  // the default selection (broadest Bp + Br set) is derived from `sets` at render.
+  const [userSets, setUserSets] = useState<Record<string, boolean> | null>(null);
+  const selectedSets = useMemo<Record<string, boolean>>(() => {
+    if (userSets) return userSets;
     const init: Record<string, boolean> = {};
     const widest: Partial<Record<Kind, SensorSet>> = {};
     for (const set of sets) {
@@ -101,8 +100,13 @@ export default function SensorsTab({ machine }: { machine: string }) {
         widest[set.kind] = set;
     }
     Object.values(widest).forEach((s) => { if (s) init[s.name] = true; });
-    setSelectedSets(init);
-  }, [sets, selectedSets]);
+    return init;
+  }, [sets, userSets]);
+  const toggleSet = (name: string) =>
+    setUserSets((prev) => {
+      const base = prev ?? selectedSets;
+      return { ...base, [name]: !base[name] };
+    });
 
   // Equilibrium overlay (time-parametrized). On a live backend, pull the real
   // node; otherwise synthesize a swappable stand-in from the time cursor.
