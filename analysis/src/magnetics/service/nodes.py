@@ -10,6 +10,8 @@ rather than fake numbers.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 
 from ..core import contracts, geometry, spectral
@@ -18,13 +20,33 @@ from ..data import diiid, h5source
 T_TO_GAUSS = 1.0e4  # PTDATA integrated field is ~Tesla; show Gauss like the GUI
 
 
+# ── GUI param parsing (HTTP query params arrive as strings) ──────────────────
+def _f(params, key, default=None):
+    if not params or params.get(key) in (None, ""):
+        return default
+    try:
+        return float(params[key])
+    except (TypeError, ValueError):
+        return default
+
+
+def _i(params, key, default=None):
+    v = _f(params, key, None)
+    return int(v) if v is not None else default
+
+
+def _flag(params, key) -> bool:
+    return bool(params) and str(params.get(key, "")).lower() in ("1", "true", "yes", "on")
+
+
 def machines() -> list[dict]:
     return h5source.list_shots()
 
 
 def refresh() -> None:
-    """Forget the cached HDF5 file index (call after a new fetch writes a file)."""
+    """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
+    _spec_result.cache_clear()
 
 
 def _array_channels(shot, families: tuple[str, ...]):
@@ -51,7 +73,7 @@ def _stack(shot, names):
 
 
 # ── geometry: sensor φ–θ wall map ────────────────────────────────────────────
-def _geometry(shot) -> dict:
+def _geometry(shot, params=None) -> dict:
     points = []
     for name in h5source.channel_names(shot):
         s = diiid.sensor(name)
@@ -79,7 +101,11 @@ def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     raise ValueError("need two toroidally-separated probes for a spectrogram")
 
 
-def _spectrogram(shot) -> dict:
+@lru_cache(maxsize=8)
+def _spec_result(shot: str, slice_duration: float, coherence_smooth: int):
+    """The (expensive) STFT, cached so the spectrogram/n-map/coherence/n-spectrum
+    nodes share one compute. Keyed on the STFT-shaping params only; cheap post-ops
+    (freq crop, denoise) are applied per node. Returns (result, probes, delta_phi)."""
     (n1, phi1), (n2, phi2) = _pick_pair(shot)
     t1, s1 = h5source.load_channel(shot, n1)
     t2, s2 = h5source.load_channel(shot, n2)
@@ -87,22 +113,82 @@ def _spectrogram(shot) -> dict:
     if k < 256:
         raise ValueError(f"channels too short for a spectrogram ({k} samples)")
     time_s = np.asarray(t1[:k], dtype=float) * 1e-3   # HDF5 time base is ms
-    res = spectral.compute_spectrogram(time_s, s1[:k], s2[:k],
-                                       delta_phi=float(phi2 - phi1))
+    res = spectral.compute_spectrogram(
+        time_s, s1[:k], s2[:k], delta_phi=float(phi2 - phi1),
+        slice_duration=slice_duration, coherence_smooth=coherence_smooth)
+    return res, (n1, n2), round(float(phi2 - phi1), 1)
+
+
+def _prep_spec(shot, params):
+    """Resolve params → a (possibly denoised) SpectrogramResult + a frequency mask.
+    Shared by all spectrogram-derived nodes so a knob change re-runs the core."""
+    sd = _f(params, "slice_duration", 0.001)
+    cs = _i(params, "coherence_smooth", None)
+    if cs is None:
+        cs = _i(params, "smoothing", 5)
+    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs))
+    if _flag(params, "denoise"):
+        res = spectral.denoise_spectrogram(res, coherence_min=_f(params, "coherence_min", 0.5))
+    f_khz = np.asarray(res.frequency) / 1e3
+    mask = np.ones(f_khz.size, dtype=bool)
+    fmin, fmax = _f(params, "fmin"), _f(params, "fmax")
+    if fmin is not None:
+        mask &= f_khz >= fmin
+    if fmax is not None:
+        mask &= f_khz <= fmax
+    return res, mask, probes, dphi
+
+
+def _spectrogram(shot, params=None) -> dict:
+    res, mask, probes, dphi = _prep_spec(shot, params)
+    f = np.asarray(res.frequency)[mask] / 1e3
     # power is [n_times, n_freqs]; heatmap z is [i_y=freq][i_x=time] → transpose.
-    z = np.log10(np.maximum(np.asarray(res.power, dtype=float).T, 1e-30))
+    z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
     return contracts.heatmap(
-        (np.asarray(res.time) * 1e3).tolist(),        # x: time (ms)
-        (np.asarray(res.frequency) / 1e3).tolist(),   # y: frequency (kHz)
-        z.tolist(),
+        (np.asarray(res.time) * 1e3).tolist(), f.tolist(), z.tolist(),
         {"x": "time (ms)", "y": "f (kHz)", "z": "log₁₀ power"},
         discrete=False,
-        meta={"probes": [n1, n2], "delta_phi_deg": round(float(phi2 - phi1), 1),
-              "shot": str(shot)})
+        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
+
+
+def _mode_number(shot, params=None) -> dict:
+    """Real toroidal mode-number n(t,f) — n = round(phase/Δφ) from the core."""
+    res, mask, probes, dphi = _prep_spec(shot, params)
+    f = np.asarray(res.frequency)[mask] / 1e3
+    n = np.asarray(res.mode_number, dtype=float)[:, mask]
+    return contracts.heatmap(
+        (np.asarray(res.time) * 1e3).tolist(), f.tolist(), n.T.tolist(),
+        {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal n"},
+        discrete=True, zrange=[-6.5, 6.5],
+        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
+
+
+def _coherence(shot, params=None) -> dict:
+    """Real 2-point coherence γ²(t,f) in [0,1] from the core."""
+    res, mask, probes, _dphi = _prep_spec(shot, params)
+    f = np.asarray(res.frequency)[mask] / 1e3
+    coh = np.asarray(res.coherence, dtype=float)[:, mask]
+    return contracts.heatmap(
+        (np.asarray(res.time) * 1e3).tolist(), f.tolist(), coh.T.tolist(),
+        {"x": "time (ms)", "y": "f (kHz)", "z": "coherence"},
+        discrete=False, zrange=[0.0, 1.0],
+        meta={"probes": list(probes), "shot": str(shot)})
+
+
+def _n_spectrum(shot, params=None) -> dict:
+    """RMS amplitude per toroidal mode number vs time (the n-spectrum)."""
+    res, _mask, probes, _dphi = _prep_spec(shot, params)
+    rms = np.asarray(res.rms_by_mode, dtype=float)   # [n_times, n_modes]
+    modes = np.asarray(res.mode_indices)             # [n_modes]
+    return contracts.heatmap(
+        (np.asarray(res.time) * 1e3).tolist(), modes.tolist(), rms.T.tolist(),
+        {"x": "time (ms)", "y": "toroidal n", "z": "rms amplitude"},
+        discrete=False,
+        meta={"probes": list(probes), "shot": str(shot)})
 
 
 # ── contour: raw δBp(φ, t) over the toroidal array (fit pending) ──────────────
-def _contour(shot) -> dict:
+def _contour(shot, params=None) -> dict:
     arr = _array_channels(shot, ("MPID",))
     if len(arr) < 4:
         raise ValueError("not enough MPID toroidal-array channels for a map")
@@ -134,7 +220,7 @@ def _contour(shot) -> dict:
 
 
 # ── fit_quality: real condition number K of the toroidal array ───────────────
-def _fit_quality(shot) -> dict:
+def _fit_quality(shot, params=None) -> dict:
     arr = _array_channels(shot, ("MPID",))
     m = h5source.meta(shot)
     fields = [{"label": "shot", "value": str(m["shot"])},
@@ -155,16 +241,24 @@ def _fit_quality(shot) -> dict:
                                            "χ² pending the full fit"})
 
 
-# ── phase_fit: best-effort phase-vs-φ at one frequency ───────────────────────
-def _phase_fit(shot, f0_khz: float = 5.0) -> dict:
+# ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
+def _phase_fit(shot, params=None) -> dict:
     arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a phase fit")
     names = [n for n, _ in arr]
     phis = np.array([p for _, p in arr], dtype=float)
     t_ms, mat = _stack(shot, names)               # mat[ch, time]
+    f_khz = _f(params, "f_khz", 5.0)
+    # honor the GUI time cursor: a small window around t0 (ms) → t_range (s)
+    t0_ms = _f(params, "time", None)
+    t_range = None
+    if t0_ms is not None:
+        w = _f(params, "window_ms", 2.0)
+        t_range = ((t0_ms - w) * 1e-3, (t0_ms + w) * 1e-3)
     mode = spectral.extract_mode_at_frequency(
-        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3, frequency=f0_khz * 1e3)
+        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3,
+        frequency=f_khz * 1e3, t_range=t_range)
     fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n
     points = [{"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
               for (nm, p), ph in zip(arr, mode.phase)]
@@ -173,13 +267,16 @@ def _phase_fit(shot, f0_khz: float = 5.0) -> dict:
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
         meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
-              "f_kHz": f0_khz, "shot": str(shot),
+              "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
               "note": "MODESPEC phase-at-frequency + circular n-fit"})
 
 
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
+    "mode_number": _mode_number,
+    "coherence": _coherence,
+    "n_spectrum": _n_spectrum,
     "contour": _contour,
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
@@ -191,51 +288,4 @@ def build_node(shot: str, node_id: str, params: dict | None = None) -> dict:
         raise KeyError(f"unknown node {node_id!r}; "
                        f"have {', '.join(sorted(_BUILDERS))}")
     h5source.shot_file(shot)  # raises KeyError if the shot isn't available
-    return _BUILDERS[node_id](shot)
-
-
-# ── frame-envelope compat (docs/CONTRACT.md) ────────────────────────────────
-# The gui-branch frontend streams `qs_fit`/`spectrogram`/`geometry` as frames
-# {type, progress, final, meta, data}. We serve a single final frame built from
-# the same real nodes, so that GUI works against this backend unchanged.
-def _qs_fit_data(shot) -> dict:
-    contour = _contour(shot)  # raw δBp(φ,t) — real data, fit pending
-    fq = _fit_quality(shot)
-    kval = next((f["value"] for f in fq["fields"]
-                 if str(f["label"]).startswith("condition number K")), 0)
-    nch = next((f["value"] for f in fq["fields"]
-                if f["label"] == "channels fetched"), 0)
-    return {
-        "contour": {"phi": contour["x"], "theta": contour["y"],
-                    "z": contour["z"], "units": "G"},
-        "sensors": contour.get("overlay", {}).get("points", []),
-        "modes": [],
-        "quality": {"K": kval if isinstance(kval, (int, float)) else 0.0,
-                    "chi2": 0.0, "n_channels": nch, "m_max": 0},
-    }
-
-
-def _spectrogram_data(shot) -> dict:
-    n = _spectrogram(shot)
-    return {"spectrogram": {"t_ms": n["x"], "f_kHz": n["y"], "power": n["z"]}}
-
-
-def _geometry_data(shot) -> dict:
-    n = _geometry(shot)
-    return {"sensors": n["points"]}
-
-
-_RESULTS = {
-    "qs_fit": _qs_fit_data,
-    "spectrogram": _spectrogram_data,
-    "geometry": _geometry_data,
-}
-
-
-def result_data(shot: str, result: str, params: dict | None = None) -> dict:
-    """CONTRACT.md frame `data` for a result name (qs_fit/spectrogram/geometry)."""
-    if result not in _RESULTS:
-        raise KeyError(f"unknown result {result!r}; "
-                       f"have {', '.join(sorted(_RESULTS))}")
-    h5source.shot_file(shot)
-    return _RESULTS[result](shot)
+    return _BUILDERS[node_id](shot, params)
