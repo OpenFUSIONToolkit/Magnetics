@@ -8,8 +8,7 @@ import { useNode } from "../../lib/useNode";
 import { usingLiveBackend } from "../../lib/api";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
-import type { ContourNode, LineNode, MetricsNode, Scatter2DNode } from "../../lib/contract";
-import { qualityForK } from "../../lib/contract";
+import type { ContourNode, LineNode, Scatter2DNode } from "../../lib/contract";
 
 // ── Colorblind-safe palette (Wong 2011) ──────────────────────────────
 // Blue + orange are distinguishable across deuteranopia, protanopia, tritanopia.
@@ -127,112 +126,24 @@ function remapOverlay(ov: ContourNode["overlay"]): ContourNode["overlay"] {
   return { ...ov, points: ov.points.map(p => ({ ...p, x: p.x > 180 ? p.x - 360 : p.x, y: p.y > 180 ? p.y - 360 : p.y })) };
 }
 
-// ── Live API types (frame envelope from /api/{machine}/qs_fit/stream) ─
-interface QsFitFrame {
-  progress: number;
-  final: boolean;
-  data: {
-    contour: { phi: number[]; theta: number[]; z: number[][]; units: string };
-    sensors: { phi: number; theta: number }[];
-    modes: { n: number; m: number; amp: number; phase_deg: number }[];
-    quality: { K: number; chi2: number; n_channels: number; m_max: number };
-  };
-}
-
 // ── useQsFit ──────────────────────────────────────────────────────────
-// Mock mode:  reads individual mock JSON files via useNode (existing contract).
-// Live mode:  opens an SSE stream to /api/{machine}/qs_fit/stream and builds
-//             ContourNode + MetricsNode from each progressive coarse→fine frame.
+// Real backend kind-nodes for BOTH modes — api.ts routes to the live service or the
+// static mock fixtures by VITE_API_BASE. There is NO mock SSE stream in live: that
+// path streamed example (mock) data even against a live backend. The live `contour`
+// node is the shot's RAW δB_p over the toroidal array (the SLCONTOUR φ–θ spatial fit
+// is not yet ported — surfaced honestly by the banner in the component); `fit_quality`
+// is the real condition number K of the array.
 function useQsFit(machine: string, fetchCursor: number) {
-  const isLive = usingLiveBackend();
-
-  // Pass empty string in live mode so useNode skips fetching (it guards on !machine).
-  const mockMachine = isLive ? "" : machine;
-  const { node: rawContour, loading: mockLoading, error: mockError } =
-    useNode(mockMachine, "contour", { t: fetchCursor });
-  const { node: rawQuality } = useNode(mockMachine, "fit_quality");
-  const { node: rawPhaseFit } = useNode(mockMachine, "phase_fit");
-
-  const [liveContour,  setLiveContour]  = useState<ContourNode | null>(null);
-  const [liveQuality,  setLiveQuality]  = useState<MetricsNode | null>(null);
-  const [liveProgress, setLiveProgress] = useState(0);
-  const [liveLoading,  setLiveLoading]  = useState(isLive);
-  const [liveError,    setLiveError]    = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isLive || !machine) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset before live stream; Meg's hookup, revisit later */
-    setLiveLoading(true);
-    setLiveError(null);
-    setLiveContour(null);
-    setLiveProgress(0);
-    /* eslint-enable react-hooks/set-state-in-effect */
-
-    const base = import.meta.env.VITE_API_BASE as string;
-    const es = new EventSource(`${base}/api/${machine}/qs_fit/stream`);
-
-    es.onmessage = (e: MessageEvent) => {
-      const frame = JSON.parse(e.data as string) as QsFitFrame;
-      const d = frame.data;
-
-      const absMax = Math.max(...d.contour.z.flat().map(Math.abs), 1);
-
-      setLiveContour({
-        kind: "contour",
-        x: d.contour.phi,
-        y: d.contour.theta,
-        z: d.contour.z,
-        axes: { x: "φ (deg)", y: "θ (deg)", z: `δB<sub>p</sub> (${d.contour.units})` },
-        zrange: [-absMax, absMax],
-        overlay: {
-          points: d.sensors.map(s => ({ x: s.phi, y: s.theta })),
-          symbol: "square",
-        },
-        meta: { m: d.modes[0]?.m, n: d.modes[0]?.n },
-      });
-
-      const q = d.quality;
-      setLiveQuality({
-        kind: "metrics",
-        title: "fit quality",
-        fields: [
-          { label: "K (cond.)",  value: q.K.toFixed(1),    status: qualityForK(q.K) },
-          { label: "χ²",         value: q.chi2.toFixed(2) },
-          { label: "channels",   value: q.n_channels },
-          { label: "m max",      value: q.m_max },
-        ],
-      });
-
-      setLiveProgress(frame.progress);
-      if (frame.final) { setLiveLoading(false); es.close(); }
-    };
-
-    es.onerror = () => {
-      setLiveError("connection to backend failed");
-      setLiveLoading(false);
-      es.close();
-    };
-
-    return () => es.close();
-  }, [machine, isLive]);
-
-  if (isLive) {
-    return {
-      contourNode: liveContour,
-      qualityNode:  liveQuality,
-      phaseFitNode: null as Scatter2DNode | null,
-      loading:      liveLoading,
-      error:        liveError,
-      progress:     liveProgress,
-    };
-  }
+  const { node: rawContour, loading, error } = useNode(machine, "contour", { t: fetchCursor });
+  const { node: rawQuality } = useNode(machine, "fit_quality");
+  const { node: rawPhaseFit } = useNode(machine, "phase_fit");
 
   return {
     contourNode:  rawContour?.kind  === "contour"   ? rawContour  : null,
     qualityNode:  rawQuality?.kind  === "metrics"   ? rawQuality  : null,
     phaseFitNode: rawPhaseFit?.kind === "scatter2d" ? rawPhaseFit : null,
-    loading:      mockLoading,
-    error:        mockError ?? null,
+    loading,
+    error:        error ?? null,
     progress:     1,
   };
 }
@@ -240,6 +151,7 @@ function useQsFit(machine: string, fetchCursor: number) {
 // ── Component ─────────────────────────────────────────────────────────
 export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
+  const isLive = usingLiveBackend();
   const { cursorMs, setCursorMs } = useStore();
 
   // localCursor: updates on every slider tick for smooth visuals.
@@ -457,11 +369,21 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
-        <h2>Quasi-stationary — spatial fit δB<sub>p</sub>(φ, θ)</h2>
+        <h2>Quasi-stationary — δB<sub>p</sub>(φ, θ)</h2>
         <p className="desc" style={{ margin: 0 }}>shot {machine}{modeTag ? ` · ${modeTag}` : ""}</p>
       </div>
 
-      {/* Streaming progress bar — visible while live frames arrive */}
+      {/* Honest banner: the contour below is RAW δBp over the array, not a fitted
+          spatial mode — the SLCONTOUR φ–θ fit isn't ported yet. Remove when it lands. */}
+      <div style={{
+        fontSize: 11, color: "var(--warn)", background: "var(--accent-soft)",
+        border: "1px solid var(--border-2)", borderRadius: 4, padding: "5px 8px",
+      }}>
+        Showing raw δB<sub>p</sub>(φ, θ){isLive ? "" : " (mock fixture)"} — the SLCONTOUR
+        spatial fit is not yet implemented; this is not a fitted mode.
+      </div>
+
+      {/* Progress bar — only meaningful for a streaming fit (not wired yet). */}
       {progress < 1 && (
         <div style={{ height: 2, background: "var(--border)", borderRadius: 1, overflow: "hidden" }}>
           <div style={{
@@ -507,6 +429,18 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
           {phaseTimeNode?.kind === "line" && (
             <Plot height={145} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} />
+          )}
+
+          {/* Time-series nodes (phi_t / amplitude / phase_t) aren't served by the live
+              backend yet — show an honest placeholder instead of an empty column. */}
+          {isLive && !phiTimeRemapped && ampNode?.kind !== "line" && phaseTimeNode?.kind !== "line" && (
+            <div style={{
+              height: 200, display: "flex", alignItems: "center", justifyContent: "center",
+              color: "var(--text-dim)", fontSize: 11, textAlign: "center", padding: 12,
+              border: "1px dashed var(--border)", borderRadius: 4,
+            }}>
+              time-series views (δB<sub>p</sub>, amplitude, phase vs time) — not yet wired to the backend
+            </div>
           )}
         </div>
       </div>
