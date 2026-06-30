@@ -68,6 +68,26 @@ def test_mode_shape_node_has_band():
         assert all(lo <= y <= up for lo, y, up in zip(s["lower"], s["y"], s["upper"]))
 
 
+def test_mode_nodes_share_one_compute():
+    # phase_fit, mode_shape, mode_similarity at the same cursor must reuse a single
+    # cached full-array extraction rather than recomputing it three times
+    shot = _first_shot()
+    nodes._toroidal_mode_cached.cache_clear()
+    nodes.build_node(shot, "phase_fit", {"time": "100"})
+    hits0 = nodes._toroidal_mode_cached.cache_info().hits
+    nodes.build_node(shot, "mode_shape", {"time": "100"})
+    nodes.build_node(shot, "mode_similarity", {"time": "100"})
+    assert nodes._toroidal_mode_cached.cache_info().hits >= hits0 + 2
+
+
+def test_mode_track_cached_across_calls():
+    shot = _first_shot()
+    nodes._mode_track_cached.cache_clear()
+    nodes.build_node(shot, "mode_track")
+    nodes.build_node(shot, "mode_track")  # cursor-independent → second is a cache hit
+    assert nodes._mode_track_cached.cache_info().hits >= 1
+
+
 def test_mode_track_node():
     shot = _first_shot()
     n = nodes.build_node(shot, "mode_track")
