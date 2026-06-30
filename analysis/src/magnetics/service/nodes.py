@@ -14,7 +14,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from ..core import contracts, geometry, spectral
+from ..core import contracts, geometry, mode_shape, spectral
 from ..data import diiid, h5source
 
 T_TO_GAUSS = 1.0e4  # PTDATA integrated field is ~Tesla; show Gauss like the GUI
@@ -247,17 +247,18 @@ def _fit_quality(shot, params=None) -> dict:
                                            "χ² pending the full fit"})
 
 
-# ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
-def _phase_fit(shot, params=None) -> dict:
+# ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
+def _toroidal_mode(shot, params):
+    """Per-probe phase/amplitude (+1σ) across the toroidal array at one frequency,
+    honoring the GUI time cursor. Returns (arr, mode, f_khz, t0_ms)."""
     arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
     if len(arr) < 4:
-        raise ValueError("not enough toroidal-array channels for a phase fit")
+        raise ValueError("not enough toroidal-array channels for a mode fit")
     names = [n for n, _ in arr]
     phis = np.array([p for _, p in arr], dtype=float)
     t_ms, mat = _stack(shot, names)               # mat[ch, time]
     f_khz = _f(params, "f_khz", 5.0)
-    # honor the GUI time cursor: a small window around t0 (ms) → t_range (s)
-    t0_ms = _f(params, "time", None)
+    t0_ms = _f(params, "time", None)              # GUI cursor (ms)
     t_range = None
     if t0_ms is not None:
         w = _f(params, "window_ms", 2.0)
@@ -265,6 +266,12 @@ def _phase_fit(shot, params=None) -> dict:
     mode = spectral.extract_mode_at_frequency(
         mat, phis, np.asarray(t_ms, dtype=float) * 1e-3,
         frequency=f_khz * 1e3, t_range=t_range)
+    return arr, mode, f_khz, t0_ms
+
+
+# ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
+def _phase_fit(shot, params=None) -> dict:
+    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
     fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n + uncertainty
     # Real per-probe phase σ from the cross-spectral statistics (Bendat & Piersol),
     # replacing the GUI's previously fabricated error bars. The reference probe's σ is
@@ -290,6 +297,31 @@ def _phase_fit(shot, params=None) -> dict:
                       "error bars = 1σ cross-spectral phase uncertainty"})
 
 
+# ── mode_shape: GP-smoothed toroidal eigenmode shape with 2σ bands ───────────
+def _mode_shape(shot, params=None) -> dict:
+    """Smooth toroidal mode shape (re/im of the complex shape vector) with a ±2σ
+    uncertainty band, via the periodic-kernel GP (eigspec §2.2.2)."""
+    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    z = mode_shape.shape_vector(mode.phase, mode.amplitude)
+    ms = mode_shape.gp_mode_shape(mode.toroidal_angle, z)
+    grid = ms.grid_deg.tolist()
+    series = [
+        {"name": "Re", "x": grid, "y": ms.re_mean.tolist(),
+         "lower": (ms.re_mean - 2 * ms.re_sigma).tolist(),
+         "upper": (ms.re_mean + 2 * ms.re_sigma).tolist()},
+        {"name": "Im", "x": grid, "y": ms.im_mean.tolist(),
+         "lower": (ms.im_mean - 2 * ms.im_sigma).tolist(),
+         "upper": (ms.im_mean + 2 * ms.im_sigma).tolist()},
+    ]
+    return contracts.line(
+        series, {"x": "φ (deg)", "y": "shape (a.u.)"},
+        meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
+              "n_probes": len(arr),
+              "length_scale_rad": round(float(ms.length_scale), 3),
+              "noise": round(float(ms.noise), 4),
+              "note": "GP toroidal mode shape (eigspec §2.2.2); shaded = ±2σ"})
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -299,6 +331,7 @@ _BUILDERS = {
     "contour": _contour,
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
+    "mode_shape": _mode_shape,
 }
 
 

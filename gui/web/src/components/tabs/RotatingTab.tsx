@@ -103,6 +103,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
     node: phaseNode,
   } = useNode(machine, "phase_fit", { time: cursorMs });
 
+  // Fetch the GP-smoothed toroidal mode shape with 2σ uncertainty band (eigspec §2.2.2)
+  const {
+    node: modeShapeNode,
+  } = useNode(machine, "mode_shape", { time: cursorMs });
+
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
     if (specNode && specNode.kind === "heatmap" && specNode.x.length > 0) {
@@ -685,6 +690,22 @@ export default function RotatingTab({ machine }: { machine: string }) {
     );
   };
 
+  // GP mode shape with ±2σ band — only shown when the backend serves a real shape
+  // (no fabricated fallback; the band is genuine predictive uncertainty).
+  const renderModeShape = () => {
+    if (!modeShapeNode || modeShapeNode.kind !== "line") return null;
+    const m = modeShapeNode.meta as Record<string, number | string> | undefined;
+    return (
+      <div style={{ overflow: "auto" }}>
+        <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          Toroidal Mode Shape — GP fit ±2σ
+          {m?.f_kHz != null ? ` @ ${m.f_kHz} kHz` : ""}
+        </h4>
+        <NodeView node={modeShapeNode} height={200} />
+      </div>
+    );
+  };
+
   return (
     <div style={{ display: "flex", gap: sidebarExpanded ? "0px" : "16px", height: "100%", position: "relative" }}>
       
@@ -1165,6 +1186,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
             {renderModeStructure()}
+            {renderModeShape()}
           </div>
         </div>
       </div>

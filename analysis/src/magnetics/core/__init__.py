@@ -1,5 +1,14 @@
 """Device-agnostic analysis core (pure functions, no I/O, no GUI)."""
 
+from magnetics.core.mode_shape import (
+    GPFitResult,
+    ModeShapeResult,
+    gp_mode_shape,
+    gp_periodic_fit,
+    mode_pattern_2d,
+    periodic_kernel,
+    shape_vector,
+)
 from magnetics.core.spectral import (
     CrossSpectrumResult,
     ModeAtFrequencyResult,
@@ -17,7 +26,9 @@ from magnetics.core.spectral import (
 
 __all__ = [
     "CrossSpectrumResult",
+    "GPFitResult",
     "ModeAtFrequencyResult",
+    "ModeShapeResult",
     "SpectrogramResult",
     "ToroidalFitResult",
     "compute_spectrogram",
@@ -26,6 +37,11 @@ __all__ = [
     "downsample",
     "extract_mode_at_frequency",
     "fit_toroidal_mode",
+    "gp_mode_shape",
+    "gp_periodic_fit",
     "integrate_bdot",
+    "mode_pattern_2d",
+    "periodic_kernel",
+    "shape_vector",
     "stft_layout",
 ]

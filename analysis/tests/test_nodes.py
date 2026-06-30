@@ -57,6 +57,17 @@ def test_phase_fit_node_has_real_error_bars():
     assert n["meta"].get("phase_sigma_deg") is not None
 
 
+def test_mode_shape_node_has_band():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "mode_shape")
+    assert n["kind"] == "line"
+    assert {s["name"] for s in n["series"]} >= {"Re", "Im"}
+    for s in n["series"]:
+        assert len(s["lower"]) == len(s["upper"]) == len(s["y"])
+        # band brackets the mean everywhere
+        assert all(lo <= y <= up for lo, y, up in zip(s["lower"], s["y"], s["upper"]))
+
+
 def test_fit_quality_node_has_finite_k():
     shot = _first_shot()
     n = nodes.build_node(shot, "fit_quality")
