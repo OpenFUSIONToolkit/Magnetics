@@ -189,6 +189,32 @@ def test_elongation_theta_star_threads_into_poloidal_nodes(monkeypatch):
     assert ps["meta"]["kappa"] == 1.85 and "κ-corrected" in ps["axes"]["x"]
 
 
+def test_raw_trace_node():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "raw_trace", {"time": 3000})
+    assert n["kind"] == "line" and n["series"]
+    s = n["series"][0]
+    assert len(s["x"]) == len(s["y"]) and len(s["x"]) > 1
+    assert n["meta"]["probe"]
+
+
+def test_toroidal_stripes_node():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "toroidal_stripes", {"time": 3000})
+    assert n["kind"] == "heatmap"
+    assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])  # [angle][time]
+
+
+def test_poloidal_phase_fit_node():
+    shot = _first_shot()
+    try:
+        n = nodes.build_node(shot, "poloidal_phase_fit", {"time": 3000})
+    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    assert n["kind"] == "scatter2d" and n["points"]
+    assert "m_fit" in n["meta"]
+
+
 def test_unknown_node_raises():
     shot = _first_shot()
     with pytest.raises(KeyError):

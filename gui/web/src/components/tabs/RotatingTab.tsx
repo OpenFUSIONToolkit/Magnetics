@@ -213,6 +213,17 @@ export default function RotatingTab({ machine }: { machine: string }) {
     node: modeOverTimeNode,
   } = useNode(machine, "mode_over_time");
 
+  // Array wave-stripes: raw δBp(φ,t) / δBp(θ,t) over a few mode periods at the cursor.
+  const { node: toroidalStripesNode } = useNode(machine, "toroidal_stripes", { time: cursorMs });
+  const { node: poloidalStripesNode } = useNode(machine, "poloidal_stripes", { time: cursorMs });
+
+  // Poloidal phase fit (phase vs θ, φ-detrended, best-fit m) — the poloidal analogue
+  // of phase_fit. 422s when the shot lacks the poloidal array; the panel hides then.
+  const { node: poloidalPhaseFitNode } = useNode(machine, "poloidal_phase_fit", { time: cursorMs });
+
+  // One Mirnov probe's raw dB/dt time series in a 4 ms window around the cursor.
+  const { node: rawTraceNode } = useNode(machine, "raw_trace", { time: cursorMs });
+
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
     if (specNode && specNode.kind === "heatmap" && specNode.x.length > 0) {
@@ -564,9 +575,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
     return { times, phiAngles, thetaAngles, toroidalZ, poloidalZ };
   }, [live, cursorMs, currentModeFreqs, pestLambda1, pestLambda2]);
 
-  // Mode structure poloidal node (synthetic demo; no backend poloidal-fit node wired yet)
+  // Mode structure poloidal node: the real poloidal_phase_fit node when live, else a
+  // synthetic demo (mock mode only).
   const processedPoloidalNode = useMemo(() => {
-    if (live) return null;  // no fabricated poloidal fit against a live backend
+    if (live) return poloidalPhaseFitNode && poloidalPhaseFitNode.kind === "scatter2d"
+      ? poloidalPhaseFitNode : null;
     const m = fittype === 2 ? 3 : fittype === 1 ? 2 : 1;
     const angles = Array.from({ length: 31 }, (_, i) => (i * 360) / 30); // 31 probes
     
@@ -613,7 +626,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "θ (deg)", y: "phase (deg)" },
       meta: { m_fit: m },
     };
-  }, [live, fittype, pestLambda1, pestLambda2, btCompMode, gateFrac]);
+  }, [live, poloidalPhaseFitNode, fittype, pestLambda1, pestLambda2, btCompMode, gateFrac]);
 
   // Toroidal node processing — real phase_fit node when present, else (mock only) synth.
   const processedToroidalNode = useMemo(() => {
@@ -747,9 +760,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   const renderSubInterval = () => {
     const { freqs, power, coh, nMode } = subIntervalData;
-    // The raw dB/dt trace has no backend node yet; only synthesize it in mock/demo mode.
+    // Live: one probe's real dB/dt from the raw_trace node. Mock: synthesize a trace.
     const activeFreqs = currentModeFreqs[0] > 0 ? currentModeFreqs : [8.0];
-    const rawTrace = live ? null : generateDeterministicTimeTrace(cursorMs, activeFreqs);
+    const rawTrace = live
+      ? (rawTraceNode?.kind === "line" && rawTraceNode.series[0]
+          ? { times: rawTraceNode.series[0].x, values: rawTraceNode.series[0].y }
+          : null)
+      : generateDeterministicTimeTrace(cursorMs, activeFreqs);
 
     const rawPlotData = [
       {
@@ -831,49 +848,29 @@ export default function RotatingTab({ machine }: { machine: string }) {
   };
 
   const renderArrayContour = () => {
-    const { times, phiAngles, thetaAngles, toroidalZ, poloidalZ } = arrayStripesData;
-
-    if (times.length === 0) {  // live: no backend node feeds the array wave-stripes yet
-      return (
-        <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "8px" }}>
-          <div style={{ flex: 1 }}>
-            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>Toroidal Array Waves</h4>
-            <PanelPlaceholder text="array wave-stripes — not yet wired to the backend" />
-          </div>
-          <div style={{ flex: 1 }}>
-            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>Poloidal Array Waves</h4>
-            <PanelPlaceholder text="array wave-stripes — not yet wired to the backend" />
-          </div>
-        </div>
-      );
-    }
-
-    const toroidalTrace = [
-      {
-        type: "heatmap" as const,
-        x: times,
-        y: phiAngles,
-        z: toroidalZ,
-        colorscale: POWER_SEQUENTIAL,
-        showscale: false,
-      },
-    ];
-
-    const poloidalTrace = [
-      {
-        type: "heatmap" as const,
-        x: times,
-        y: thetaAngles,
-        z: poloidalZ,
-        colorscale: POWER_SEQUENTIAL,
-        showscale: false,
-      },
-    ];
+    // Per-panel data: live → the stripe heatmap nodes; mock → the synthetic stripes.
+    const torData = live
+      ? (toroidalStripesNode?.kind === "heatmap"
+          ? { x: toroidalStripesNode.x, y: toroidalStripesNode.y, z: toroidalStripesNode.z } : null)
+      : (arrayStripesData.times.length
+          ? { x: arrayStripesData.times, y: arrayStripesData.phiAngles, z: arrayStripesData.toroidalZ } : null);
+    const polData = live
+      ? (poloidalStripesNode?.kind === "heatmap"
+          ? { x: poloidalStripesNode.x, y: poloidalStripesNode.y, z: poloidalStripesNode.z } : null)
+      : (arrayStripesData.times.length
+          ? { x: arrayStripesData.times, y: arrayStripesData.thetaAngles, z: arrayStripesData.poloidalZ } : null);
 
     const baseLayout = {
       xaxis: { title: { text: "Time (ms)" } },
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
+    const stripePlot = (d: { x: number[]; y: number[]; z: number[][] }, axisTitle: string) => (
+      <Plot
+        data={[{ type: "heatmap" as const, x: d.x, y: d.y, z: d.z, colorscale: POWER_SEQUENTIAL, showscale: false }]}
+        layout={{ ...baseLayout, yaxis: { title: { text: axisTitle } } }}
+        height={200}
+      />
+    );
 
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
@@ -881,14 +878,18 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(φ, t)</span>
           </h4>
-          <Plot data={toroidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "φ (deg)" } } }} height={200} />
+          {torData
+            ? stripePlot(torData, "φ (deg)")
+            : <PanelPlaceholder text={`toroidal array waves · waiting for stripes at t=${cursorMs.toFixed(0)} ms`} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Poloidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(θ, t)</span>
           </h4>
-          <Plot data={poloidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "θ (deg)" } } }} height={200} />
+          {polData
+            ? stripePlot(polData, "θ (deg)")
+            : <PanelPlaceholder text="poloidal array not available for this shot" />}
         </div>
       </div>
     );
@@ -914,7 +915,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
           </h4>
           {processedPoloidalNode
             ? <NodeView node={processedPoloidalNode} height={200} />
-            : <PanelPlaceholder text="poloidal phase fit — not yet wired to the backend" />}
+            : <PanelPlaceholder text="poloidal phase fit · no poloidal array in this shot" />}
         </div>
       </div>
     );
