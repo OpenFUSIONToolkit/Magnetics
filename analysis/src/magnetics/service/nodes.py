@@ -10,12 +10,16 @@ rather than fake numbers.
 """
 from __future__ import annotations
 
+import dataclasses
+import logging
 from functools import lru_cache
 
 import numpy as np
 
-from ..core import contracts, geometry, spectral
+from ..core import contracts, geometry, mode_shape, spectral
 from ..data import diiid, h5source
+
+logger = logging.getLogger(__name__)
 
 T_TO_GAUSS = 1.0e4  # PTDATA integrated field is ~Tesla; show Gauss like the GUI
 
@@ -46,7 +50,8 @@ def machines() -> list[dict]:
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    _spec_result.cache_clear()
+    for fn in (_spec_result, _stack_cached, _array_spectrum):
+        fn.cache_clear()
 
 
 def _array_channels(shot, families: tuple[str, ...]):
@@ -63,6 +68,30 @@ def _array_channels(shot, families: tuple[str, ...]):
     return out
 
 
+@lru_cache(maxsize=1)
+def _real_theta() -> dict:
+    """name → real poloidal angle θ (deg) from the published DIII-D layout in
+    ``_real_geometry`` (the genuine static positions), unioned over machines. Lets
+    the poloidal arrays carry physical θ instead of ``diiid``'s cosmetic offset."""
+    from . import _real_geometry
+    out: dict[str, float] = {}
+    for machine in _real_geometry.GEOMETRY.values():
+        for s in machine["sensors"]:
+            out[s["name"]] = float(s["theta"])
+    return out
+
+
+@lru_cache(maxsize=16)
+def _stack_cached(shot, names):
+    """Cached channel load for a fixed (shot, names) — HDF5 reads are the dominant
+    cost and every mode node restacks the same toroidal array, so memoize the matrix.
+    ``names`` is a tuple so the call is hashable; cleared by ``refresh`` on a new pull."""
+    t0, d0 = h5source.load_channel(shot, names[0])
+    datas = [d0] + [h5source.load_data(shot, nm) for nm in names[1:]]
+    nmin = min(d.size for d in datas)
+    return t0[:nmin], np.array([d[:nmin] for d in datas], dtype=float)
+
+
 def _stack(shot, names):
     """Load channels, truncate to common length, return (t_ms, matrix[ch,time]).
 
@@ -70,12 +99,7 @@ def _stack(shot, names):
     channel's time axis is needed: read time once (the reference channel) and
     data-only for the rest, instead of materializing every channel's time vector.
     """
-    t0, d0 = h5source.load_channel(shot, names[0])
-    datas = [d0] + [h5source.load_data(shot, nm) for nm in names[1:]]
-    nmin = min(d.size for d in datas)
-    t = t0[:nmin]
-    mat = np.array([d[:nmin] for d in datas], dtype=float)
-    return t, mat
+    return _stack_cached(str(shot), tuple(names))
 
 
 # ── geometry: sensor φ–θ wall map ────────────────────────────────────────────
@@ -247,34 +271,272 @@ def _fit_quality(shot, params=None) -> dict:
                                            "χ² pending the full fit"})
 
 
+# ── auto analysis frequency: the dominant mode at the cursor (so shapes track it) ─
+def _auto_freq_khz(shot, t0_ms=None, fmin=1.0, fmax=25.0):
+    """Peak-power frequency (kHz, rounded to 1 kHz for cache stability) at the cursor
+    time from the cached 2-probe spectrogram — so the phase fit / mode shape follow the
+    mode as the user scrubs, instead of sitting at a fixed frequency that misses it.
+    Global peak when no cursor. Falls back to 5 kHz if the spectrogram is unavailable."""
+    try:
+        res, _probes, _dphi = _spec_result(str(shot), 0.001, 5)
+    except Exception:  # noqa: BLE001
+        logger.warning("auto-freq: spectrogram unavailable for shot %s, using 5 kHz",
+                       shot, exc_info=True)
+        return 5.0
+    f_khz = np.asarray(res.frequency) / 1e3
+    band = (f_khz >= fmin) & (f_khz <= fmax)
+    if not np.any(band):
+        return 5.0
+    power = np.asarray(res.power, dtype=float)
+    if t0_ms is None:
+        col = power[:, band].mean(axis=0)
+    else:
+        ti = int(np.argmin(np.abs(np.asarray(res.time) * 1e3 - t0_ms)))
+        col = power[ti, band]
+    return round(float(f_khz[band][int(np.argmax(col))]))
+
+
+# ── batched full-array STFT, computed once per (shot, array, f) and cached ─────
+@lru_cache(maxsize=4)
+def _array_spectrum(shot, names):
+    """One full-array STFT over the 1–25 kHz band for a fixed (shot, probe set) — the
+    expensive step. Every cursor position AND frequency then reads the complex array
+    pattern out of this by indexing (``mode_from_spectrum``), so both scrubbing and
+    mode-frequency changes are array-fast with no rebuild. ``names`` is a tuple so the
+    call is hashable; cleared by ``refresh``.
+
+    Each entry is the full complex64 STFT (~100 MB/shot); ``maxsize`` is the deliberate
+    speed-for-memory cap — raise it only with that resident cost in mind."""
+    t_ms, mat = _stack(shot, names)
+    return spectral.array_shape_spectrum(mat, np.asarray(t_ms, dtype=float) * 1e-3)
+
+
+# ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
+def _toroidal_arr(shot):
+    """The toroidal (midplane) array for the n-fit: ONE consistent probe type, all at
+    θ≈0 so the phase is a clean −nφ ramp. Prefer the fast-Mirnov dB/dt array; a "both"
+    pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
+    probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
+    scrambles the fit, so they're excluded."""
+    arr = _array_channels(shot, ("MPI_BDOT",))
+    if len(arr) >= 4:
+        return arr
+    theta = _real_theta()                          # integrated-Bp midplane fallback
+    arr = [(n, p) for n, p in _array_channels(shot, ("MPID",))
+           if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)]
+    if len(arr) < 4:
+        raise ValueError("not enough toroidal-array channels for a mode fit")
+    return arr
+
+
+def _toroidal_mode(shot, params):
+    """Per-probe phase/amplitude (+1σ) across the toroidal array at one frequency,
+    honoring the GUI time cursor. Returns (arr, mode, f_khz, t0_ms)."""
+    t0_ms = _f(params, "time", None)              # GUI cursor (ms)
+    f_khz = _f(params, "f_khz", None)             # explicit, else track the mode
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, t0_ms)
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
+    mode = spectral.mode_from_spectrum(spec, phis, t0_s, f_khz * 1e3)
+    return arr, mode, f_khz, t0_ms
+
+
 # ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
 def _phase_fit(shot, params=None) -> dict:
-    arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
-    if len(arr) < 4:
-        raise ValueError("not enough toroidal-array channels for a phase fit")
-    names = [n for n, _ in arr]
-    phis = np.array([p for _, p in arr], dtype=float)
-    t_ms, mat = _stack(shot, names)               # mat[ch, time]
-    f_khz = _f(params, "f_khz", 5.0)
-    # honor the GUI time cursor: a small window around t0 (ms) → t_range (s)
-    t0_ms = _f(params, "time", None)
-    t_range = None
-    if t0_ms is not None:
-        w = _f(params, "window_ms", 2.0)
-        t_range = ((t0_ms - w) * 1e-3, (t0_ms + w) * 1e-3)
-    mode = spectral.extract_mode_at_frequency(
-        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3,
-        frequency=f_khz * 1e3, t_range=t_range)
-    fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n
-    points = [{"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
-              for (nm, p), ph in zip(arr, mode.phase)]
-    line = {"x": [0.0, 360.0],
-            "y": [fit.intercept_deg, fit.intercept_deg + fit.n * 360.0]}
+    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n + uncertainty
+    # Real per-probe phase σ from the cross-spectral statistics (Bendat & Piersol),
+    # replacing the GUI's previously fabricated error bars. The reference probe's σ is
+    # NaN (self-reference); omit error_y there rather than emit a JSON-invalid NaN.
+    perr = mode.phase_error if mode.phase_error is not None else [None] * len(arr)
+    points = []
+    for (nm, p), ph, e in zip(arr, mode.phase, perr):
+        pt = {"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
+        if e is not None and np.isfinite(e):
+            pt["error_y"] = round(float(e), 3)
+        points.append(pt)
+    # Fitted line phase(φ) = (c − n·φ) mod 360, sampled densely and WRAPPED so it
+    # traces the same |n| sawteeth as the (wrapped) data instead of one line shooting
+    # off-axis. Insert a null break at each 0/360 wrap so the polyline doesn't draw a
+    # vertical jump across the panel.
+    phi_dense = np.linspace(0.0, 360.0, 361)
+    y_dense = (fit.intercept_deg - fit.n * phi_dense) % 360.0
+    fx: list = []
+    fy: list = []
+    prev = None
+    for x, y in zip(phi_dense, y_dense):
+        if prev is not None and abs(y - prev) > 180.0:
+            fx.append(None)
+            fy.append(None)
+        fx.append(round(float(x), 1))
+        fy.append(round(float(y), 1))
+        prev = y
+    line = {"x": fx, "y": fy}
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
         meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
+              "n_confidence": round(float(fit.n_confidence), 3)
+              if fit.n_confidence is not None else None,
+              "phase_sigma_deg": round(float(fit.phase_sigma), 3)
+              if fit.phase_sigma is not None else None,
               "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "MODESPEC phase-at-frequency + circular n-fit"})
+              "note": "MODESPEC phase-at-frequency + circular n-fit; "
+                      "error bars = 1σ cross-spectral phase uncertainty"})
+
+
+# ── mode shape: GP-smoothed eigenmode shape (re/im) with 2σ bands + markers ───
+def _shape_line(ms, x_label, meta) -> dict:
+    """Build a `line` node for a GP mode shape: Re/Im smooth curves with ±2σ bands
+    and the measured per-probe values as overlaid markers (cf. Olofsson fig 10)."""
+    grid = ms.grid_deg.tolist()
+    ang = ms.angle_deg.tolist()
+    series = [
+        {"name": "Re", "x": grid, "y": ms.re_mean.tolist(),
+         "lower": (ms.re_mean - 2 * ms.re_sigma).tolist(),
+         "upper": (ms.re_mean + 2 * ms.re_sigma).tolist(),
+         "markers": {"x": ang, "y": ms.re_obs.tolist()}},
+        {"name": "Im", "x": grid, "y": ms.im_mean.tolist(),
+         "lower": (ms.im_mean - 2 * ms.im_sigma).tolist(),
+         "upper": (ms.im_mean + 2 * ms.im_sigma).tolist(),
+         "markers": {"x": ang, "y": ms.im_obs.tolist()}},
+    ]
+    return contracts.line(series, {"x": x_label, "y": "shape (a.u.)"}, meta=meta)
+
+
+def _mode_shape(shot, params=None) -> dict:
+    """Smooth *toroidal* mode shape (re/im vs φ) with a ±2σ band, via the
+    periodic-kernel GP (eigspec §2.2.2), plus the measured probe markers."""
+    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    ms = _gp_shape(mode)
+    return _shape_line(ms, "φ (deg)", {
+        "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
+        "length_scale_rad": round(float(ms.length_scale), 3),
+        "note": "GP toroidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
+
+
+def _poloidal_shape(shot, params=None) -> dict:
+    """Smooth *poloidal* mode shape (re/im vs θ) with a ±2σ band, on the real DIII-D
+    poloidal array (cf. Olofsson fig 10(b)). Needs a shot with the MPID array."""
+    arr, mode, f_khz, t0_ms = _poloidal_mode(shot, params)
+    ms = _gp_shape(mode)
+    return _shape_line(ms, "θ (deg)", {
+        "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
+        "length_scale_rad": round(float(ms.length_scale), 3),
+        "note": "GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
+
+
+# ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
+def _poloidal_arr(shot):
+    theta = _real_theta()
+    arr = [(name, theta[name]) for name in h5source.channel_names(shot)
+           if diiid.family_of(name) == "MPID" and name in theta]
+    arr.sort(key=lambda nt: nt[1])
+    if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
+        raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
+    return arr
+
+
+def _toroidal_n(shot, t0_s, f_khz):
+    """Best-fit toroidal n at (t0, f) from the midplane array — used to de-trend the
+    poloidal phase (the poloidal probes span φ, so the nφ ramp must be removed)."""
+    arr = _toroidal_arr(shot)
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(shot, tuple(n for n, _ in arr))
+    mode = spectral.mode_from_spectrum(spec, phis, t0_s, f_khz * 1e3)
+    return spectral.fit_toroidal_mode(mode).n
+
+
+def _poloidal_mode(shot, params):
+    """Per-probe phase/amplitude across the poloidal array vs θ. The probes span φ, so
+    the toroidal nφ ramp is removed (phase += n·φ → −m·θ + const) using the toroidal n
+    at the same (t0, f). Returns (arr, mode, f_khz, t0_ms)."""
+    t0_ms = _f(params, "time", None)
+    f_khz = _f(params, "f_khz", None)
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, t0_ms)
+    arr = _poloidal_arr(str(shot))
+    thetas = np.array([th for _, th in arr], dtype=float)
+    pphis = np.array([diiid.phi_of(n) or 0.0 for n, _ in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
+    mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
+    detrended = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
+    mode = dataclasses.replace(mode, phase=detrended)
+    return arr, mode, f_khz, t0_ms
+
+
+def _gp_shape(mode):
+    """GP-smoothed complex mode shape with Tier-1-seeded heteroscedastic noise."""
+    z = mode_shape.shape_vector(mode.phase, mode.amplitude)
+    noise = mode_shape.shape_noise(mode.amplitude, mode.phase_error, mode.amplitude_error)
+    return mode_shape.gp_mode_shape(mode.toroidal_angle, z, value_noise=noise)
+
+
+# ── mode_pattern: 2D (θ, φ) modal pattern from toroidal × poloidal shapes ─────
+def _mode_pattern(shot, params=None) -> dict:
+    """Rank-2 (θ, φ) modal pattern (eigspec eq 23) — the outer product of the GP
+    toroidal and poloidal mode shapes, on real DIII-D probe geometry."""
+    _, tmode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    _, pmode, _, _ = _poloidal_mode(shot, params)
+    phi_g, th_g, pattern = mode_shape.mode_pattern_2d(_gp_shape(tmode), _gp_shape(pmode))
+    zmax = float(np.nanmax(np.abs(pattern))) or 1.0
+    return contracts.contour(
+        phi_g.tolist(), th_g.tolist(), pattern.tolist(),
+        {"x": "φ (deg)", "y": "θ (deg)", "z": "mode pattern (a.u.)"},
+        zrange=[-zmax, zmax],
+        meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
+              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry"})
+
+
+# ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
+def _mode_track(shot, params=None) -> dict:
+    """Mode persistence: the full array's shape MAC-similarity to the strongest mode
+    slice vs time (eigspec fig 9). A sustained value near 1 means the same spatial
+    mode persists; a drop marks a mode change. Reads the cached full-array STFT."""
+    f_khz = _f(params, "f_khz", None)
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
+    vals, counts = np.unique(tr.n_by_time, return_counts=True)
+    series = [{"name": "shape similarity to dominant mode",
+               "x": tr.t_ms.tolist(), "y": tr.mac_to_ref.tolist()}]
+    return contracts.line(
+        series, {"x": "time (ms)", "y": "shape similarity (0–1)"},
+        meta={"f_kHz": f_khz, "ref_t_ms": round(float(tr.ref_t_ms), 1),
+              "dominant_n": int(vals[int(counts.argmax())]), "shot": str(shot),
+              "n_probes": len(arr),
+              "note": "1 = same spatial mode persists; drops mark mode changes (fig 9)"})
+
+
+# ── mode_over_time: dominant toroidal mode number n(t) over the shot ─────────
+def _mode_over_time(shot, params=None) -> dict:
+    """Best-fit toroidal mode number n vs time — the n(t) trace. For each time slice
+    the full-array shape is fit for its toroidal n (``track_from_spectrum`` →
+    ``fit_toroidal_mode`` per slice), so you see the mode number evolve through the
+    shot (e.g. an n=1 that appears, persists, then locks). Cursor-independent:
+    evaluated at the global dominant frequency unless ``f_khz`` is given."""
+    f_khz = _f(params, "f_khz", None)
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
+    vals, counts = np.unique(tr.n_by_time, return_counts=True)
+    series = [{"name": "toroidal n", "x": tr.t_ms.tolist(),
+               "y": tr.n_by_time.astype(float).tolist()}]
+    return contracts.line(
+        series, {"x": "time (ms)", "y": "toroidal n"},
+        meta={"f_kHz": f_khz, "dominant_n": int(vals[int(counts.argmax())]),
+              "ref_t_ms": round(float(tr.ref_t_ms), 1), "n_probes": len(arr),
+              "shot": str(shot),
+              "note": "best-fit toroidal n per time slice at the dominant frequency"})
 
 
 _BUILDERS = {
@@ -286,6 +548,11 @@ _BUILDERS = {
     "contour": _contour,
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
+    "mode_shape": _mode_shape,
+    "poloidal_shape": _poloidal_shape,
+    "mode_pattern": _mode_pattern,
+    "mode_track": _mode_track,
+    "mode_over_time": _mode_over_time,
 }
 
 

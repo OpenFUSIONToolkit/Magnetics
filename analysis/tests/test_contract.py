@@ -51,9 +51,11 @@ class TestFitToroidalMode:
         mode.amplitude = np.ones_like(phis)
         mode.coherence = np.ones_like(phis)
         mode.frequency = 5000.0
+        mode.phase_error = None  # faithful to ModeAtFrequencyResult's optional field
         fit = fit_toroidal_mode(mode)
         assert fit.n == n_true
         assert fit.resultant > 0.999
+        assert fit.n_confidence is not None and 0.0 < fit.n_confidence <= 1.0
 
 
 # -----------------------------------------------------------------------
