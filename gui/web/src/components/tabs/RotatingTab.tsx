@@ -126,6 +126,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
     node: modeTrackNode,
   } = useNode(machine, "mode_track");
 
+  // Fetch the best-fit toroidal mode number n(t) over the shot (appears/persists/locks).
+  // Cursor-independent (global dominant frequency), so no time param.
+  const {
+    node: modeOverTimeNode,
+  } = useNode(machine, "mode_over_time");
+
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
     if (specNode && specNode.kind === "heatmap" && specNode.x.length > 0) {
@@ -1232,6 +1238,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
           shapeMeta(modeTrackNode)?.dominant_n != null
             ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`
             : "shape similarity to the dominant mode vs time")}
+        {analysisCard("Toroidal Mode vs Time", modeOverTimeNode, "line", 200,
+          shapeMeta(modeOverTimeNode)?.dominant_n != null
+            ? `best-fit toroidal n(t) @ ${shapeMeta(modeOverTimeNode)?.f_kHz} kHz · dominant n≈${shapeMeta(modeOverTimeNode)!.dominant_n}`
+            : "best-fit toroidal n over time")}
       </div>
     </div>
   );

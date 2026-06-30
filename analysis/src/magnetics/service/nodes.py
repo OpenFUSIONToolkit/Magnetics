@@ -514,6 +514,31 @@ def _mode_track(shot, params=None) -> dict:
               "note": "1 = same spatial mode persists; drops mark mode changes (fig 9)"})
 
 
+# ── mode_over_time: dominant toroidal mode number n(t) over the shot ─────────
+def _mode_over_time(shot, params=None) -> dict:
+    """Best-fit toroidal mode number n vs time — the n(t) trace. For each time slice
+    the full-array shape is fit for its toroidal n (``track_from_spectrum`` →
+    ``fit_toroidal_mode`` per slice), so you see the mode number evolve through the
+    shot (e.g. an n=1 that appears, persists, then locks). Cursor-independent:
+    evaluated at the global dominant frequency unless ``f_khz`` is given."""
+    f_khz = _f(params, "f_khz", None)
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
+    vals, counts = np.unique(tr.n_by_time, return_counts=True)
+    series = [{"name": "toroidal n", "x": tr.t_ms.tolist(),
+               "y": tr.n_by_time.astype(float).tolist()}]
+    return contracts.line(
+        series, {"x": "time (ms)", "y": "toroidal n"},
+        meta={"f_kHz": f_khz, "dominant_n": int(vals[int(counts.argmax())]),
+              "ref_t_ms": round(float(tr.ref_t_ms), 1), "n_probes": len(arr),
+              "shot": str(shot),
+              "note": "best-fit toroidal n per time slice at the dominant frequency"})
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -527,6 +552,7 @@ _BUILDERS = {
     "poloidal_shape": _poloidal_shape,
     "mode_pattern": _mode_pattern,
     "mode_track": _mode_track,
+    "mode_over_time": _mode_over_time,
 }
 
 

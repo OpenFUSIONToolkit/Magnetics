@@ -115,6 +115,17 @@ def test_mode_track_node():
     assert n["meta"].get("ref_t_ms") is not None
 
 
+def test_mode_over_time_node():
+    # n(t): best-fit toroidal mode number per time slice, as a line trace
+    shot = _first_shot()
+    n = nodes.build_node(shot, "mode_over_time")
+    assert n["kind"] == "line"
+    s = n["series"][0]
+    assert len(s["x"]) == len(s["y"]) and len(s["x"]) > 0
+    assert all(float(y).is_integer() for y in s["y"])      # n is integer-valued
+    assert n["meta"].get("dominant_n") is not None
+
+
 def test_fit_quality_node_has_finite_k():
     shot = _first_shot()
     n = nodes.build_node(shot, "fit_quality")
