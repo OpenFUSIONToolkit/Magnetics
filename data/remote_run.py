@@ -43,7 +43,7 @@ from sshauth import askpass_env
 HERE = Path(__file__).resolve().parent          # repo data/ dir (the fetcher lives here)
 LOCAL_OUT = HERE / "datafile"                    # where pulled .h5 land locally
 SYNC_FILES = ["toksearch_fetch.py", "magnetics_signals.py", "inspect_h5.py",
-              "sshauth.py"]
+              "sshauth.py", "device"]   # "device" dir carries the per-device JSON
 
 # Cluster defaults (override via args / CLI flags).
 DEFAULT_HOST = "omega"          # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
@@ -63,6 +63,7 @@ def _log(msg: str) -> None:
 def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
                username=None, password=None, duo=None, remote_dir=DEFAULT_DIR,
                python=DEFAULT_PYTHON, tmin=None, tmax=None, decimate=1,
+               device="diiid", sensor_set=None,
                local_out_dir=None, progress=None) -> str:
     """Sync code → run the pull on the cluster → copy the .h5 back. Returns the
     local path of the fetched file."""
@@ -104,7 +105,11 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
         # 3) run the pull on the cluster via the env interpreter directly.
         remote_out = f"out/shot_{shot}.h5"
         fetch = [python, "toksearch_fetch.py", "--backend", "toksearch",
-                 "--shot", str(shot), "--analysis", analysis, "--out", remote_out]
+                 "--shot", str(shot), "--device", device, "--out", remote_out]
+        if sensor_set:
+            fetch += ["--sensor-set", sensor_set]
+        else:
+            fetch += ["--analysis", analysis]
         if tmin is not None:
             fetch += ["--tmin", str(tmin)]
         if tmax is not None:
