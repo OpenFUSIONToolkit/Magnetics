@@ -22,6 +22,21 @@ function percentile(values: number[], p: number): number {
   return s[lo] + (s[hi] - s[lo]) * (idx - lo);
 }
 
+// Power-gate slider mapping. The slider position is linear in [0, 1000] but the
+// percentile it selects follows a log curve in the "headroom" (100 − percentile):
+// the top of the travel resolves finely (e.g. 97 → 99.5%) where the noise floor
+// matters, instead of a coarse 1%-per-step linear scale.
+const GATE_POS_MAX = 1000;
+const GATE_H_LO = 100; // headroom at pos 0   → 0th percentile (show everything)
+const GATE_H_HI = 0.5; // headroom at pos max → 99.5th percentile (tightest crop)
+function gatePosToPct(pos: number): number {
+  const t = Math.min(1, Math.max(0, pos / GATE_POS_MAX));
+  const h = Math.exp(Math.log(GATE_H_LO) * (1 - t) + Math.log(GATE_H_HI) * t);
+  return Math.round((100 - h) * 10) / 10; // 0.1%-resolution percentile
+}
+// Slider position that yields ≈70% by default (a sensible noise floor to start).
+const GATE_POS_DEFAULT = 227;
+
 // Deterministic mock generator helper (keeps React render pure)
 function generateDeterministicTimeTrace(timeSlice: number, freqPeaks: number[]) {
   const times: number[] = [];
@@ -45,6 +60,10 @@ function generateDeterministicTimeTrace(timeSlice: number, freqPeaks: number[]) 
 
 export default function RotatingTab({ machine }: { machine: string }) {
   const { cursorMs, setCursorMs } = useStore();
+  // Foreground ink that flips with the theme so the raw dB/dt trace stays visible on
+  // the light plot background (it was hard-coded white → invisible in light mode).
+  const dark = useStore((s) => s.theme === "dark");
+  const ink = dark ? "rgba(255,255,255,0.85)" : "rgba(20,34,46,0.9)";
   
   // View states
   const [displayMode, setDisplayMode] = useState<"n" | "power">("n");
@@ -57,10 +76,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [fittype, setFittype] = useState<number>(2); // 0 = circular, 1 = toroidicity, 2 = PEST theta*
   const [btype, setBtype] = useState<number>(4);
   const [smoothing, setSmoothing] = useState<number>(5);
-  // Power gate: a percentile floor (0–99) on cell power; hides low-power noise in
-  // BOTH the power spectrogram (client-side) and the n-map (server n_amp_pct). 0 shows
-  // everything; higher crops more. gateFrac is its 0–1 form for the synthetic fallback.
-  const [powerGate, setPowerGate] = useState<number>(70);
+  // Power gate: a percentile floor on cell power; hides low-power noise in BOTH the
+  // power spectrogram (client-side) and the n-map (server n_amp_pct). The slider stores
+  // a linear position; gatePosToPct maps it to a percentile that scrubs finely near 100%.
+  // gateFrac is its 0–1 form for the synthetic fallback.
+  const [gatePos, setGatePos] = useState<number>(GATE_POS_DEFAULT);
+  const powerGate = gatePosToPct(gatePos);
   const gateFrac = powerGate / 100;
   // STFT window for the LIVE backend spectrogram (ms). Frequency resolution is
   // 1/window, so 2 ms → 500 Hz bins (sharper than the 1 ms / 1 kHz default).
@@ -80,7 +101,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // Resizable layout dimensions
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [specHeight, setSpecHeight] = useState(360);
-  const [panel1Height, setPanel1Height] = useState(290);
+  const [panel1Height, setPanel1Height] = useState(330);
   const [panel2Height, setPanel2Height] = useState(290);
   const [panel3Height, setPanel3Height] = useState(290);
   const [subintervalLeftWidth, setSubintervalLeftWidth] = useState(340);
@@ -198,10 +219,17 @@ export default function RotatingTab({ machine }: { machine: string }) {
     return () => { alive = false; };
   }, [machine]);
 
-  // Detect data source
+  // Detect data source. `hasStaticFiles` only means a spec node loaded — it doesn't
+  // say whether that node came from the live FastAPI backend (real shot data) or the
+  // static mock JSON. The label keys off usingLiveBackend() so real data reads as live.
   const hasStaticFiles = !!specNode && !specError;
-  const dataSourceText = hasStaticFiles ? "Mock Files (Static)" : "Synthetic Generator (Dynamic)";
-  const dataSourceColor = hasStaticFiles ? "var(--good)" : "var(--accent)";
+  const live = usingLiveBackend();
+  const dataSourceText = !hasStaticFiles
+    ? "Synthetic Generator (Dynamic)"
+    : live ? "Live Backend (real data)" : "Mock Files (Static)";
+  const dataSourceColor = !hasStaticFiles
+    ? "var(--accent)"
+    : live ? "var(--good)" : "var(--warn)";
 
   // --- 2. DYNAMIC SYNTHETIC DATA GENERATOR ---
   // When static files aren't found, we synthesize mode activity
@@ -257,7 +285,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       x: timesList,
       y: freqsList,
       z: zMatrix,
-      axes: { x: "Time (ms)", y: "f (kHz)", z: "log power" },
+      axes: { x: "Time (ms)", y: "f (kHz)", z: "log<sub>10</sub> power" },
       discrete: false,
     };
   }, [hasStaticFiles, fftWindow]);
@@ -695,7 +723,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         mode: "lines" as const,
         x: rawTrace.times,
         y: rawTrace.values,
-        line: { color: "#fff", width: 1.2 },
+        line: { color: ink, width: 1.2 },
       },
     ];
 
@@ -739,26 +767,28 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const specSubplotsLayout = {
       grid: { rows: 3, columns: 1, pattern: "coupled" as const },
       xaxis: { title: { text: "Frequency (kHz)" }, anchor: "y3" as const },
-      yaxis: { title: { text: "Coh." }, range: [0, 1.05], domain: [0.7, 1.0] },
-      yaxis2: { title: { text: "n" }, range: [-0.5, 3.5], domain: [0.35, 0.65] },
-      yaxis3: { title: { text: "Power" }, type: "log" as const, domain: [0.0, 0.3] },
+      yaxis: { title: { text: "Coh." }, range: [0, 1.05], domain: [0.74, 1.0] },
+      // Match the spectrogram's |n| palette (0–6) so high-n modes aren't clipped here;
+      // give this panel the largest domain share so all 7 integer ticks have room.
+      yaxis2: { title: { text: "n" }, range: [-0.5, 6.5], dtick: 1, domain: [0.30, 0.66] },
+      yaxis3: { title: { text: "Power" }, type: "log" as const, domain: [0.0, 0.22] },
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
 
     return (
-      <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
+      <div style={{ display: "flex", flexDirection: "row", height: "270px", gap: "0px" }}>
         <div style={{ width: subintervalLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Raw Signal dB/dt (4ms Window)
+            Raw Signal <span style={{ textTransform: "none" }}>dB/dt (4&nbsp;ms window)</span>
           </h4>
-          <Plot data={rawPlotData} height={200} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} />
+          <Plot data={rawPlotData} height={250} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} />
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleSubintervalSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Frequency Spectrum
           </h4>
-          <Plot data={specSubplotsData} layout={specSubplotsLayout} height={200} />
+          <Plot data={specSubplotsData} layout={specSubplotsLayout} height={250} />
         </div>
       </div>
     );
@@ -798,14 +828,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: arrayLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Toroidal Array Waves dBp(φ, t)
+            Toroidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(φ, t)</span>
           </h4>
           <Plot data={toroidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "φ (deg)" } } }} height={200} />
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Poloidal Array Waves dBp(θ, t)
+            Poloidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(θ, t)</span>
           </h4>
           <Plot data={poloidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "θ (deg)" } } }} height={200} />
         </div>
@@ -820,14 +850,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: modeLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Toroidal Phase Fit (n = {String(toroidalMeta?.n_estimate ?? toroidalMeta?.n_fit ?? "")})
+            Toroidal Phase Fit <span style={{ textTransform: "none" }}>(n = {String(toroidalMeta?.n_estimate ?? toroidalMeta?.n_fit ?? "")})</span>
           </h4>
           <NodeView node={processedToroidalNode} height={200} />
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Poloidal Phase Fit (m = {String(poloidalMeta?.m_fit ?? "")}, fittype = {fittype})
+            Poloidal Phase Fit <span style={{ textTransform: "none" }}>(m = {String(poloidalMeta?.m_fit ?? "")}, fittype = {fittype})</span>
           </h4>
           <NodeView node={processedPoloidalNode} height={200} />
         </div>
@@ -1061,7 +1091,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
             </div>
 
             {/* smoothing — coherence-estimation window (backend coherence_smooth) */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "4px" }}
+              title="Frequency-bin width for the coherence estimate — smooths the coherence map and the sub-interval coherence trace."
+            >
               <label htmlFor="smoothing-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
                 Coherence Smoothing: <strong style={{ color: "var(--text)" }}>{smoothing} pts</strong>
               </label>
@@ -1077,23 +1110,23 @@ export default function RotatingTab({ machine }: { machine: string }) {
             </div>
 
             {/* power gate — percentile noise floor, applied to every data-driven view */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "4px" }}
+              title="Hides cells below this power percentile (noise floor) across the spectrogram, n-map, and spectrum."
+            >
               <label htmlFor="power-gate-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                Power Gate: <strong style={{ color: "var(--text)" }}>{powerGate}%</strong>
+                Power Gate: <strong style={{ color: "var(--text)" }}>{powerGate.toFixed(1)}%</strong>
               </label>
               <input
                 id="power-gate-range"
                 type="range"
                 min="0"
-                max="99"
+                max={GATE_POS_MAX}
                 step="1"
-                value={powerGate}
-                onChange={(e) => setPowerGate(parseInt(e.target.value))}
+                value={gatePos}
+                onChange={(e) => setGatePos(parseInt(e.target.value))}
                 style={{ accentColor: "var(--accent)" }}
               />
-              <span style={{ fontSize: "8px", color: "var(--text-dim)", lineHeight: 1.1 }}>
-                Hides cells below this power percentile (noise floor) across the spectrogram, n-map, and spectrum.
-              </span>
             </div>
 
             {/* Advanced Parameters Divider & Header */}
@@ -1305,7 +1338,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: 0, height: specHeight, minHeight: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <h3 style={{ margin: 0, fontWeight: 600, fontSize: "13px" }}>Spectrogram Ḃp(t, f)</h3>
+              <h3 style={{ margin: 0, fontWeight: 600, fontSize: "13px" }}>Spectrogram Ḃ<sub>p</sub>(t, f)</h3>
               <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
                 Active cursor: <strong style={{ color: "var(--good)" }}>{cursorMs ? `${cursorMs.toFixed(1)} ms` : "none"}</strong>
               </span>
@@ -1367,7 +1400,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         {/* Panel 1: Sub-Interval Spectrum */}
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel1Height, minHeight: 0 }}>
           <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
-            Sub-Interval Spectrum (tslice)
+            Sub-Interval Spectrum <span style={{ textTransform: "none" }}>(t-slice)</span>
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
             {renderSubInterval()}

@@ -218,7 +218,7 @@ def _spectrogram(shot, params=None) -> dict:
     z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(), f.tolist(), z.tolist(),
-        {"x": "time (ms)", "y": "f (kHz)", "z": "log₁₀ power"},
+        {"x": "time (ms)", "y": "f (kHz)", "z": "log<sub>10</sub> power"},
         discrete=False,
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
 
