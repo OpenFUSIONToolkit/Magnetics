@@ -124,7 +124,12 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     # ssh-config alias; only prepend user@ when an explicit --username is given.
     gw_host, _, gw_port = gateway.partition(":")
     target = f"{username}@{gw_host}" if username else gw_host
-    cmd = ["ssh", "-o", "ExitOnForwardFailure=yes", "-o",
+    # -C (SSH compression): mdsip ships raw float, but PTDATA waveforms are ~4-5x
+    # compressible, and this laptop->cybele->atlas tunnel is the slow off-network
+    # path (the --tcp on-network path bypasses this function). Measured ~-26% wall
+    # time on a 374 MB rotating pull (80.8s -> 59.8s); zlib CPU is well worth it on
+    # a few-MB/s link. Harmless: it only narrows the win if the link is ever fast.
+    cmd = ["ssh", "-C", "-o", "ExitOnForwardFailure=yes", "-o",
            "ServerAliveInterval=30", "-N"]
     if gw_port:
         cmd += ["-p", gw_port]
