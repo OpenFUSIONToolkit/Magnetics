@@ -39,7 +39,7 @@ SYNC_FILES = ["toksearch_fetch.py", "magnetics_signals.py", "inspect_h5.py",
 # Cluster defaults (override via args / CLI flags). The setup command is run in a
 # login shell before the fetch so `module`/`conda` are available.
 DEFAULT_HOST = "omega"
-DEFAULT_JUMP = "cybele.gat.com"
+DEFAULT_JUMP = "cybele.gat.com:2039"
 DEFAULT_DIR = "~/magnetics_fetch"
 # `conda activate` needs conda's shell function, which a non-interactive `bash -lc`
 # does not get for free — source conda.sh first, or activation silently no-ops and

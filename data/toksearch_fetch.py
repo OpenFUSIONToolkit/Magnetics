@@ -119,12 +119,16 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     lport = s.getsockname()[1]
     s.close()
 
-    # `gateway` is normally an ~/.ssh/config Host alias, so host/port/key/User come
-    # from ssh config; only prepend user@ when an explicit --username overrides it.
-    target = f"{username}@{gateway}" if username else gateway
+    # `gateway` may be a real host, a host:port (GA's cybele listens on 2039), or
+    # an ~/.ssh/config Host alias. Parse an optional :port so we don't depend on an
+    # ssh-config alias; only prepend user@ when an explicit --username is given.
+    gw_host, _, gw_port = gateway.partition(":")
+    target = f"{username}@{gw_host}" if username else gw_host
     cmd = ["ssh", "-o", "ExitOnForwardFailure=yes", "-o",
-           "ServerAliveInterval=30", "-N",
-           "-L", f"{lport}:{mds_host}:{mds_port}", target]
+           "ServerAliveInterval=30", "-N"]
+    if gw_port:
+        cmd += ["-p", gw_port]
+    cmd += ["-L", f"{lport}:{mds_host}:{mds_port}", target]
     prompt = ("(using supplied credentials; approve Duo if pushed)" if env
               else "(your terminal will prompt for password + Duo once)")
     sys.stderr.write(
@@ -443,12 +447,12 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
 # --- public API ---------------------------------------------------------------
 def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                username: str | None = None, password: str | None = None,
-               duo: str | None = None, gateway: str = "cybele",
+               duo: str | None = None, gateway: str = "cybele.gat.com:2039",
                server: str = "atlas.gat.com:8000", tcp: bool = False,
                tmin: float | None = None, tmax: float | None = None,
                decimate: int = 1, workers: int = 4, batch_size: int = 40,
                out: str | None = None, compression: str = "lzf",
-               remote_host: str = "omega", ssh_jump: str = "cybele",
+               remote_host: str = "omega", ssh_jump: str = "cybele.gat.com:2039",
                remote_dir: str = "~/magnetics_fetch", remote_setup: str | None = None,
                progress: Progress | None = None) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
@@ -564,10 +568,9 @@ def main(argv=None) -> int:
                          "round trips; smaller=finer progress/less memory)")
     ap.add_argument("--compression", choices=("none", "lzf", "gzip"),
                     default="lzf")
-    ap.add_argument("--gateway", default="cybele",
-                    help="mdsthin SSH gateway — normally an ~/.ssh/config Host "
-                         "alias (default 'cybele') so host/port/key/User come from "
-                         "ssh config; or a raw host")
+    ap.add_argument("--gateway", default="cybele.gat.com:2039",
+                    help="mdsthin SSH gateway as host[:port] (default "
+                         "cybele.gat.com:2039) — or an ~/.ssh/config Host alias")
     ap.add_argument("--server", default="atlas.gat.com:8000",
                     help="mdsip host:port reached from the gateway")
     ap.add_argument("--tcp", action="store_true",
@@ -579,8 +582,8 @@ def main(argv=None) -> int:
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument("--remote-host", default="omega",
                     help="remote: cluster host to run toksearch on")
-    ap.add_argument("--ssh-jump", default="cybele.gat.com",
-                    help="remote: SSH jump/gateway host (empty to disable)")
+    ap.add_argument("--ssh-jump", default="cybele.gat.com:2039",
+                    help="remote: SSH jump/gateway host[:port] (empty to disable)")
     ap.add_argument("--remote-dir", default="~/magnetics_fetch",
                     help="remote: dir on the cluster to sync the fetcher into")
     ap.add_argument("--remote-setup", default=None,
