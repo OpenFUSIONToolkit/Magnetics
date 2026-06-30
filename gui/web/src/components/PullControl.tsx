@@ -6,7 +6,7 @@
 // /api/fetch/{job_id}/stream → a real per-channel progress bar fills → on done we
 // refresh the shot list and select the new shot. Set a window (tmin/tmax) +
 // decimation to make a pull seconds instead of minutes.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiBase, fetchDevices, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
 import { useStore } from "../store";
 
@@ -21,7 +21,10 @@ export default function PullControl() {
   const [backend, setBackend] = useState("remote");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [duo, setDuo] = useState("1");
+  // Duo two-factor: a push (sends "1") or a typed passcode. A dropdown makes the
+  // choice explicit; the passcode box only appears when "passcode" is selected.
+  const [duoMode, setDuoMode] = useState<"push" | "passcode">("push");
+  const [duoPasscode, setDuoPasscode] = useState("");
   // Prefill a sensible DIII-D flat-top window (ms): transfer time is linear in the
   // samples pulled, so cropping the default ~5 s shot to its active window roughly
   // halves the wire payload. Visible + editable (not a silent backend crop, which
@@ -37,6 +40,10 @@ export default function PullControl() {
   const [busy, setBusy] = useState(false);
   const [frac, setFrac] = useState(0);
   const [msg, setMsg] = useState<string | null>(null);
+  // Live EventSource for the in-flight pull, kept in a ref so the unmount cleanup can
+  // close it. Without this, navigating away mid-pull leaks the stream and its handlers
+  // fire setState on an unmounted component.
+  const esRef = useRef<EventSource | null>(null);
 
   // load supported devices; default the picker to the first one
   useEffect(() => {
@@ -45,6 +52,9 @@ export default function PullControl() {
       if (ds[0]) setDeviceId((cur) => cur || ds[0].id);
     });
   }, []);
+
+  // close any open pull stream when the component unmounts
+  useEffect(() => () => esRef.current?.close(), []);
   const device = devices.find((d) => d.id === deviceId);
 
   if (!usingLiveBackend()) return null;
@@ -62,7 +72,7 @@ export default function PullControl() {
         backend,
         username: username || undefined,
         password: password || undefined,
-        duo: duo || undefined,
+        duo: duoMode === "push" ? "1" : duoPasscode || undefined,
         tmin: num(tmin),
         tmax: num(tmax),
         decimate: num(decimate),
@@ -71,25 +81,28 @@ export default function PullControl() {
         device: deviceId || undefined,
         sensor_set: sensorSet || undefined,
       });
+      esRef.current?.close();  // close a prior stream if one is somehow still open
       const es = new EventSource(`${apiBase()}/api/fetch/${job_id}/stream`);
+      esRef.current = es;
+      const close = () => { es.close(); if (esRef.current === es) esRef.current = null; };
       es.onmessage = (e: MessageEvent) => {
         const f = JSON.parse(e.data as string);
         setFrac(f.progress ?? 0);
         setMsg(f.msg ?? null);
         if (f.status === "done") {
-          es.close();
+          close();
           void init();
           if (f.result?.shot) setMachine(f.result.shot);
           setMsg(`✓ pulled shot ${f.result?.shot}`);
           setBusy(false);
         } else if (f.status === "error") {
-          es.close();
+          close();
           setMsg(`✗ ${f.error}`);
           setBusy(false);
         }
       };
       es.onerror = () => {
-        es.close();
+        close();
         setMsg("✗ progress stream lost (the pull may still be running)");
         setBusy(false);
       };
@@ -160,7 +173,7 @@ export default function PullControl() {
       {needsCreds && (
         <>
           <div className="note pull-hint">
-            leave password/Duo blank if your SSH key (ssh-config alias) is set up
+            leave password blank if your SSH key (ssh-config alias) is set up
           </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -169,9 +182,17 @@ export default function PullControl() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="GA password (blank if key auth)"
             autoComplete="current-password" />
-          <input className="pull-input" value={duo}
-            onChange={(e) => setDuo(e.target.value)}
-            placeholder="Duo: 1 = push, or passcode" />
+          <div className="note pull-hint">Duo two-factor</div>
+          <select className="pull-input" value={duoMode} aria-label="Duo authentication"
+            onChange={(e) => setDuoMode(e.target.value as "push" | "passcode")}>
+            <option value="push">Push notification</option>
+            <option value="passcode">Enter passcode…</option>
+          </select>
+          {duoMode === "passcode" && (
+            <input className="pull-input" value={duoPasscode}
+              onChange={(e) => setDuoPasscode(e.target.value)}
+              placeholder="Duo passcode" inputMode="numeric" autoComplete="one-time-code" />
+          )}
         </>
       )}
       <button className="pull-btn" disabled={busy} onClick={pull}>

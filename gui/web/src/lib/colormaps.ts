@@ -2,8 +2,6 @@
 // discrete toroidal-mode-number palette. Kept in one place so every plot in the
 // app reads consistently (a clean, scientific look).
 
-export const FONT = { family: "IBM Plex Mono, ui-monospace, monospace", size: 11, color: "#c8d4e0" };
-
 // Per-theme Plotly chrome (paper/plot background, axes, font). One source of
 // truth so the shared <Plot> wrapper and every hand-built layout agree. The
 // light values match a clean engineering-paper look; the dark values match the
