@@ -124,7 +124,12 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     # ssh-config alias; only prepend user@ when an explicit --username is given.
     gw_host, _, gw_port = gateway.partition(":")
     target = f"{username}@{gw_host}" if username else gw_host
-    cmd = ["ssh", "-o", "ExitOnForwardFailure=yes", "-o",
+    # -C (SSH compression): mdsip ships raw float, but PTDATA waveforms are ~4-5x
+    # compressible, and this laptop->cybele->atlas tunnel is the slow off-network
+    # path (the --tcp on-network path bypasses this function). Measured ~-26% wall
+    # time on a 374 MB rotating pull (80.8s -> 59.8s); zlib CPU is well worth it on
+    # a few-MB/s link. Harmless: it only narrows the win if the link is ever fast.
+    cmd = ["ssh", "-C", "-o", "ExitOnForwardFailure=yes", "-o",
            "ServerAliveInterval=30", "-N"]
     if gw_port:
         cmd += ["-p", gw_port]
@@ -321,55 +326,85 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                        f"{len(batches)} batches x{batch_size} via tunnel")
 
 
-# --- toksearch backend (cluster, parallel across shots) -----------------------
+# --- toksearch backend (cluster, native local PTDATA) -------------------------
 def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress):
     """Pull pointnames for a shot via a toksearch Pipeline.
 
-    A single shot is one record; the same pipeline parallelizes across shots when
-    given a list (batch-ready). We reduce client-side after the fetch -- toksearch
-    PtDataSignal window/resample options vary by version, so windowing the
-    returned arrays keeps this backend-version agnostic.
+    This is the on-cluster fast path: `toksearch_d3d.PtDataSignal` reads PTDATA
+    natively/locally on the node (the `ptdata` package), bypassing the mdsip TCP
+    protocol the mdsthin backend pays over the wire. Benchmarked ~5-7x faster than
+    `MDSplus.Connection` on omega for a full magnetics channel set.
+
+    PtDataSignal's default `ical=1` produces values + a ms time axis byte-identical
+    (after the float32 cast in the writer) to the mdsthin path's `ptdata2()` -- the
+    two backends write the SAME HDF5. toksearch parallelizes across *shots*, not
+    signals, so a single shot uses `compute_serial`; reduction (window/decimate) is
+    applied client-side after the fetch to stay version-agnostic.
+
+    Requires `toksearch` + the `toksearch_d3d` plugin (PtDataSignal lives in the
+    plugin, not core toksearch -- core is device-agnostic and omits PTDATA).
     """
     try:
-        from toksearch import Pipeline, PtDataSignal
+        from toksearch import Pipeline
     except ImportError:
         sys.exit("Missing dependency: toksearch is not installed in this "
                  "environment. Run on the GA cluster's toksearch env, or use "
                  "--backend mdsthin.")
+    try:
+        from toksearch_d3d import PtDataSignal
+    except ImportError:
+        try:  # older/newer layouts re-export it from core toksearch
+            from toksearch import PtDataSignal  # type: ignore
+        except ImportError:
+            sys.exit("Missing dependency: toksearch_d3d (the DIII-D PTDATA plugin) "
+                     "is not installed. Install toksearch_d3d, or use "
+                     "--backend mdsthin.")
 
     pipe = Pipeline([shot])
     for pt in pointnames:
-        pipe.fetch(pt, PtDataSignal(pt))
+        pipe.fetch(pt, PtDataSignal(pt))  # ical=1 default == ptdata2()
 
     progress(0.0, "running toksearch pipeline")
-    # Prefer the parallel backends; fall back gracefully to serial.
+    # Single shot -> compute_serial (cross-shot parallelism is moot for one record);
+    # fall back to node-local multiprocessing only if serial is somehow unavailable.
     records = None
-    for runner in ("compute_ray", "compute_multiprocessing", "compute_serial"):
+    for runner in ("compute_serial", "compute_multiprocessing"):
         fn = getattr(pipe, runner, None)
         if fn is None:
             continue
         try:
-            records = fn()
+            records = list(fn())
             break
-        except Exception:  # backend unavailable (no ray cluster, etc.)
+        except Exception:
             continue
     if records is None:
         sys.exit("toksearch could not run any compute backend.")
 
     rec = records[0]
+    # failed pointnames land in rec["errors"] (e.g. "Pointname does not exist");
+    # those are the analogue of the mdsthin path's no-data channels.
+    errors = rec["errors"] if "errors" in rec.keys() else {}
     n = len(pointnames)
     results: list[Channel] = []
     for i, pt in enumerate(pointnames, 1):
-        sig = rec.get(pt) if hasattr(rec, "get") else rec[pt]
-        if sig is None:
-            results.append(Channel(pt, ok=False, error="no data"))
+        sig = None if pt in errors else rec[pt]
+        # a toksearch signal is a dict {n_over, n_under, data, times, units}; a
+        # missing pointname is None (and/or recorded in errors above).
+        if sig is None or "data" not in sig:
+            err = "no data"
+            if pt in errors:
+                err = str(errors[pt].get("type", "no data")) if hasattr(
+                    errors[pt], "get") else "no data"
+            results.append(Channel(pt, ok=False, error=err))
         else:
-            # toksearch returns a dict-like {'data':..., 'times':...}
             y = np.atleast_1d(np.asarray(sig["data"]))
-            t = np.atleast_1d(np.asarray(sig.get("times", sig.get("time"))))
-            t, y = _reduce(t, y, tmin, tmax, stride)
-            results.append(Channel(pt, t.astype(np.float64, copy=False),
-                                   y.astype(np.float32, copy=False), ok=True))
+            t = np.atleast_1d(np.asarray(sig["times"]))
+            if y.size <= 1:  # degenerate -> treat as no data
+                results.append(Channel(pt, ok=False, error="no data"))
+            else:
+                t, y = _reduce(t, y, tmin, tmax, stride)
+                results.append(Channel(pt, t.astype(np.float64, copy=False),
+                                       y.astype(np.float32, copy=False), ok=True))
         progress(i / n, pt)
     return results
 

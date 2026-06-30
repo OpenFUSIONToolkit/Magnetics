@@ -19,8 +19,12 @@ export default function PullControl() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [duo, setDuo] = useState("1");
-  const [tmin, setTmin] = useState("");
-  const [tmax, setTmax] = useState("");
+  // Prefill a sensible DIII-D flat-top window (ms): transfer time is linear in the
+  // samples pulled, so cropping the default ~5 s shot to its active window roughly
+  // halves the wire payload. Visible + editable (not a silent backend crop, which
+  // would hide mode evolution outside the window) — clear both for the full shot.
+  const [tmin, setTmin] = useState("1000");
+  const [tmax, setTmax] = useState("5000");
   const [decimate, setDecimate] = useState("");
   const [busy, setBusy] = useState(false);
   const [frac, setFrac] = useState(0);
@@ -100,6 +104,9 @@ export default function PullControl() {
           onChange={(e) => setTmax(e.target.value)} placeholder="tmax ms" />
         <input className="pull-input" value={decimate}
           onChange={(e) => setDecimate(e.target.value)} placeholder="decim." />
+      </div>
+      <div className="note pull-hint">
+        window (ms) prefilled to flat-top — clear tmin/tmax for the whole shot
       </div>
 
       {needsCreds && (
