@@ -229,12 +229,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   // Detect data source. `hasStaticFiles` only means a spec node loaded — it doesn't
   // say whether that node came from the live FastAPI backend (real shot data) or the
-  // static mock JSON. The label keys off usingLiveBackend() so real data reads as live.
+  // static mock JSON. The label keys off usingLiveBackend() so real data reads as the
+  // device it came from (e.g. "DIII-D").
   const hasStaticFiles = !!specNode && !specError;
   const live = usingLiveBackend();
+  const deviceName = useStore((s) => s.machines).find((m) => m.id === machine)?.device;
   const dataSourceText = !hasStaticFiles
     ? "Synthetic Generator (Dynamic)"
-    : live ? "Live Backend (real data)" : "Mock Files (Static)";
+    : live ? deviceName ?? "Live Backend" : "Mock Files (Static)";
   const dataSourceColor = !hasStaticFiles
     ? "var(--accent)"
     : live ? "var(--good)" : "var(--warn)";
