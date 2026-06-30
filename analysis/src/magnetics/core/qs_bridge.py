@@ -154,6 +154,7 @@ def fit_to_amplitude_node(fit_ds) -> dict:
     """Mode amplitude ± 1σ vs time for each fitted mode → LineNode.
 
     meta.sigma[i] is the per-series error band consumed by lineTraces() in the GUI.
+    meta.legend_title is "n" when all poloidal m=0, else "m/n" (mirrors plot_fit_modes).
     """
     from ..core import contracts
 
@@ -174,12 +175,14 @@ def fit_to_amplitude_node(fit_ds) -> dict:
         })
         sigma_bands.append(np.round(amp_err * _T_TO_G, 4).tolist())
 
+    legend_title = "n" if np.all(ms_vals == 0) else "m/n"
     K = float(fit_ds.attrs.get("condition_number", fit_ds.attrs.get("raw_cn", 0.0)))
     return contracts.line(
         series,
         {"x": "time (ms)", "y": "amplitude (G)"},
         meta={
             "sigma": sigma_bands,
+            "legend_title": legend_title,
             "condition_number": round(K, 2),
             "shot": str(fit_ds.attrs.get("shot", "")),
         },
@@ -190,6 +193,8 @@ def fit_to_phase_t_node(fit_ds) -> dict:
     """Mode phase ± 1σ vs time for each fitted mode → LineNode.
 
     Flat phase = locked mode; winding ramp = rotating mode.
+    meta.phase_visible[i] mirrors plot_fit_modes: only draw phase for modes
+    whose 90th-percentile amplitude exceeds 10% of the global maximum.
     """
     from ..core import contracts
 
@@ -198,6 +203,11 @@ def fit_to_phase_t_node(fit_ds) -> dict:
     ms_vals = fit_ds["fit_ms"].values
     coeffs = fit_ds["fit_coeffs"].values
     sigmas = fit_ds["fit_sigmas"].values
+
+    # Amplitude threshold from plot_fit_modes
+    p90_amps = [np.percentile(np.abs(coeffs[i]), 90) for i in range(len(ns))]
+    max_amp = max(p90_amps) if p90_amps else 1.0
+    phase_visible = [bool(a > 0.1 * max_amp) for a in p90_amps]
 
     series = []
     sigma_bands = []
@@ -216,6 +226,7 @@ def fit_to_phase_t_node(fit_ds) -> dict:
         {"x": "time (ms)", "y": "phase (deg)"},
         meta={
             "sigma": sigma_bands,
+            "phase_visible": phase_visible,
             "condition_number": round(K, 2),
             "shot": str(fit_ds.attrs.get("shot", "")),
         },
@@ -291,3 +302,105 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
             "note": "SLCONTOUR φ–t at fixed θ",
         },
     )
+
+
+# ── Section 6: fit quality time series ───────────────────────────────────────
+
+def fit_to_chi_sq_node(fit_ds) -> dict:
+    """Reduced χ² vs time → LineNode (log scale, reference at y=1)."""
+    from ..core import contracts
+
+    t_ms = _time_ms(fit_ds)
+    chi_sq = fit_ds["red_chi_sq"].values
+    return contracts.line(
+        [{"name": "χ²", "x": np.round(t_ms, 2).tolist(),
+          "y": np.round(chi_sq, 6).tolist()}],
+        {"x": "time (ms)", "y": "reduced χ²"},
+        meta={"log_y": True, "reference_line": 1.0,
+              "shot": str(fit_ds.attrs.get("shot", ""))},
+    )
+
+
+def fit_to_fit_signals_node(fit_ds) -> dict:
+    """Fitted signal per channel vs time → LineNode (Section 6 middle panel)."""
+    from ..core import contracts
+
+    t_ms = _time_ms(fit_ds)
+    channels = list(fit_ds["channel"].values)
+    series = [
+        {"name": c, "x": np.round(t_ms, 2).tolist(),
+         "y": np.round(fit_ds["signal"].sel(channel=c).values, 8).tolist()}
+        for c in channels
+    ]
+    return contracts.line(series, {"x": "time (ms)", "y": "signal (T)"},
+                          meta={"channels": channels,
+                                "shot": str(fit_ds.attrs.get("shot", ""))})
+
+
+def fit_to_fit_residuals_node(fit_ds) -> dict:
+    """Fit residuals per channel vs time → LineNode (Section 6 bottom panel).
+
+    meta.worst_n = 6: frontend highlights the 6 channels with largest peak-to-peak residual.
+    """
+    from ..core import contracts
+
+    t_ms = _time_ms(fit_ds)
+    channels = list(fit_ds["channel"].values)
+    series = [
+        {"name": c, "x": np.round(t_ms, 2).tolist(),
+         "y": np.round(fit_ds["residual"].sel(channel=c).values, 8).tolist()}
+        for c in channels
+    ]
+    return contracts.line(series, {"x": "time (ms)", "y": "residual (T)"},
+                          meta={"channels": channels, "worst_n": 6,
+                                "shot": str(fit_ds.attrs.get("shot", ""))})
+
+
+# ── Section 4: signal conditioning (raw vs prepared) ─────────────────────────
+
+def prepared_to_signal_node(raw_ds, prepared_ds) -> dict:
+    """Raw vs prepared signals for the filtered channel subset → LineNode.
+
+    Series are interleaved: [prepared_ch0, raw_ch0, prepared_ch1, raw_ch1, ...].
+    meta.pairs describes which series indices belong to each channel so the
+    frontend can render checkboxes and toggle pairs together.
+
+    Mirrors plots.plot_signal: raw is shifted so raw[t0] == prepared[t0],
+    making the bandpass/detrend effect visible by comparing transparencies.
+    """
+    from ..core import contracts
+
+    channels = list(prepared_ds["channel"].values)
+    # prepared time in seconds → ms
+    t_prep_s = prepared_ds["time"].values
+    t_prep_ms = np.round(t_prep_s * 1e3, 3)
+    raw_time_s = raw_ds["time"].values   # seconds
+
+    series = []
+    pairs = []
+    for ch_idx, c in enumerate(channels):
+        prep_sig = prepared_ds["signal"].sel(channel=c).values
+
+        # Interpolate raw to the prepared time grid (robust against grid misalignment)
+        raw_sig = raw_ds["signal"].sel(channel=c).values
+        raw_at_prep = np.interp(t_prep_s, raw_time_s, raw_sig)
+        # Shift raw so raw[t0] == prepared[t0] (makes filtering effect visible)
+        raw_shifted = raw_at_prep - raw_at_prep[0] + prep_sig[0]
+
+        prep_idx = len(series)
+        series.append({
+            "name": c,
+            "x": t_prep_ms.tolist(),
+            "y": np.round(prep_sig, 8).tolist(),
+        })
+        raw_idx = len(series)
+        series.append({
+            "name": f"{c} (raw)",
+            "x": t_prep_ms.tolist(),
+            "y": np.round(raw_shifted, 8).tolist(),
+        })
+        pairs.append({"channel": c, "prepared_idx": prep_idx, "raw_idx": raw_idx})
+
+    return contracts.line(series, {"x": "time (ms)", "y": "signal (T)"},
+                          meta={"pairs": pairs,
+                                "shot": str(prepared_ds.attrs.get("shot", ""))})
