@@ -25,6 +25,17 @@ UNIFORM_NAME = "MPID66M000"  # first generated rotating-array name (phi=0)
 NONUNIFORM_NAME = "MPI_NONUNIFORM"
 
 
+class _RecordingTimeDataset:
+    def __init__(self, values):
+        self._values = np.asarray(values)
+        self.shape = self._values.shape
+        self.reads = []
+
+    def __getitem__(self, key):
+        self.reads.append(key)
+        return self._values[key]
+
+
 @pytest.fixture()
 def shot(tmp_path, monkeypatch):
     """Write one synthetic shot, point h5source at it, refresh its index; yield shot id."""
@@ -93,6 +104,28 @@ def test_stride_window_equals_full_slice(shot):
     sl = _reference_slice(t_full, tmin, tmax, 7)
     np.testing.assert_array_equal(tw, t_full[sl])
     np.testing.assert_array_equal(dw, d_full[sl])
+
+
+def test_resolve_slice_does_not_materialize_full_time_axis():
+    """Bounded windows use scalar binary search, not ``time[:]``."""
+    time = np.cumsum(np.linspace(0.1, 0.5, 4096))
+    ds = _RecordingTimeDataset(time)
+    tmin = float((time[777] + time[778]) / 2.0)
+    tmax = float((time[1999] + time[2000]) / 2.0)
+
+    sl = h5source._resolve_slice(ds, tmin, tmax, stride=5)
+    expected = _reference_slice(time, tmin, tmax, 5)
+
+    assert (sl.start, sl.stop, sl.step) == (expected.start, expected.stop, expected.step)
+    assert slice(None, None, None) not in ds.reads
+    assert len(ds.reads) <= 2 * int(np.ceil(np.log2(time.size)) + 1)
+
+
+def test_resolve_slice_open_bounds_do_not_touch_time_axis():
+    ds = _RecordingTimeDataset(np.arange(128, dtype=np.float64))
+    sl = h5source._resolve_slice(ds, None, None, stride=3)
+    assert (sl.start, sl.stop, sl.step) == (0, 128, 3)
+    assert not ds.reads
 
 
 def test_load_data_window_matches_channel_window(shot):

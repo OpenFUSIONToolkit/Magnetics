@@ -7,7 +7,9 @@ from __future__ import annotations
 import pytest
 
 from magnetics.core import contracts
+from magnetics.data import h5source
 from magnetics.service import nodes
+from tests import synthetic_h5
 
 
 def _first_shot():
@@ -49,6 +51,42 @@ def test_fit_quality_node_has_finite_k():
     n = nodes.build_node(shot, "fit_quality")
     assert n["kind"] == "metrics"
     assert n["fields"]
+
+
+def test_phase_fit_reads_only_cursor_window(tmp_path, monkeypatch):
+    shot = 999997
+    names = ["MPID66M020", "MPID66M067", "MPI66M307D", "MPI66M340D"]
+    phis = [20.0, 67.0, 307.0, 340.0]
+    channels, _time_ms, _ = synthetic_h5.rotating_array(
+        phis, names=names, n=2, f_khz=8.0, fs_khz=500.0, dur_ms=30.0)
+    synthetic_h5.write_shot(tmp_path / "phase_fit.h5", channels, shot=shot)
+
+    monkeypatch.setenv("MAGNETICS_DATA_DIR", str(tmp_path))
+    h5source.refresh()
+    nodes.refresh()
+
+    real_load_window_stack = nodes.h5source.load_window_stack
+    calls = []
+
+    def record_load_window_stack(shot_id, channel_names, tmin_ms=None,
+                                 tmax_ms=None, stride=1):
+        calls.append((tuple(channel_names), tmin_ms, tmax_ms, stride))
+        return real_load_window_stack(shot_id, channel_names, tmin_ms, tmax_ms, stride)
+
+    monkeypatch.setattr(nodes.h5source, "load_window_stack", record_load_window_stack)
+
+    node = nodes.build_node(
+        str(shot),
+        "phase_fit",
+        {"time": "10.0", "window_ms": "1.5", "f_khz": "8.0"},
+    )
+
+    assert node["kind"] == "scatter2d"
+    assert calls
+    _channel_names, tmin_ms, tmax_ms, stride = calls[-1]
+    assert tmin_ms == 8.5
+    assert tmax_ms == 11.5
+    assert stride == 1
 
 
 def test_unknown_node_raises():

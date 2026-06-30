@@ -63,7 +63,7 @@ def _array_channels(shot, families: tuple[str, ...]):
     return out
 
 
-def _stack(shot, names):
+def _stack(shot, names, *, tmin_ms=None, tmax_ms=None, stride: int = 1):
     """Load channels, truncate to common length, return (t_ms f64, mat[ch,time] f32).
 
     A toroidal/poloidal array shares one digitizer clock, so the file is opened
@@ -72,7 +72,7 @@ def _stack(shot, names):
     The matrix stays float32 (Mirnov data is 12–16-bit ADC, lossless in float32);
     only the time axis needs float64.
     """
-    t0, datas = h5source.load_window_stack(shot, names)
+    t0, datas = h5source.load_window_stack(shot, names, tmin_ms, tmax_ms, stride)
     nmin = min(d.size for d in datas)
     t = t0[:nmin]
     mat = np.array([d[:nmin] for d in datas], dtype=np.float32)
@@ -255,14 +255,18 @@ def _phase_fit(shot, params=None) -> dict:
         raise ValueError("not enough toroidal-array channels for a phase fit")
     names = [n for n, _ in arr]
     phis = np.array([p for _, p in arr], dtype=float)
-    t_ms, mat = _stack(shot, names)               # mat[ch, time]
     f_khz = _f(params, "f_khz", 5.0)
     # honor the GUI time cursor: a small window around t0 (ms) → t_range (s)
     t0_ms = _f(params, "time", None)
+    tmin_ms = None
+    tmax_ms = None
     t_range = None
     if t0_ms is not None:
         w = _f(params, "window_ms", 2.0)
-        t_range = ((t0_ms - w) * 1e-3, (t0_ms + w) * 1e-3)
+        tmin_ms = t0_ms - w
+        tmax_ms = t0_ms + w
+        t_range = (tmin_ms * 1e-3, tmax_ms * 1e-3)
+    t_ms, mat = _stack(shot, names, tmin_ms=tmin_ms, tmax_ms=tmax_ms)
     mode = spectral.extract_mode_at_frequency(
         mat, phis, np.asarray(t_ms, dtype=float) * 1e-3,
         frequency=f_khz * 1e3, t_range=t_range)

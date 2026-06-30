@@ -115,19 +115,33 @@ def channel_names(shot: str | int) -> list[str]:
         return [k for k in h5.keys() if k != "_timebases"]
 
 
+def _search_time_index(time_ds, value: float, side: str) -> int:
+    """Dataset-backed equivalent of ``np.searchsorted(time_ds[:], value, side)``."""
+    lo = 0
+    hi = time_ds.shape[0]
+    target = float(value)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        sample = float(np.asarray(time_ds[mid]))
+        if sample < target or (side == "right" and sample <= target):
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 def _resolve_slice(time_ds, tmin_ms, tmax_ms, stride: int) -> slice:
     """Sample slice ``[i0:i1:stride]`` for the ``[tmin_ms, tmax_ms]`` window
-    (inclusive bounds; ``None`` = open). The time vector is read once and the
-    indices come from ``searchsorted``, so the bounds are exact for uniform AND
-    nonuniform clocks; an all-open window returns the full strided span without
-    touching the time axis at all.
+    (inclusive bounds; ``None`` = open). Bounds match ``np.searchsorted`` on the
+    full time vector, but are resolved by scalar binary search so bounded reads do
+    not materialize the full time axis. An all-open window returns the full strided
+    span without touching the time axis at all.
     """
     n = time_ds.shape[0]
     if tmin_ms is None and tmax_ms is None:
         return slice(0, n, stride)
-    t = np.asarray(time_ds[:])
-    i0 = 0 if tmin_ms is None else int(np.searchsorted(t, tmin_ms, "left"))
-    i1 = n if tmax_ms is None else int(np.searchsorted(t, tmax_ms, "right"))
+    i0 = 0 if tmin_ms is None else _search_time_index(time_ds, tmin_ms, "left")
+    i1 = n if tmax_ms is None else _search_time_index(time_ds, tmax_ms, "right")
     return slice(i0, i1, stride)
 
 

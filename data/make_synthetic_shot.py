@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Write a SYNTHETIC DIII-D shot HDF5 into data/datafile/ — no GA account needed.
 
-Builds the real MPID (integrated Bp) and MPI_BDOT (raw dB/dt) toroidal arrays at
-their real toroidal angles, injects a clean rotating n-mode, and writes the file
-through the REAL streaming writer (``stream_channels_to_h5``). The backend then
-serves it through the real ``nodes.py`` / ``spectral.py`` pipeline exactly like a
-fetched shot — only the network pull and real plasma physics are absent.
+Builds the real MPID (integrated Bp) 66M toroidal array plus the MPI_BDOT 307/340
+MODESPEC pair at their real toroidal angles, injects a clean rotating n-mode, and
+writes the file through the REAL streaming writer (``stream_channels_to_h5``).
+The backend then serves it through the real ``nodes.py`` / ``spectral.py``
+pipeline exactly like a fetched shot — only the network pull and real plasma
+physics are absent.
 
     cd analysis && uv run python ../data/make_synthetic_shot.py     # -> shot_999999.h5
 
@@ -21,6 +22,8 @@ import numpy as np
 import magnetics_signals as ms
 from toksearch_fetch import DATA_DIR, Channel, stream_channels_to_h5
 
+_BDOT_SPECTROGRAM_PAIR = ("MPI66M307D", "MPI66M340D")
+
 
 def _phi(name: str) -> float:
     """Toroidal angle (deg) from the trailing digit run, same as data/diiid.py."""
@@ -30,7 +33,7 @@ def _phi(name: str) -> float:
 
 def _build_channels(*, n: int, f_khz: float, fs_khz: float, dur_ms: float,
                     seed: int) -> list[Channel]:
-    """A coherent rotating mode imprinted on the 66M Bp + bdot toroidal rings.
+    """A coherent rotating mode imprinted on the Bp ring + BDOT spectrogram pair.
 
     Channel j sees ``cos(2π f t − n·φ_j)``: same frequency, a toroidal phase ramp
     set by the mode number n — so the cross-spectrogram recovers n and the contour
@@ -44,9 +47,12 @@ def _build_channels(*, n: int, f_khz: float, fs_khz: float, dur_ms: float,
     envelope = 1.0 + 0.3 * np.sin(2.0 * np.pi * 2.0 * t_s)   # slow amplitude wobble
 
     chans: list[Channel] = []
-    # Raw dB/dt probes (MODESPEC spectrogram pair): derivative of the mode → the
-    # ~ω amplitude and the +90° phase of a cosine's time-derivative.
-    for name in ms.GROUPS["MPI_BDOT"]:
+    # Raw dB/dt probes (MODESPEC spectrogram pair): use the 307/340 pair mirrored
+    # by the spectral tests. The current service chooses the min/max toroidal
+    # separation in the available BDOT set; a full 20..340 ring has Δφ=320°, which
+    # aliases n=2 to 0 in the two-point estimator. The 33° pair keeps the no-account
+    # demo honest: the GUI's mode-number node recovers the injected default n=2.
+    for name in _BDOT_SPECTROGRAM_PAIR:
         ph = np.deg2rad(n * _phi(name))
         sig = w * 5e-4 * envelope * np.cos(w * t_s - ph + np.pi / 2)
         sig += 0.04 * w * 5e-4 * rng.standard_normal(n_samp)
