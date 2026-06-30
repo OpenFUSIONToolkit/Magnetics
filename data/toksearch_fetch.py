@@ -100,7 +100,7 @@ def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
 
 
 @contextlib.contextmanager
-def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
+def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None, compress=True):
     """Open ONE authenticated SSH local-forward to the mdsip server.
 
     Off-cluster, parallel mdsip needs parallelism WITHOUT N separate logins: with
@@ -126,6 +126,8 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     target = f"{username}@{gw_host}" if username else gw_host
     cmd = ["ssh", "-o", "ExitOnForwardFailure=yes", "-o",
            "ServerAliveInterval=30", "-N"]
+    if compress:
+        cmd.append("-C")  # gzip the tunnel — smooth magnetics signals compress well
     if gw_port:
         cmd += ["-p", gw_port]
     cmd += ["-L", f"{lport}:{mds_host}:{mds_port}", target]
@@ -161,7 +163,7 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
 # --- mdsthin backend (laptop / remote, parallel across channels) --------------
 def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                    tmin, tmax, stride, workers, batch_size, progress,
-                   ssh_env=None):
+                   ssh_env=None, uniform_time=True, compress=True):
     """Pull pointnames concurrently over a pool of mdsthin connections.
 
     Each worker owns its own connection (mdsthin Connections are not thread-safe
@@ -206,14 +208,30 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     suffix = _reduce_suffix()
     data_expr = f"(ptdata2($, $)){suffix}"          # $1=pointname, $2=shot
     time_expr = f"dim_of((ptdata2($, $)){suffix})"
+    # Time-array elision (the biggest wire-byte win from the benchmark): PTDATA is
+    # uniformly sampled, so the float64 time vector (the LARGER half of the
+    # transfer) is redundant — fetch only its endpoints t0/tN and rebuild
+    # time = linspace(t0, tN, n) locally. ~60% fewer bytes. `uniform_time=False`
+    # keeps the full array (for a non-uniformly-sampled channel).
+    _dim = f"dim_of((ptdata2($, $)){suffix})"
+    t0_expr = f"({_dim})[0]"
+    tn_expr = f"({_dim})[size({_dim}) - 1]"
 
     def _arr(x):
         # getMany values and conn.get() results are Descriptors -> ndarray
         return np.atleast_1d(x.data() if hasattr(x, "data") else np.asarray(x))
 
+    def _scalar(x):
+        v = x.data() if hasattr(x, "data") else np.asarray(x)
+        return float(np.atleast_1d(v)[0])
+
     def _good(arr):
         # ptdata2 returns a length-1 [0] when a pointname has no data
         return not (arr.size <= 1 and (arr.size == 0 or arr[0] == 0))
+
+    def _rebuild_time(t0, tn, n):
+        return (np.full(1, t0) if n == 1
+                else np.linspace(t0, tn, n)).astype(np.float64, copy=False)
 
     n = len(pointnames)
 
@@ -234,10 +252,14 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
             frac = state["done"] / n
         progress(frac, name)
 
-    def fetch_one(conn, pt):  # per-channel fallback (2 round trips)
+    def fetch_one(conn, pt):  # per-channel fallback
         data = np.atleast_1d(conn.get(f"_s = {data_expr}", pt, shot).data())
         if not _good(data):
             return None, None, False
+        if uniform_time:
+            t0 = _scalar(conn.get("(dim_of(_s))[0]"))
+            tn = _scalar(conn.get("(dim_of(_s))[size(dim_of(_s)) - 1]"))
+            return _rebuild_time(t0, tn, data.size), data, True
         t = np.atleast_1d(conn.get("dim_of(_s)").data())
         return t, data, True
 
@@ -253,7 +275,11 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                 gm = conn.getMany()
                 for i, pt in enumerate(batch):
                     gm.append(f"d{i}", data_expr, pt, shot)
-                    gm.append(f"t{i}", time_expr, pt, shot)
+                    if uniform_time:  # two scalars instead of the full time array
+                        gm.append(f"a{i}", t0_expr, pt, shot)
+                        gm.append(f"b{i}", tn_expr, pt, shot)
+                    else:
+                        gm.append(f"t{i}", time_expr, pt, shot)
                 gm.execute()
                 for i, pt in enumerate(batch):
                     try:
@@ -261,7 +287,11 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                         if not _good(y):
                             out.append(Channel(pt, ok=False, error="no data"))
                             continue
-                        t = _arr(gm.get(f"t{i}"))
+                        if uniform_time:
+                            t = _rebuild_time(_scalar(gm.get(f"a{i}")),
+                                              _scalar(gm.get(f"b{i}")), y.size)
+                        else:
+                            t = _arr(gm.get(f"t{i}"))
                         out.append(Channel(
                             pt, t, y.astype(np.float32, copy=False), ok=True))
                     except Exception as exc:  # per-channel error in the batch
@@ -316,7 +346,8 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
         return run_all(lambda: Connection(f"{username}@{mds_host}:{mds_port}"),
                        f"{len(batches)} batches x{batch_size} ({workers} conns)")
     # Off-network: one SSH tunnel, then a few TCP mdsip conns through it.
-    with _ssh_tunnel(username, gateway, mds_host, mds_port, env=ssh_env) as lport:
+    with _ssh_tunnel(username, gateway, mds_host, mds_port, env=ssh_env,
+                     compress=compress) as lport:
         return run_all(lambda: Connection(f"{username}@127.0.0.1:{lport}"),
                        f"{len(batches)} batches x{batch_size} via tunnel")
 
@@ -450,8 +481,9 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                duo: str | None = None, gateway: str = "cybele.gat.com:2039",
                server: str = "atlas.gat.com:8000", tcp: bool = False,
                tmin: float | None = None, tmax: float | None = None,
-               decimate: int = 1, workers: int = 4, batch_size: int = 40,
+               decimate: int = 1, workers: int = 8, batch_size: int = 40,
                out: str | None = None, compression: str = "lzf",
+               uniform_time: bool = True, ssh_compress: bool = True,
                remote_host: str = "omega", ssh_jump: str = "cybele.gat.com:2039",
                remote_dir: str = "~/magnetics_fetch", remote_setup: str | None = None,
                progress: Progress | None = None) -> str:
@@ -515,7 +547,8 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                 shot, pointnames, username=username, gateway=gateway,
                 server=server, tcp=tcp, tmin=tmin, tmax=tmax, stride=stride,
                 workers=workers, batch_size=batch_size, progress=progress,
-                ssh_env=ssh_env)
+                ssh_env=ssh_env, uniform_time=uniform_time,
+                compress=ssh_compress)
         finally:
             _ssh_cleanup()
     else:
@@ -561,7 +594,7 @@ def main(argv=None) -> int:
     ap.add_argument("--tmax", type=float, default=None, help="window end (ms)")
     ap.add_argument("--decimate", type=int, default=1,
                     help="keep every Nth sample (quasi-stationary only)")
-    ap.add_argument("--workers", type=int, default=4,
+    ap.add_argument("--workers", type=int, default=8,
                     help="mdsthin: parallel connections (each runs whole batches)")
     ap.add_argument("--batch-size", type=int, default=40,
                     help="mdsthin: channels per getMany round trip (bigger=fewer "
@@ -579,6 +612,13 @@ def main(argv=None) -> int:
                     help="GA username (mdsthin/remote); optional when the gateway "
                          "ssh-config alias already sets User")
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
+    # speed knobs (defaults are the fastest config from the benchmark)
+    ap.add_argument("--full-time", action="store_true",
+                    help="fetch the full per-channel time array instead of "
+                         "reconstructing it from endpoints (≈2× more bytes; only "
+                         "needed for a non-uniformly-sampled channel)")
+    ap.add_argument("--no-ssh-compress", action="store_true",
+                    help="disable SSH (-C) compression of the tunnel")
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument("--remote-host", default="omega",
                     help="remote: cluster host to run toksearch on")
@@ -596,9 +636,10 @@ def main(argv=None) -> int:
                tcp=args.tcp, tmin=args.tmin, tmax=args.tmax,
                decimate=args.decimate, workers=args.workers,
                batch_size=args.batch_size, out=args.out,
-               compression=args.compression, remote_host=args.remote_host,
-               ssh_jump=args.ssh_jump, remote_dir=args.remote_dir,
-               remote_setup=args.remote_setup)
+               compression=args.compression, uniform_time=not args.full_time,
+               ssh_compress=not args.no_ssh_compress,
+               remote_host=args.remote_host, ssh_jump=args.ssh_jump,
+               remote_dir=args.remote_dir, remote_setup=args.remote_setup)
     return 0
 
 

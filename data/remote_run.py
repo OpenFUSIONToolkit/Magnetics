@@ -79,7 +79,7 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
 
     try:
         # 1) establish ONE authenticated master connection.
-        master = ["ssh", *ctl, "-o", "ExitOnForwardFailure=yes"]
+        master = ["ssh", "-C", *ctl, "-o", "ExitOnForwardFailure=yes"]
         if jump:
             master += ["-J", f"{username}@{jump}"]
         master += [target, "true"]
