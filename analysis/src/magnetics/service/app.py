@@ -56,6 +56,30 @@ def machines():
     return real if real else mock.MACHINES
 
 
+@app.get("/api/devices")
+def devices():
+    """List device configs (data/device/*.json) + their sensor-set names, so the GUI
+    can offer device + sensor-set selection for a pull. `id` is the --device value;
+    `sensor_sets` are the names selectable as --sensor-set (composites included)."""
+    h5source._ensure_catalog_on_path()
+    try:
+        import toksearch_fetch  # repo-root data/ module (also exposes DEVICE_DIR)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for path in sorted(Path(toksearch_fetch.DEVICE_DIR).glob("*.json")):
+        try:
+            d = json.loads(path.read_text())
+        except Exception:  # noqa: BLE001 — skip an unparseable device file
+            continue
+        out.append({
+            "id": path.stem,                       # e.g. "diiid" → --device diiid
+            "name": d.get("name", path.stem),      # e.g. "DIII-D"
+            "sensor_sets": list(d.get("sensor_sets", {}).keys()),
+        })
+    return out
+
+
 @app.get("/api/node/{shot}/{node_id}")
 def node(shot: str, node_id: str, request: Request):
     """A single bare kind-node built from real fetched shot data — the REST shape
@@ -79,6 +103,9 @@ class FetchRequest(BaseModel):
     username: str | None = None
     password: str | None = None  # fed to ssh via askpass; localhost only, not stored
     duo: str | None = None       # Duo passcode, or "1" for push (default)
+    # signal selection (None → fetcher defaults: device "diiid", analysis groups)
+    device: str | None = None        # data/device/<device>.json
+    sensor_set: str | None = None    # a set under the device's sensor_sets; overrides analysis
     # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
     remote_host: str | None = None
     ssh_jump: str | None = None
@@ -115,7 +142,10 @@ def post_fetch(req: FetchRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500,
                             detail=f"fetcher unavailable: {exc}") from exc
-    remote_kw = {k: v for k, v in {
+    # only pass overrides that are set, so the fetcher's own defaults apply
+    # otherwise (e.g. device "diiid", analysis-group selection).
+    fetch_kw = {k: v for k, v in {
+        "device": req.device, "sensor_set": req.sensor_set,
         "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
         "remote_dir": req.remote_dir, "remote_python": req.remote_python,
     }.items() if v is not None}
@@ -134,7 +164,7 @@ def post_fetch(req: FetchRequest) -> dict:
                 req.shot, req.analysis, backend=req.backend,
                 username=req.username, password=req.password, duo=req.duo,
                 tmin=req.tmin, tmax=req.tmax, decimate=req.decimate,
-                progress=on_progress, **remote_kw)
+                progress=on_progress, **fetch_kw)
             h5source.refresh()
             nodes.refresh()
             _job_set(jid, status="done", progress=1.0, msg="done",
