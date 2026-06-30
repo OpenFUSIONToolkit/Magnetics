@@ -106,6 +106,25 @@ const CHANNEL_FILTERS = [
   "Bp HFS -midplane",
 ];
 
+// ── Collapsible section header ────────────────────────────────────────
+function CollapseHeader({
+  open, onToggle, children,
+}: { open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  return (
+    <div
+      onClick={onToggle}
+      style={{
+        display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+        userSelect: "none", marginBottom: open ? 6 : 0,
+      }}
+      className="metrics-title"
+    >
+      <span style={{ fontSize: 9 }}>{open ? "▼" : "▶"}</span>
+      {children}
+    </div>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────
 export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
@@ -120,7 +139,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [detrendHi, setDetrendHi] = useState("");
   const [tminMs, setTminMs]       = useState("");  // "" = auto (read from HDF5)
   const [tmaxMs, setTmaxMs]       = useState("");
-  const [colormapChoice, setColormapChoice] = useState<"rdbu" | "plasma" | "viridis">("rdbu");
+  const [colormapChoice, setColormapChoice] = useState<"rdbu" | "cividis" | "viridis">("rdbu");
+
+  // ── Section collapse state ────────────────────────────────────────
+  const [fitQualityOpen, setFitQualityOpen] = useState(false);
+  const [sensorMapOpen, setSensorMapOpen]   = useState(false);
 
   const qsParams = useMemo(() => {
     const p: Record<string, string> = {
@@ -151,8 +174,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     setTimeRange(null);
   }, [tminMs, tmaxMs]);
 
-  const fetchCursor = cursorMs === 0 ? 3140 : cursorMs;
-
   // ── Node fetches ──────────────────────────────────────────────────
   const { node: qualityRaw } = useNode(machine, "fit_quality", qsParams);
   const qualityNode = qualityRaw?.kind === "metrics" ? (qualityRaw as MetricsNode) : null;
@@ -167,14 +188,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const { node: sensorCylRaw }   = useNode(machine, "sensor_map_cylindrical", qsParams);
   const { node: signalRaw }      = useNode(machine, "signal_conditioning",    qsParams);
   const { node: chiSqRaw }       = useNode(machine, "chi_sq_t",               qsParams);
-  const { node: fitSigRaw }      = useNode(machine, "fit_signals",            qsParams);
   const { node: fitResRaw }      = useNode(machine, "fit_residuals",          qsParams);
 
   const sensorRzNode  = sensorRzRaw?.kind  === "line" ? (sensorRzRaw  as LineNode) : null;
   const sensorCylNode = sensorCylRaw?.kind === "line" ? (sensorCylRaw as LineNode) : null;
   const signalNode    = signalRaw?.kind    === "line" ? (signalRaw    as LineNode) : null;
   const chiSqNode     = chiSqRaw?.kind     === "line" ? (chiSqRaw     as LineNode) : null;
-  const fitSigNode    = fitSigRaw?.kind    === "line" ? (fitSigRaw    as LineNode) : null;
   const fitResNode    = fitResRaw?.kind    === "line" ? (fitResRaw    as LineNode) : null;
 
   // ── Channel checkboxes for signal conditioning ────────────────────
@@ -245,15 +264,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     [timeRange, tMin, tMax],
   );
 
-  const cursorLine = useMemo(() => ({
-    type: "line" as const, x0: fetchCursor, x1: fetchCursor, y0: 0, y1: 1,
-    yref: "paper" as const,
-    line: {
-      color: dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)",
-      width: 1.5, dash: "dot" as const,
-    },
-  }), [fetchCursor, dark]);
-
   // ── Sensor map plots ──────────────────────────────────────────────
   const sensorRzData = useMemo((): Partial<Plotly.PlotData>[] => {
     if (!sensorRzNode) return [];
@@ -304,6 +314,24 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     } as Partial<Plotly.Layout>),
   [dark, sensorCylNode]);
 
+  // ── Shared y-range: signal conditioning + residuals ───────────────
+  const signalYRange = useMemo(() => {
+    if (!signalNode) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const s of signalNode.series)
+      for (const v of s.y as number[]) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    return [lo, hi] as [number, number];
+  }, [signalNode]);
+
+  const sharedSigResRange = useMemo(() => {
+    if (!signalYRange && !fitResNode) return null;
+    let lo = signalYRange?.[0] ?? Infinity;
+    let hi = signalYRange?.[1] ?? -Infinity;
+    for (const s of fitResNode?.series ?? [])
+      for (const v of s.y as number[]) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    return [lo, hi] as [number, number];
+  }, [signalYRange, fitResNode]);
+
   // ── Signal conditioning plots ─────────────────────────────────────
   const signalData = useMemo((): Partial<Plotly.PlotData>[] => {
     if (!signalNode) return [];
@@ -340,12 +368,24 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const signalLayout = useMemo(() =>
     signalNode ? themedLayout(dark, {
-      xaxis: { title: { text: signalNode.axes.x } },
-      yaxis: { title: { text: signalNode.axes.y } },
+      xaxis: { ...timeXAxis, title: { text: signalNode.axes.x }, showticklabels: false },
+      yaxis: {
+        title: { text: signalNode.axes.y },
+        ...(sharedSigResRange ? { range: sharedSigResRange } : {}),
+      },
       showlegend: false,
-      margin: { t: 4, b: 40, l: 60, r: 8 },
+      margin: { t: 4, b: 4, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, signalNode]);
+  [dark, signalNode, timeXAxis, sharedSigResRange]);
+
+  // ── Dynamic chi² y-range ──────────────────────────────────────────
+  const chiSqYRange = useMemo(() => {
+    if (!chiSqNode) return null;
+    const vals = (chiSqNode.series[0].y as number[]).filter((v: number) => v > 0);
+    if (!vals.length) return null;
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    return [Math.floor(Math.log10(lo * 0.5)), Math.ceil(Math.log10(hi * 2))];
+  }, [chiSqNode]);
 
   // ── Chi-squared plot ──────────────────────────────────────────────
   const chiSqData = useMemo((): Partial<Plotly.PlotData>[] => {
@@ -359,47 +399,22 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const chiSqLayout = useMemo(() =>
     chiSqNode ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: chiSqNode.axes.x }, showticklabels: false },
+      xaxis: { ...timeXAxis, title: { text: chiSqNode.axes.x } },
       yaxis: {
         title: { text: "χ²" }, type: "log" as const,
-        range: [-2, 3],
+        ...(chiSqYRange ? { range: chiSqYRange } : {}),
       },
       shapes: [
-        cursorLine,
         { type: "line" as const, x0: 0, x1: 1, xref: "paper" as const,
           y0: 0, y1: 0, yref: "y" as const,
           line: { color: dark ? "#aaa" : "#555", width: 1, dash: "dash" as const } },
       ],
       showlegend: false,
-      margin: { t: 4, b: 4, l: 60, r: 20 },
+      margin: { t: 4, b: 40, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, chiSqNode, cursorLine, timeXAxis]);
+  [dark, chiSqNode, timeXAxis, chiSqYRange]);
 
-  // ── Fit signals plot ──────────────────────────────────────────────
-  const fitSigData = useMemo(() =>
-    fitSigNode ? lineTraces(fitSigNode) : [],
-  [fitSigNode]);
-
-  const fitSigLayout = useMemo(() =>
-    fitSigNode ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: fitSigNode.axes.x }, showticklabels: false },
-      yaxis: { title: { text: "signal (T)" } },
-      showlegend: false,
-      shapes: [cursorLine],
-      margin: { t: 4, b: 4, l: 60, r: 20 },
-    } as Partial<Plotly.Layout>) : {},
-  [dark, fitSigNode, cursorLine, timeXAxis]);
-
-  // ── Fit residuals plot (y-range matched to signals) ───────────────
-  const fitSigYRange = useMemo(() => {
-    if (!fitSigNode) return null;
-    let lo = Infinity, hi = -Infinity;
-    for (const s of fitSigNode.series) {
-      for (const v of s.y) { if (v < lo) lo = v; if (v > hi) hi = v; }
-    }
-    return [lo, hi] as [number, number];
-  }, [fitSigNode]);
-
+  // ── Fit residuals plot ────────────────────────────────────────────
   const worstChannels = useMemo(() => {
     if (!fitResNode) return new Set<string>();
     const ptps = fitResNode.series.map(s => {
@@ -428,21 +443,20 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const fitResLayout = useMemo(() =>
     fitResNode ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: fitResNode.axes.x } },
+      xaxis: { ...timeXAxis, title: { text: fitResNode.axes.x }, showticklabels: false },
       yaxis: {
         title: { text: "residual (T)" },
-        ...(fitSigYRange ? { range: fitSigYRange } : {}),
+        ...(sharedSigResRange ? { range: sharedSigResRange } : {}),
       },
       showlegend: false,
-      shapes: [cursorLine],
-      margin: { t: 4, b: 40, l: 60, r: 20 },
+      margin: { t: 4, b: 4, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, fitResNode, fitSigYRange, cursorLine, timeXAxis]);
+  [dark, fitResNode, sharedSigResRange, timeXAxis]);
 
   // ── Section 8: phi_t waterfall ────────────────────────────────────
   const cmapProps = useMemo(() => {
-    if (colormapChoice === "plasma")  return { colorscale: "plasma",  reversescale: false };
-    if (colormapChoice === "viridis") return { colorscale: "viridis", reversescale: false };
+    if (colormapChoice === "cividis") return { colorscale: "Cividis", reversescale: false };
+    if (colormapChoice === "viridis") return { colorscale: "Viridis", reversescale: false };
     return { colorscale: "RdBu", reversescale: true };  // RdBu_r ≈ notebook matplotlib
   }, [colormapChoice]);
 
@@ -473,10 +487,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     phiTimePlot ? themedLayout(dark, {
       xaxis: { ...timeXAxis, title: { text: phiTimePlot.axes.x } },
       yaxis: { title: { text: phiTimePlot.axes.y }, range: [0, 360], dtick: 90, tickvals: [0, 90, 180, 270, 360] },
-      shapes: [cursorLine],
       margin: { t: 4, b: 40, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, phiTimePlot, cursorLine, timeXAxis]);
+  [dark, phiTimePlot, timeXAxis]);
 
   // ── Section 7: amplitude & phase ─────────────────────────────────
   const ampData = useMemo(() =>
@@ -492,10 +505,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         orientation: "h" as const, y: 1.18, font: { size: 10 },
         title: { text: String((ampNode as LineNode).meta?.legend_title ?? "n"), font: { size: 10 } },
       },
-      shapes: [cursorLine],
       margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, ampNode, cursorLine, timeXAxis]);
+  [dark, ampNode, timeXAxis]);
 
   const phaseTimeData = useMemo(() => {
     if (phaseTimeNode?.kind !== "line") return [];
@@ -513,10 +525,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       },
       showlegend: true,
       legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
-      shapes: [cursorLine],
       margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, phaseTimeNode, cursorLine, timeXAxis]);
+  [dark, phaseTimeNode, timeXAxis]);
 
   // ── Signal conditioning channel pairs ─────────────────────────────
   const signalPairs = signalNode?.meta?.pairs as { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
@@ -577,92 +588,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         </label>
       </div>
 
-      {/* ── Section A: Sensor Map ─────────────────────────────────────── */}
-      <div>
-        <div className="metrics-title">sensor map · {channelFilter}</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
-            {sensorRzNode
-              ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} />
-              : <div className="placeholder">loading…</div>
-            }
-          </div>
-          <div>
-            <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
-            {sensorCylNode
-              ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} />
-              : <div className="placeholder">loading…</div>
-            }
-          </div>
-        </div>
-      </div>
-
-      {/* ── Section B: Signal Conditioning (Section 4) ────────────────── */}
-      <div>
-        <div className="metrics-title">signal conditioning · RAW (dotted, faint) vs PREPARED (solid)</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {signalNode
-              ? <Plot height={240} data={signalData} layout={signalLayout} />
-              : <div className="placeholder">loading…</div>
-            }
-          </div>
-          {signalPairs && (
-            <div style={{
-              display: "flex", flexDirection: "column", gap: 3,
-              fontSize: 10, color: "var(--text-dim)",
-              overflowY: "auto", maxHeight: 240, minWidth: 110,
-              paddingLeft: 4, borderLeft: "1px solid var(--border)",
-            }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>channels</div>
-              {signalPairs.map((pair, i) => (
-                <label key={pair.channel} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                  <input type="checkbox"
-                    checked={enabledChannels.has(pair.channel)}
-                    onChange={() => toggleChannel(pair.channel)}
-                    style={{ accentColor: LINE_PALETTE[i % LINE_PALETTE.length] }}
-                  />
-                  <span style={{ color: LINE_PALETTE[i % LINE_PALETTE.length] }}>{pair.channel}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Section C: Fit Quality (Section 6) ────────────────────────── */}
-      <div>
-        <div className="metrics-title">fit quality</div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {chiSqNode
-              ? <Plot height={110} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
-              : <div className="placeholder" style={{ height: 110 }}>loading χ²…</div>
-            }
-            {fitSigNode
-              ? <Plot height={150} data={fitSigData} layout={fitSigLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
-              : <div className="placeholder" style={{ height: 150 }}>loading signals…</div>
-            }
-            {fitResNode
-              ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
-              : <div className="placeholder" style={{ height: 150 }}>loading residuals…</div>
-            }
-          </div>
-          <div style={{ width: 180, flexShrink: 0 }}>
-            {qualityNode && <NodeView node={qualityNode} />}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Sections D+E: Time-series results (Sections 7+8) ─────────── */}
+      {/* ── Section D+E: Time-series results — PRIMARY, at top ────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {/* Section 8: Contour φ–t heatmap */}
         {phiTimePlot && (
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
               <div className="metrics-title">δB<sub>p</sub>(φ, t) · Contour — θ = 0°</div>
-              {(["rdbu", "plasma", "viridis"] as const).map(cm => (
+              {(["rdbu", "cividis", "viridis"] as const).map(cm => (
                 <button key={cm} onClick={() => setColormapChoice(cm)}
                   style={{
                     fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
@@ -670,7 +603,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                     color: colormapChoice === cm ? "#fff" : "var(--text-dim)",
                     border: "1px solid var(--border)",
                   }}>
-                  {cm === "rdbu" ? "RdBu (CB)" : cm}
+                  {cm === "rdbu" ? "default" : cm}
                 </button>
               ))}
             </div>
@@ -684,10 +617,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                 xaxis: { ...timeXAxis, showticklabels: false },
                 yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
                 margin: { t: 4, b: 4, l: 60, r: 80 },
-                shapes: [cursorLine],
               } as Partial<Plotly.Layout>)} onClick={seekTo} onRelayout={handleTimeRelayout} />
             )}
-            <Plot height={200} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
           </div>
         )}
 
@@ -697,6 +629,82 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         )}
         {phaseTimeNode?.kind === "line" && (
           <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+        )}
+      </div>
+
+      {/* ── Section C: Fit Quality — collapsible, collapsed by default ── */}
+      <div>
+        <CollapseHeader open={fitQualityOpen} onToggle={() => setFitQualityOpen(o => !o)}>
+          fit quality
+        </CollapseHeader>
+        {fitQualityOpen && (
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {/* Signal conditioning — top of stack, full width */}
+              {signalNode
+                ? <Plot height={200} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+                : <div className="placeholder" style={{ height: 200 }}>loading signals…</div>
+              }
+              {/* Residuals — middle */}
+              {fitResNode
+                ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+                : <div className="placeholder" style={{ height: 150 }}>loading residuals…</div>
+              }
+              {/* Chi² — bottom */}
+              {chiSqNode
+                ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+                : <div className="placeholder" style={{ height: 130 }}>loading χ²…</div>
+              }
+            </div>
+            <div style={{ width: 190, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+              {signalPairs && (
+                <div style={{
+                  display: "flex", flexDirection: "column", gap: 3,
+                  fontSize: 10, color: "var(--text-dim)",
+                  overflowY: "auto", maxHeight: 220,
+                  paddingBottom: 4, borderBottom: "1px solid var(--border)",
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: 2 }}>channels</div>
+                  {signalPairs.map((pair, i) => (
+                    <label key={pair.channel} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                      <input type="checkbox"
+                        checked={enabledChannels.has(pair.channel)}
+                        onChange={() => toggleChannel(pair.channel)}
+                        style={{ accentColor: LINE_PALETTE[i % LINE_PALETTE.length] }}
+                      />
+                      <span style={{ color: LINE_PALETTE[i % LINE_PALETTE.length] }}>{pair.channel}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {qualityNode && <NodeView node={qualityNode} />}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Section A: Sensor Map — collapsible, at bottom ────────────── */}
+      <div>
+        <CollapseHeader open={sensorMapOpen} onToggle={() => setSensorMapOpen(o => !o)}>
+          sensor map · {channelFilter}
+        </CollapseHeader>
+        {sensorMapOpen && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
+              {sensorRzNode
+                ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} />
+                : <div className="placeholder">loading…</div>
+              }
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
+              {sensorCylNode
+                ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} />
+                : <div className="placeholder">loading…</div>
+              }
+            </div>
+          </div>
         )}
       </div>
     </div>
