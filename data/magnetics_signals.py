@@ -127,6 +127,31 @@ REDUCTION: dict[str, dict[str, bool]] = {
 
 ANALYSES = tuple(ANALYSIS_GROUPS)
 
+# --- EFIT tree signals --------------------------------------------------------
+# Some quantities are NOT in PTDATA: plasma shape from equilibrium
+# reconstruction (e.g. elongation kappa) lives in the EFIT MDSplus tree. These
+# are fetched by (tree, node), not ptdata2(), so they are catalogued separately
+# from the pointname GROUPS. Each entry maps a friendly HDF5 channel name to a
+# list of (tree, node) candidates tried in order -- the first that opens and
+# returns data wins. Several EFIT trees exist per shot (efit01/02 post-shot,
+# efitrt1 real-time); we prefer the standard automatic efit01.
+TREE_SIGNALS: dict[str, list[tuple[str, str]]] = {
+    "kappa": [
+        ("efit01", r"\kappa"),
+        ("efit01", r"\top.results.aeqdsk:kappa"),
+        ("efit02", r"\kappa"),
+        ("efitrt1", r"\kappa"),
+    ],
+}
+
+# Which tree signals each analysis pulls. Elongation is shape context useful to
+# both analyses (helicity / mode-fit context), so all sets request it.
+ANALYSIS_TREE_SIGNALS: dict[str, list[str]] = {
+    "quasi-stationary": ["kappa"],
+    "rotating": ["kappa"],
+    "both": ["kappa"],
+}
+
 
 def signals_for(analysis: str) -> list[str]:
     """Return the de-duplicated, ordered pointname list for an analysis type."""
@@ -146,6 +171,21 @@ def signals_for(analysis: str) -> list[str]:
     return out
 
 
+def tree_signals_for(analysis: str) -> dict[str, list[tuple[str, str]]]:
+    """Return {channel_name: [(tree, node), ...]} EFIT-tree signals for an analysis.
+
+    These are fetched from the MDSplus EFIT tree (openTree + node), not via
+    ptdata2(); the candidate list is tried in order until one returns data.
+    """
+    try:
+        names = ANALYSIS_TREE_SIGNALS[analysis]
+    except KeyError:
+        raise ValueError(
+            f"unknown analysis {analysis!r}; choose from {', '.join(ANALYSES)}"
+        ) from None
+    return {name: TREE_SIGNALS[name] for name in names}
+
+
 def decimate_allowed(analysis: str) -> bool:
     """Whether server-side decimation is permitted for this analysis type."""
     if analysis not in REDUCTION:
@@ -158,5 +198,7 @@ def decimate_allowed(analysis: str) -> bool:
 if __name__ == "__main__":  # quick human-readable summary
     for name in ANALYSES:
         sigs = signals_for(name)
-        print(f"{name:16s} {len(sigs):3d} signals  (decimate_ok="
+        trees = tree_signals_for(name)
+        print(f"{name:16s} {len(sigs):3d} ptdata + {len(trees)} tree signals "
+              f"{list(trees) if trees else ''}  (decimate_ok="
               f"{decimate_allowed(name)})")
