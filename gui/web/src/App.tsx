@@ -9,6 +9,7 @@ import "./theme.css";
 import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
 import ThemeToggle from "./components/ThemeToggle";
+import PullControl from "./components/PullControl";
 import SensorsTab from "./components/tabs/SensorsTab";
 import QuasiStationaryTab from "./components/tabs/QuasiStationaryTab";
 import RotatingTab from "./components/tabs/RotatingTab";
@@ -37,6 +38,7 @@ export default function App() {
       </header>
 
       <aside className="rail-left">
+        <PullControl />
         <div className="rail-section">
           <h3>Shot / machine</h3>
           {loadingMachines && <div className="placeholder">loading…</div>}

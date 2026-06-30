@@ -45,6 +45,34 @@ export async function fetchNode(
 
 export const usingLiveBackend = (): boolean => !!API_BASE;
 
+/** Parameters for a live shot pull (POST /api/fetch). */
+export interface FetchBody {
+  shot: number;
+  analysis?: string;
+  backend?: string;
+  username?: string;
+  password?: string; // sent to the local backend only; not stored
+  duo?: string; // Duo passcode, or "1" for push
+  tmin?: number;
+  tmax?: number;
+  decimate?: number;
+}
+
+/** Trigger a live toksearch/mdsthin/remote pull on the backend, then get the
+ * refreshed machine list. Requires a live backend (VITE_API_BASE set). */
+export async function triggerFetch(
+  body: FetchBody,
+): Promise<{ ok: boolean; shot: string; machines: MachineInfo[] }> {
+  if (!API_BASE) throw new Error("set VITE_API_BASE to pull live data");
+  const res = await fetch(`${API_BASE}/api/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`pull failed (${res.status}): ${await res.text()}`);
+  return res.json();
+}
+
 // ── helpers ──
 function base(): string {
   return import.meta.env.BASE_URL; // respects vite `base` for sub-path deploys
