@@ -21,6 +21,21 @@ def test_geometry_is_single_final_frame():
     assert {"name", "phi", "theta", "r", "z", "kind", "family"} <= set(s)
 
 
+def test_mock_geometry_reads_the_device_table_not_a_snapshot():
+    # Mock positions must resolve through the shot-aware device table (the single
+    # source of geometry truth) — not a hardcoded copy. Spot-check one sensor's
+    # (r, z, θ) against diiid at mock's reference shot, and require it to be real.
+    from magnetics.data import diiid
+    from magnetics.service.mock import _GEOM_REF_SHOT
+
+    sensors = mock.geometry_frames("MOCK-A", {})[0][1]["sensors"]
+    s = next(x for x in sensors if x["r"] is not None)
+    ref = diiid.sensor(s["name"], _GEOM_REF_SHOT)
+    assert ref["r"] is not None                       # genuinely came from the table
+    assert s["r"] == ref["r"] and s["z"] == ref["z"]
+    assert s["theta"] == ref["theta"]                 # real, table-derived θ
+
+
 def test_qs_fit_refines_coarse_to_fine():
     frames = mock.qs_fit_frames("MOCK-A", {})
     progs = [p for p, _ in frames]
