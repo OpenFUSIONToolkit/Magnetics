@@ -4,6 +4,9 @@
    single toggle in the header re-skins the whole app. */
 :root,
 :root[data-theme="dark"] {
+  /* render native controls (range slider track/thumb, scrollbars) dark so the time
+     scrubber track isn't an invisible black bar on the dark background */
+  color-scheme: dark;
   --bg: #070b11;
   --panel: #0c131c;
   --panel-2: #0a0f16;
@@ -24,6 +27,7 @@
    a deepened teal accent that holds contrast on white, and soft shadows to give
    the flat cards depth the dark theme gets from its borders. */
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg: #e9edf2;
   --panel: #ffffff;
   --panel-2: #f1f5f9;
