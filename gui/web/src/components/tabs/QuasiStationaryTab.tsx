@@ -9,9 +9,12 @@ import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
 import type { ContourNode, LineNode, MetricsNode } from "../../lib/contract";
 
-// ── Colorblind-safe palette (Wong 2011) ──────────────────────────────
-// Blue + orange are distinguishable across deuteranopia, protanopia, tritanopia.
+// ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
 const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
+
+// ── Mode-number palette — green/purple/red for n=1,2,3,… ─────────────
+// Clearly distinct hues so each mode reads immediately, not blue/orange.
+const MODE_PALETTE = ["#2ca02c", "#9467bd", "#d62728", "#8c564b", "#e377c2", "#bcbd22", "#17becf"];
 
 // ── Light-mode Plotly overrides ───────────────────────────────────────
 const LT_AXIS = {
@@ -51,13 +54,14 @@ function hexToRgba(hex: string, alpha: number): string {
 // Build Plotly traces from a LineNode, optionally with per-series visibility overrides.
 function lineTraces(
   node: LineNode,
-  opts?: { visible?: boolean[]; opacity?: number[] },
+  opts?: { visible?: boolean[]; opacity?: number[]; palette?: string[] },
 ): Partial<Plotly.PlotData>[] {
   const sigma = node.meta?.sigma as number[][] | undefined;
+  const pal = opts?.palette ?? LINE_PALETTE;
   const traces: Partial<Plotly.PlotData>[] = [];
 
   node.series.forEach((s, i) => {
-    const color = LINE_PALETTE[i % LINE_PALETTE.length];
+    const color = pal[i % pal.length];
     const sig = sigma?.[i];
     const vis = opts?.visible?.[i] !== false;
     const opacity = opts?.opacity?.[i] ?? 1;
@@ -116,6 +120,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [detrendHi, setDetrendHi] = useState("");
   const [tminMs, setTminMs]       = useState("");  // "" = auto (read from HDF5)
   const [tmaxMs, setTmaxMs]       = useState("");
+  const [colormapChoice, setColormapChoice] = useState<"rdbu" | "plasma" | "viridis">("rdbu");
 
   const qsParams = useMemo(() => {
     const p: Record<string, string> = {
@@ -136,6 +141,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     if (cursorMs === 0) setCursorMs(3140);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When the trim window changes, clear any user zoom so the axis re-fits to the new data.
+  useEffect(() => {
+    setTimeRange(null);
+  }, [tminMs, tmaxMs]);
 
   const fetchCursor = cursorMs === 0 ? 3140 : cursorMs;
 
@@ -284,8 +294,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const sensorCylLayout = useMemo(() =>
     themedLayout(dark, {
-      xaxis: { title: { text: sensorCylNode?.axes.x ?? "φ (deg)" }, range: [-180, 180] },
-      yaxis: { title: { text: sensorCylNode?.axes.y ?? "θ (deg)" }, range: [-180, 180] },
+      xaxis: { title: { text: sensorCylNode?.axes.x ?? "φ (deg)" }, range: [-180, 180], dtick: 90 },
+      yaxis: { title: { text: sensorCylNode?.axes.y ?? "θ (deg)" }, range: [-180, 180], dtick: 90 },
       showlegend: false,
       margin: { t: 4, b: 40, l: 48, r: 8 },
     } as Partial<Plotly.Layout>),
@@ -358,7 +368,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           line: { color: dark ? "#aaa" : "#555", width: 1, dash: "dash" as const } },
       ],
       showlegend: false,
-      margin: { t: 4, b: 4, l: 60, r: 8 },
+      margin: { t: 4, b: 4, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
   [dark, chiSqNode, cursorLine, timeXAxis]);
 
@@ -373,7 +383,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       yaxis: { title: { text: "signal (T)" } },
       showlegend: false,
       shapes: [cursorLine],
-      margin: { t: 4, b: 4, l: 60, r: 8 },
+      margin: { t: 4, b: 4, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
   [dark, fitSigNode, cursorLine, timeXAxis]);
 
@@ -422,21 +432,24 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       },
       showlegend: false,
       shapes: [cursorLine],
-      margin: { t: 4, b: 40, l: 60, r: 8 },
+      margin: { t: 4, b: 40, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
   [dark, fitResNode, fitSigYRange, cursorLine, timeXAxis]);
 
   // ── Section 8: phi_t waterfall ────────────────────────────────────
-  // Uses heatmap (pixel-accurate, like pcolormesh) with RdBu_r colormap to
-  // match the matplotlib notebook reference (plots.py plot_slice).
+  const cmapProps = useMemo(() => {
+    if (colormapChoice === "plasma")  return { colorscale: "plasma",  reversescale: false };
+    if (colormapChoice === "viridis") return { colorscale: "viridis", reversescale: false };
+    return { colorscale: "RdBu", reversescale: true };  // RdBu_r ≈ notebook matplotlib
+  }, [colormapChoice]);
+
   const phiTimeData = useMemo((): Partial<Plotly.PlotData>[] => {
     if (!phiTimePlot) return [];
     const [zmin, zmax] = phiTimePlot.zrange ?? [-42, 42];
     const traces: Partial<Plotly.PlotData>[] = [{
       type: "heatmap" as const,
       x: phiTimePlot.x, y: phiTimePlot.y, z: phiTimePlot.z,
-      colorscale: "RdBu",
-      reversescale: true,   // RdBu reversed ≈ matplotlib's RdBu_r
+      ...cmapProps,
       zmin, zmax,
       zsmooth: false,
       showscale: true,
@@ -458,12 +471,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       xaxis: { ...timeXAxis, title: { text: phiTimePlot.axes.x } },
       yaxis: { title: { text: phiTimePlot.axes.y }, range: [0, 360], dtick: 90, tickvals: [0, 90, 180, 270, 360] },
       shapes: [cursorLine],
+      margin: { t: 4, b: 40, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
   [dark, phiTimePlot, cursorLine, timeXAxis]);
 
   // ── Section 7: amplitude & phase ─────────────────────────────────
   const ampData = useMemo(() =>
-    ampNode?.kind === "line" ? lineTraces(ampNode as LineNode) : [],
+    ampNode?.kind === "line" ? lineTraces(ampNode as LineNode, { palette: MODE_PALETTE }) : [],
   [ampNode]);
 
   const ampLayout = useMemo(() =>
@@ -476,13 +490,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         title: { text: String((ampNode as LineNode).meta?.legend_title ?? "n"), font: { size: 10 } },
       },
       shapes: [cursorLine],
+      margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
   [dark, ampNode, cursorLine, timeXAxis]);
 
   const phaseTimeData = useMemo(() => {
     if (phaseTimeNode?.kind !== "line") return [];
     const phaseVisible = (phaseTimeNode as LineNode).meta?.phase_visible as boolean[] | undefined;
-    return lineTraces(phaseTimeNode as LineNode, { visible: phaseVisible });
+    return lineTraces(phaseTimeNode as LineNode, { visible: phaseVisible, palette: MODE_PALETTE });
   }, [phaseTimeNode]);
 
   const phaseTimeLayout = useMemo(() =>
@@ -496,6 +511,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       showlegend: true,
       legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
       shapes: [cursorLine],
+      margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
   [dark, phaseTimeNode, cursorLine, timeXAxis]);
 
@@ -638,10 +654,23 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
       {/* ── Sections D+E: Time-series results (Sections 7+8) ─────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {/* Section 8: SLCONTOUR φ–t heatmap */}
+        {/* Section 8: Contour φ–t heatmap */}
         {phiTimePlot && (
           <div>
-            <div className="metrics-title">δB<sub>p</sub>(φ, t) · SLCONTOUR — θ = 0°</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div className="metrics-title">δB<sub>p</sub>(φ, t) · Contour — θ = 0°</div>
+              {(["rdbu", "plasma", "viridis"] as const).map(cm => (
+                <button key={cm} onClick={() => setColormapChoice(cm)}
+                  style={{
+                    fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
+                    background: colormapChoice === cm ? "var(--accent)" : "var(--panel)",
+                    color: colormapChoice === cm ? "#fff" : "var(--text-dim)",
+                    border: "1px solid var(--border)",
+                  }}>
+                  {cm === "rdbu" ? "RdBu (CB)" : cm}
+                </button>
+              ))}
+            </div>
             {phiRms && (
               <Plot height={70} data={[{
                 type: "scatter" as const, mode: "lines" as const,
@@ -651,7 +680,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               } as Partial<Plotly.PlotData>]} layout={themedLayout(dark, {
                 xaxis: { ...timeXAxis, showticklabels: false },
                 yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
-                margin: { t: 4, b: 4, l: 60, r: 8 },
+                margin: { t: 4, b: 4, l: 60, r: 80 },
                 shapes: [cursorLine],
               } as Partial<Plotly.Layout>)} onClick={seekTo} onRelayout={handleTimeRelayout} />
             )}
@@ -661,10 +690,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
         {/* Section 7: Mode amplitude & phase */}
         {ampNode?.kind === "line" && (
-          <Plot height={145} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+          <Plot height={200} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
         )}
         {phaseTimeNode?.kind === "line" && (
-          <Plot height={145} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+          <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
         )}
       </div>
     </div>
