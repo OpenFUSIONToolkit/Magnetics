@@ -211,9 +211,11 @@ def _mode_number(shot, params=None) -> dict:
     power; the rest are blanked. Falls back to the 2-point estimate for shots with no
     usable toroidal array.
 
-    The ``n_gate`` knob (mode-coherence, default 0.65) controls how aggressively noisy
-    cells are hidden — deliberately separate from the spectrogram's coherence slider so
-    the n-map stays clean regardless of the power view's gate."""
+    Two knobs control the blanking, both separate from the spectrogram's coherence
+    slider so the n-map stays clean regardless of the power view's gate: ``n_gate``
+    (mode-coherence, default 0.65) hides cells whose fit isn't a clean single-n, and
+    ``n_amp_pct`` (amplitude percentile, default 80) keeps only the strongest cells —
+    lower it to reveal weaker/broadband modes, raise it to show only the dominant one."""
     try:
         arr = _toroidal_arr(str(shot))
     except ValueError:
@@ -240,7 +242,8 @@ def _mode_number(shot, params=None) -> dict:
     amp = np.asarray(ms.amplitude)[np.ix_(ti, mask)]
 
     gate = _f(params, "n_gate", 0.65)
-    floor = float(np.percentile(amp, 80)) if amp.size else 0.0
+    amp_pct = min(100.0, max(0.0, _f(params, "n_amp_pct", 80.0)))
+    floor = float(np.percentile(amp, amp_pct)) if amp.size else 0.0
     show = (q >= gate) & (amp >= floor)
     # Display magnitude |n| (0…6) — folds co/counter-rotating into one label so the
     # discrete palette stays visually distinct; signed n is in the phase fit.
@@ -253,7 +256,7 @@ def _mode_number(shot, params=None) -> dict:
         discrete=True, zrange=[-0.5, 6.5],   # 7-bin |n| palette aligned to integers
         meta={"probes": list(names), "n_probes": len(names), "shot": str(shot),
               "method": f"array projection |n|≤5 ({len(names)} probes)",
-              "n_gate": round(float(gate), 2)})
+              "n_gate": round(float(gate), 2), "n_amp_pct": round(amp_pct, 1)})
 
 
 def _coherence(shot, params=None) -> dict:
@@ -385,9 +388,12 @@ def _array_mode_spec(shot, names, phis, slice_duration):
     small and only the resolution changes it — band cropping is a cheap post-op in the
     node. ``names``/``phis`` are tuples so the call is hashable; cleared by ``refresh``."""
     t_ms, mat = _stack(shot, names)
+    # Cap STFT columns at ~2000: the node decimates the display to 1500 anyway, so the
+    # native fine hop would just inflate the per-cell projection (an (n, t, f) einsum)
+    # with columns we'd throw away.
     spec = spectral.array_shape_spectrum(
         mat, np.asarray(t_ms, dtype=float) * 1e-3,
-        fmin=0.0, fmax=50_000.0, slice_duration=slice_duration)
+        fmin=0.0, fmax=50_000.0, slice_duration=slice_duration, max_columns=2000)
     return spectral.array_mode_spectrogram(spec, np.asarray(phis, dtype=float), n_max=5)
 
 

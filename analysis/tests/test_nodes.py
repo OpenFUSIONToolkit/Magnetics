@@ -126,6 +126,19 @@ def test_mode_over_time_node():
     assert n["meta"].get("dominant_n") is not None
 
 
+def test_mode_number_amp_pct_knob_widens_visible_cells():
+    # n_amp_pct is the amplitude-percentile floor: a lower percentile keeps weaker
+    # cells, so the n-map shows at least as many as a stricter (higher) floor.
+    shot = _first_shot()
+
+    def _shown(pct):
+        n = nodes.build_node(shot, "mode_number", {"n_amp_pct": str(pct)})
+        assert n["kind"] == "heatmap"
+        return sum(v is not None for row in n["z"] for v in row)
+
+    assert _shown(20) >= _shown(95)
+
+
 def test_fit_quality_node_has_finite_k():
     shot = _first_shot()
     n = nodes.build_node(shot, "fit_quality")
