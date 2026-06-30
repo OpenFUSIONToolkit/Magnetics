@@ -54,36 +54,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [btCompMode, setBtCompMode] = useState<"none" | "analog" | "digital">("digital");
   const [shieldingCutoff, setShieldingCutoff] = useState<number>(50); // 3dB shielding cutoff in kHz
 
-  // Shared Plotly zoom/pan synchronization states
-  const [xaxisRange, setXaxisRange] = useState<[number, number] | null>(null);
-  const [yaxisRange, setYaxisRange] = useState<[number, number] | null>(null);
-
-  const handleRelayout = useCallback((eventData: any) => {
-    if (eventData["xaxis.autorange"] || eventData["yaxis.autorange"]) {
-      setXaxisRange(null);
-      setYaxisRange(null);
-      return;
-    }
-    
-    let newXRange = xaxisRange;
-    let newYRange = yaxisRange;
-    let changed = false;
-
-    if (eventData["xaxis.range[0]"] !== undefined && eventData["xaxis.range[1]"] !== undefined) {
-      newXRange = [eventData["xaxis.range[0]"], eventData["xaxis.range[1]"]];
-      changed = true;
-    }
-    if (eventData["yaxis.range[0]"] !== undefined && eventData["yaxis.range[1]"] !== undefined) {
-      newYRange = [eventData["yaxis.range[0]"], eventData["yaxis.range[1]"]];
-      changed = true;
-    }
-
-    if (changed) {
-      setXaxisRange(newXRange);
-      setYaxisRange(newYRange);
-    }
-  }, [xaxisRange, yaxisRange]);
-
   // Resizable layout dimensions
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [specHeight, setSpecHeight] = useState(280);
@@ -127,12 +97,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
     loading: specLoading,
     error: specError,
   } = useNode(machine, "spectrogram");
-
-  // Fetch denoised spectrogram node (from static files if available)
-  const {
-    node: denoisedSpecNode,
-    error: denoisedSpecError,
-  } = useNode(machine, "denoised_spectrogram");
 
   // Fetch toroidal phase fit node (from static files if available)
   const {
@@ -215,8 +179,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
     };
   }, [hasStaticFiles, fftWindow]);
 
-  // Raw Spectrogram Node: No coherence/power threshold gating applied
-  const processedRawSpecNode = useMemo(() => {
+  // Merge loaded specNode with controls/display settings
+  const processedSpecNode = useMemo(() => {
     const baseNode = hasStaticFiles ? specNode : syntheticSpecNode;
     if (!baseNode || baseNode.kind !== "heatmap") return null;
 
@@ -226,86 +190,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
       .filter((item) => item.f >= fmin && item.f <= fmax)
       .map((item) => item.idx);
 
-    // Apply low-pass tile-shielding attenuation
+    // Filter and apply low-pass tile-shielding attenuation
     const filteredZ = fIndices.map((fIdx) => {
       const f = baseNode.y[fIdx];
+      // first-order low-pass power attenuation: -5 * log10(1 + (f / fc)^2)
       const cutoffAttenDb = -5 * Math.log10(1 + Math.pow(f / shieldingCutoff, 2));
-      return baseNode.z[fIdx].map((val) => val === null ? null : val + cutoffAttenDb);
-    });
-
-    const filteredY = fIndices.map((idx) => baseNode.y[idx]);
-
-    if (displayMode === "n") {
-      const mappedZ = filteredZ.map((row, rowIdx) => {
-        const f = filteredY[rowIdx];
-        return row.map((val, colIdx) => {
-          if (val === null) return null;
-          const t = baseNode.x[colIdx];
-          
-          if (!hasStaticFiles) {
-            if (t >= 1500 && t <= 3200) {
-              let modeFreq = 4.0;
-              if (t < 2800) {
-                const frac = (2800 - t) / 1300;
-                modeFreq = 4.0 + 26.0 * frac * frac;
-              }
-              const f1 = modeFreq;
-              const f2 = modeFreq / 2;
-              const f3 = modeFreq * 1.5;
-
-              if (Math.abs(f - f1) < 1.2) return 2;
-              if (Math.abs(f - f2) < 1.0) return 1;
-              if (Math.abs(f - f3) < 1.5) return 3;
-            }
-          } else {
-            if (f >= 1.0 && f <= 3.2) return 1;
-            if (f > 3.2 && f <= 6.5) return 2;
-            if (f > 6.5 && f <= 11.0) return 3;
-          }
-          if (val > -1.2) return 2;
-          if (val > -1.9) return 1;
-          return null;
-        });
-      });
-      return {
-        ...baseNode,
-        x: baseNode.x,
-        y: filteredY,
-        z: mappedZ as unknown as number[][],
-        discrete: true,
-        zrange: [-6.5, 6.5] as [number, number],
-      };
-    } else {
-      return {
-        ...baseNode,
-        x: baseNode.x,
-        y: filteredY,
-        z: filteredZ as unknown as number[][],
-        discrete: false,
-        zrange: [-3, 0] as [number, number],
-      };
-    }
-  }, [hasStaticFiles, specNode, syntheticSpecNode, displayMode, fmin, fmax, shieldingCutoff]);
-
-  // Denoised Spectrogram Node: Backend denoised data if available, otherwise client-side gated raw data
-  const processedDenoisedSpecNode = useMemo(() => {
-    const baseNode = hasStaticFiles 
-      ? (denoisedSpecNode && !denoisedSpecError ? denoisedSpecNode : specNode)
-      : syntheticSpecNode;
-      
-    if (!baseNode || baseNode.kind !== "heatmap") return null;
-
-    // Filter by frequency limits
-    const fIndices = baseNode.y
-      .map((f, idx) => ({ f, idx }))
-      .filter((item) => item.f >= fmin && item.f <= fmax)
-      .map((item) => item.idx);
-
-    // Apply low-pass tile-shielding attenuation
-    const filteredZ = fIndices.map((fIdx) => {
-      const f = baseNode.y[fIdx];
-      const cutoffAttenDb = -5 * Math.log10(1 + Math.pow(f / shieldingCutoff, 2));
-      return baseNode.z[fIdx].map((val) => val === null ? null : val + cutoffAttenDb);
+      return baseNode.z[fIdx].map((val) => val + cutoffAttenDb);
     });
 
     const filteredY = fIndices.map((idx) => baseNode.y[idx]);
@@ -316,17 +206,16 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const powerThreshold = zMin + coherenceThreshold * (zMax - zMin);
 
     if (displayMode === "n") {
+      // Map log power values to discrete mode numbers (-6..6)
       const mappedZ = filteredZ.map((row, rowIdx) => {
         const f = filteredY[rowIdx];
         return row.map((val, colIdx) => {
-          if (val === null) return null;
-          
-          // Client-side gating if we are fallback-gating the raw node
-          const useClientGating = !denoisedSpecNode || denoisedSpecError || !hasStaticFiles;
-          if (useClientGating && val < powerThreshold) return null;
+          // Gating: filter out background noise cells
+          if (val < powerThreshold) return null;
 
           const t = baseNode.x[colIdx];
-          
+
+          // 1. Synthetic Generator Case
           if (!hasStaticFiles) {
             if (t >= 1500 && t <= 3200) {
               let modeFreq = 4.0;
@@ -334,22 +223,28 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 const frac = (2800 - t) / 1300;
                 modeFreq = 4.0 + 26.0 * frac * frac;
               }
-              const f1 = modeFreq;
-              const f2 = modeFreq / 2;
-              const f3 = modeFreq * 1.5;
+              const f1 = modeFreq;       // n = 2
+              const f2 = modeFreq / 2;   // n = 1
+              const f3 = modeFreq * 1.5; // n = 3
 
               if (Math.abs(f - f1) < 1.2) return 2;
               if (Math.abs(f - f2) < 1.0) return 1;
               if (Math.abs(f - f3) < 1.5) return 3;
             }
-          } else {
+          }
+          // 2. Static Mock File Case (e.g. 164672)
+          else {
+            // For shot 164672, the modes are at 2-3 kHz (n=1), 4-6 kHz (n=2), and 8-10 kHz (n=3)
             if (f >= 1.0 && f <= 3.2) return 1;
             if (f > 3.2 && f <= 6.5) return 2;
             if (f > 6.5 && f <= 11.0) return 3;
           }
+
+          // Default fallback
           if (val > -1.2) return 2;
           if (val > -1.9) return 1;
-          return null;
+          
+          return null; // keep rest clean
         });
       });
       return {
@@ -363,9 +258,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
     } else {
       const mappedZ = filteredZ.map((row) =>
         row.map((val) => {
-          if (val === null) return null;
-          const useClientGating = !denoisedSpecNode || denoisedSpecError || !hasStaticFiles;
-          if (useClientGating && val < powerThreshold) return null;
+          // Gating: filter out background noise cells
+          if (val < powerThreshold) return null;
           return val;
         })
       );
@@ -378,7 +272,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         zrange: [-3, 0] as [number, number],
       };
     }
-  }, [hasStaticFiles, specNode, denoisedSpecNode, denoisedSpecError, syntheticSpecNode, displayMode, fmin, fmax, coherenceThreshold, shieldingCutoff]);
+  }, [hasStaticFiles, specNode, syntheticSpecNode, displayMode, fmin, fmax, coherenceThreshold, shieldingCutoff]);
 
   // Determine active mode frequencies at the current time slice
   const currentModeFreqs = useMemo(() => {
@@ -568,13 +462,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
   }, [hasStaticFiles, phaseNode, probePhi1, probePhi2, btCompMode, coherenceThreshold]);
 
   // --- 3. RENDER SUB-COMPONENTS ---
-  const renderSpectrograms = () => {
+  const renderSpectrogram = () => {
     if (specLoading && !syntheticSpecNode) {
       return <div className="placeholder">Loading spectrogram...</div>;
     }
-    if (!processedRawSpecNode || !processedDenoisedSpecNode) return null;
+    if (!processedSpecNode) return null;
 
-    const colorscaleRaw: [number, string][] = processedRawSpecNode.discrete
+    const colorscale: [number, string][] = processedSpecNode.discrete
       ? (() => {
           const n = MODE_PALETTE.length;
           const s: [number, string][] = [];
@@ -584,67 +478,48 @@ export default function RotatingTab({ machine }: { machine: string }) {
           return s;
         })()
       : POWER_SEQUENTIAL;
+    const zr = processedSpecNode.zrange;
 
-    const colorscaleDenoised: [number, string][] = processedDenoisedSpecNode.discrete
-      ? (() => {
-          const n = MODE_PALETTE.length;
-          const s: [number, string][] = [];
-          for (let i = 0; i < n; i++) {
-            s.push([i / n, MODE_PALETTE[i]], [(i + 1) / n, MODE_PALETTE[i]]);
-          }
-          return s;
-        })()
-      : POWER_SEQUENTIAL;
+    const data = [
+      {
+        type: "heatmap" as const,
+        x: processedSpecNode.x,
+        y: processedSpecNode.y,
+        z: processedSpecNode.z,
+        colorscale,
+        zmin: zr?.[0],
+        zmax: zr?.[1],
+        zsmooth: (processedSpecNode.discrete ? false : "best") as false | "best" | "fast" | undefined,
+        colorbar: {
+          title: { text: processedSpecNode.axes.z ?? "" },
+          thickness: 12,
+          outlinewidth: 0,
+          ...(processedSpecNode.discrete
+            ? { tickvals: [-6, -4, -2, 0, 2, 4, 6], ticktext: ["-6", "-4", "-2", "0", "2", "4", "6"], tickmode: "array" as const }
+            : {}),
+        },
+      },
+    ];
 
-    const zrRaw = processedRawSpecNode.zrange;
-    const zrDenoised = processedDenoisedSpecNode.zrange;
-
-    // Shared time cursor line shape
-    const cursorShape = {
-      type: "line" as const,
-      xref: "x" as const,
-      yref: "paper" as const,
-      x0: cursorMs,
-      y0: 0,
-      x1: cursorMs,
-      y1: 1,
-      line: {
-        color: "var(--accent)", // bright turquoise
-        width: 2,
-        dash: "dash" as const,
-      },
-    };
-
-    const layoutRaw = {
-      xaxis: { 
-        title: { text: processedRawSpecNode.axes.x },
-        range: xaxisRange || undefined,
-        autorange: xaxisRange ? false : true,
-      },
-      yaxis: { 
-        title: { text: processedRawSpecNode.axes.y },
-        range: yaxisRange || undefined,
-        autorange: yaxisRange ? false : true,
-      },
-      shapes: [cursorShape],
-      margin: { l: 50, r: 15, t: 30, b: 35 },
-      title: { text: "Raw Spectrogram", font: { size: 12, color: "var(--text)" } },
-    };
-
-    const layoutDenoised = {
-      xaxis: { 
-        title: { text: processedDenoisedSpecNode.axes.x },
-        range: xaxisRange || undefined,
-        autorange: xaxisRange ? false : true,
-      },
-      yaxis: { 
-        title: { text: processedDenoisedSpecNode.axes.y },
-        range: yaxisRange || undefined,
-        autorange: yaxisRange ? false : true,
-      },
-      shapes: [cursorShape],
-      margin: { l: 50, r: 15, t: 30, b: 35 },
-      title: { text: "Denoised Spectrogram", font: { size: 12, color: "var(--text)" } },
+    const layout = {
+      xaxis: { title: { text: processedSpecNode.axes.x } },
+      yaxis: { title: { text: processedSpecNode.axes.y } },
+      shapes: [
+        {
+          type: "line" as const,
+          xref: "x" as const,
+          yref: "paper" as const,
+          x0: cursorMs,
+          y0: 0,
+          x1: cursorMs,
+          y1: 1,
+          line: {
+            color: "var(--accent)", // bright turquoise
+            width: 2,
+            dash: "dash" as const,
+          },
+        },
+      ],
     };
 
     const handlePlotClick = (e: Plotly.PlotMouseEvent) => {
@@ -656,55 +531,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       }
     };
 
-    return (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", height: "100%" }}>
-        <div style={{ minWidth: 0 }}>
-          <Plot 
-            data={[{
-              type: "heatmap" as const,
-              x: processedRawSpecNode.x,
-              y: processedRawSpecNode.y,
-              z: processedRawSpecNode.z,
-              colorscale: colorscaleRaw,
-              zmin: zrRaw?.[0],
-              zmax: zrRaw?.[1],
-              zsmooth: (processedRawSpecNode.discrete ? false : "best") as false | "best" | "fast" | undefined,
-              showscale: false, // hide raw scale to save space
-            }]} 
-            layout={layoutRaw} 
-            height={specHeight} 
-            onClick={handlePlotClick}
-            onRelayout={handleRelayout}
-          />
-        </div>
-        <div style={{ minWidth: 0 }}>
-          <Plot 
-            data={[{
-              type: "heatmap" as const,
-              x: processedDenoisedSpecNode.x,
-              y: processedDenoisedSpecNode.y,
-              z: processedDenoisedSpecNode.z,
-              colorscale: colorscaleDenoised,
-              zmin: zrDenoised?.[0],
-              zmax: zrDenoised?.[1],
-              zsmooth: (processedDenoisedSpecNode.discrete ? false : "best") as false | "best" | "fast" | undefined,
-              colorbar: {
-                title: { text: processedDenoisedSpecNode.axes.z ?? "" },
-                thickness: 12,
-                outlinewidth: 0,
-                ...(processedDenoisedSpecNode.discrete
-                  ? { tickvals: [-6, -4, -2, 0, 2, 4, 6], ticktext: ["-6", "-4", "-2", "0", "2", "4", "6"], tickmode: "array" as const }
-                  : {}),
-              },
-            }]} 
-            layout={layoutDenoised} 
-            height={specHeight} 
-            onClick={handlePlotClick}
-            onRelayout={handleRelayout}
-          />
-        </div>
-      </div>
-    );
+    return <Plot data={data} layout={layout} height={260} onClick={handlePlotClick} />;
   };
 
   const renderSubInterval = () => {
@@ -912,7 +739,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             </div>
 
             {/* Time Cursor Scrubber Slider */}
-            {processedRawSpecNode && (
+            {processedSpecNode && (
               <div style={{ display: "flex", flexDirection: "column", gap: "4px", borderBottom: "1px solid var(--border)", paddingBottom: "10px" }}>
                 <label htmlFor="time-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
                   Time Scrubber (t0): <strong style={{ color: "var(--good)" }}>{cursorMs.toFixed(0)} ms</strong>
@@ -920,8 +747,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 <input
                   id="time-range"
                   type="range"
-                  min={processedRawSpecNode.x[0]}
-                  max={processedRawSpecNode.x[processedRawSpecNode.x.length - 1]}
+                  min={processedSpecNode.x[0]}
+                  max={processedSpecNode.x[processedSpecNode.x.length - 1]}
                   step={10}
                   value={cursorMs}
                   onChange={(e) => setCursorMs(parseFloat(e.target.value))}
@@ -1302,7 +1129,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
               </button>
             </div>
           </div>
-          <div style={{ flex: 1, minHeight: 0 }}>{renderSpectrograms()}</div>
+          <div style={{ flex: 1, minHeight: 0 }}>{renderSpectrogram()}</div>
         </div>
 
         <DraggableDivider direction="vertical" onDelta={handleSpecDelta} />

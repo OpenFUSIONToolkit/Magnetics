@@ -45,6 +45,37 @@ export async function fetchNode(
 
 export const usingLiveBackend = (): boolean => !!API_BASE;
 
+/** Parameters for a live shot pull (POST /api/fetch). */
+export interface FetchBody {
+  shot: number;
+  analysis?: string;
+  backend?: string;
+  username?: string;
+  password?: string; // sent to the local backend only; not stored
+  duo?: string; // Duo passcode, or "1" for push
+  tmin?: number;
+  tmax?: number;
+  decimate?: number;
+}
+
+/** The live backend's base URL (for building an EventSource), or undefined. */
+export function apiBase(): string | undefined {
+  return API_BASE;
+}
+
+/** Start a live pull in the background; returns a job_id. Stream its progress at
+ * `${apiBase()}/api/fetch/{job_id}/stream`. Requires a live backend. */
+export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
+  if (!API_BASE) throw new Error("set VITE_API_BASE to pull live data");
+  const res = await fetch(`${API_BASE}/api/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`pull failed (${res.status}): ${await res.text()}`);
+  return res.json();
+}
+
 // ── helpers ──
 function base(): string {
   return import.meta.env.BASE_URL; // respects vite `base` for sub-path deploys

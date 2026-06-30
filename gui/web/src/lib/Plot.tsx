@@ -16,7 +16,6 @@ export interface PlotProps {
   layout?: Partial<Plotly.Layout>;
   height?: number;
   onClick?: (e: Plotly.PlotMouseEvent) => void;
-  onRelayout?: (eventData: any) => void;
 }
 
 function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
@@ -39,7 +38,7 @@ function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
   };
 }
 
-export default function Plot({ data, layout, height = 320, onClick, onRelayout }: PlotProps) {
+export default function Plot({ data, layout, height = 320, onClick }: PlotProps) {
   const ref = useRef<HTMLDivElement>(null);
   const theme = useStore((s) => s.theme);
 
@@ -56,11 +55,9 @@ export default function Plot({ data, layout, height = 320, onClick, onRelayout }
     };
     try {
       Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true });
-      const clickHandler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
+      const handler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
       // @ts-expect-error plotly event typing is loose on the dist build
-      if (onClick) el.on("plotly_click", clickHandler);
-      // @ts-expect-error plotly event typing is loose on the dist build
-      if (onRelayout) el.on("plotly_relayout", onRelayout);
+      if (onClick) el.on("plotly_click", handler);
     } catch {
       /* transient Plotly layout race (e.g. StrictMode remount); next render re-syncs */
     }
@@ -68,13 +65,11 @@ export default function Plot({ data, layout, height = 320, onClick, onRelayout }
       try {
         // @ts-expect-error plotly cleanup helper is untyped on the dist build
         el.removeAllListeners?.("plotly_click");
-        // @ts-expect-error plotly cleanup helper is untyped on the dist build
-        el.removeAllListeners?.("plotly_relayout");
       } catch {
         /* noop */
       }
     };
-  }, [data, layout, height, onClick, onRelayout, theme]);
+  }, [data, layout, height, onClick, theme]);
 
   useEffect(() => {
     const el = ref.current;

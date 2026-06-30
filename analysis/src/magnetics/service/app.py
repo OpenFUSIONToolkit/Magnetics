@@ -15,17 +15,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from . import mock
+from ..data import h5source
+from . import mock, nodes
 
-app = FastAPI(title="magnetics mock service", version="0.1.0",
-              description="MOCK data in the CONTRACT.md shapes — for GUI development.")
+app = FastAPI(title="magnetics service", version="0.1.0",
+              description="Real kind-nodes from fetched shot data, with a MOCK fallback.")
 
 # permissive CORS for the Vite dev server
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -45,48 +50,149 @@ def health():
 
 @app.get("/api/machines")
 def machines():
-    return mock.MACHINES
+    """Real fetched shots if any HDF5 files are present, else the mock machines."""
+    nodes.refresh()  # pick up any file fetched since the service started
+    real = nodes.machines()
+    return real if real else mock.MACHINES
 
 
-def _unpack_node(result: str, data: dict) -> dict:
-    if result in ("spectrogram", "denoised_spectrogram"):
-        # Unpack spectrogram heatmap node
-        node = dict(data.get(result, {}))
-        node["kind"] = "heatmap"
-        if "t_ms" in node:
-            node["x"] = node.pop("t_ms")
-        if "f_kHz" in node:
-            node["y"] = node.pop("f_kHz")
-        if "power" in node:
-            node["z"] = node.pop("power")
-        node["axes"] = {"x": "Time (ms)", "y": "f (kHz)", "z": "log power"}
-        node["discrete"] = False
-        return node
-    elif result == "phase_fit":
-        # Already a scatter2d node or dict
-        return data
-    elif result == "geometry":
-        node = dict(data)
-        node["kind"] = "geometry"
-        return node
-    elif result == "qs_fit":
-        node = dict(data.get("contour", {}))
-        node["kind"] = "contour"
-        if "phi" in node:
-            node["x"] = node.pop("phi")
-        if "theta" in node:
-            node["y"] = node.pop("theta")
-        node["axes"] = {"x": "φ (deg)", "y": "θ (deg)", "z": "δBp (G)"}
-        node["overlay"] = {"points": data.get("sensors", []), "symbol": "square"}
-        return node
-    return data
+@app.get("/api/node/{shot}/{node_id}")
+def node(shot: str, node_id: str, request: Request):
+    """A single bare kind-node built from real fetched shot data — the REST shape
+    the GUI's useNode() consumes (data → core → contract). 404 if the shot/node
+    isn't available, 422 if the data can't support that analysis."""
+    try:
+        return nodes.build_node(shot, node_id, dict(request.query_params))
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+class FetchRequest(BaseModel):
+    shot: int
+    analysis: str = "both"
+    backend: str = "mdsthin"  # mdsthin (default) | toksearch (WIP) | remote (WIP) | auto
+    tmin: float | None = None
+    tmax: float | None = None
+    decimate: int = 1
+    username: str | None = None
+    password: str | None = None  # fed to ssh via askpass; localhost only, not stored
+    duo: str | None = None       # Duo passcode, or "1" for push (default)
+    # remote backend overrides (None → fetcher defaults: omega via cybele, conda)
+    remote_host: str | None = None
+    ssh_jump: str | None = None
+    remote_dir: str | None = None
+    remote_setup: str | None = None
+
+
+# ── background fetch jobs (so /api/fetch returns instantly and the GUI can show a
+#    real per-channel progress bar instead of a blind elapsed timer) ────────────
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _job_set(jid: str, **kw) -> None:
+    with _JOBS_LOCK:
+        if jid in _JOBS:
+            _JOBS[jid].update(kw)
+
+
+def _job_get(jid: str) -> dict | None:
+    with _JOBS_LOCK:
+        return dict(_JOBS[jid]) if jid in _JOBS else None
+
+
+@app.post("/api/fetch")
+def post_fetch(req: FetchRequest) -> dict:
+    """Start a live pull in the background; returns {job_id}. Stream its progress
+    at GET /api/fetch/{job_id}/stream. Works where the fetcher works (laptop with
+    creds/Duo or a key-based ssh-config gateway, or the cluster); offline the job
+    reports a clear error and cached shots keep serving."""
+    h5source._ensure_catalog_on_path()
+    try:
+        import toksearch_fetch  # repo-root data/ module
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail=f"fetcher unavailable: {exc}") from exc
+    remote_kw = {k: v for k, v in {
+        "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
+        "remote_dir": req.remote_dir, "remote_setup": req.remote_setup,
+    }.items() if v is not None}
+
+    jid = uuid.uuid4().hex[:12]
+    with _JOBS_LOCK:
+        _JOBS[jid] = {"progress": 0.0, "msg": "starting", "status": "running",
+                      "result": None, "error": None}
+
+    def on_progress(frac, msg):
+        _job_set(jid, progress=float(frac), msg=str(msg))
+
+    def work():
+        try:
+            out = toksearch_fetch.fetch_shot(
+                req.shot, req.analysis, backend=req.backend,
+                username=req.username, password=req.password, duo=req.duo,
+                tmin=req.tmin, tmax=req.tmax, decimate=req.decimate,
+                progress=on_progress, **remote_kw)
+            h5source.refresh()
+            nodes.refresh()
+            _job_set(jid, status="done", progress=1.0, msg="done",
+                     result={"ok": True, "shot": str(req.shot), "file": out,
+                             "machines": nodes.machines()})
+        except SystemExit as exc:  # fetcher sys.exit for missing deps/creds
+            _job_set(jid, status="error", error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            _job_set(jid, status="error", error=f"fetch failed: {exc}")
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": jid}
+
+
+@app.get("/api/fetch/{job_id}")
+def fetch_status(job_id: str) -> dict:
+    job = _job_get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    return job
+
+
+@app.get("/api/fetch/{job_id}/stream")
+def fetch_stream(job_id: str) -> StreamingResponse:
+    if _job_get(job_id) is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+
+    def gen():
+        last = None
+        while True:
+            job = _job_get(job_id)
+            if job is None:
+                yield f"data: {json.dumps({'status': 'error', 'error': 'job lost'})}\n\n"
+                return
+            frame = {"progress": job["progress"], "msg": job["msg"],
+                     "status": job["status"]}
+            if job["status"] == "done":
+                frame["result"] = job["result"]
+                yield f"data: {json.dumps(frame)}\n\n"
+                return
+            if job["status"] == "error":
+                frame["error"] = job["error"]
+                yield f"data: {json.dumps(frame)}\n\n"
+                return
+            if frame != last:
+                yield f"data: {json.dumps(frame)}\n\n"
+                last = frame
+            time.sleep(0.25)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/{machine}/{result}")
 def one_shot(machine: str, result: str, request: Request):
     """Final frame only (blocking) — for tests, notebooks, and simple consumers."""
-    gen_key = "spectrogram" if result == "denoised_spectrogram" else result
-    gen = mock.GENERATORS.get(gen_key)
+    gen = mock.GENERATORS.get(result)
     if gen is None:
         raise HTTPException(404, f"unknown result '{result}'")
     params = dict(request.query_params)
@@ -94,24 +200,10 @@ def one_shot(machine: str, result: str, request: Request):
     return _frame(result, progress, True, data, {"machine": machine, "params": params})
 
 
-@app.get("/api/node/{machine}/{result}")
-def one_shot_node(machine: str, result: str, request: Request):
-    """Returns the unpacked node directly for useNode frontend hook."""
-    gen_key = "spectrogram" if result == "denoised_spectrogram" else result
-    gen = mock.GENERATORS.get(gen_key)
-    if gen is None:
-        raise HTTPException(404, f"unknown result '{result}'")
-    params = dict(request.query_params)
-    progress, data = gen(machine, params)[-1]
-    return _unpack_node(result, data)
-
-
 @app.get("/api/{machine}/{result}/stream")
-@app.get("/api/node/{machine}/{result}/stream")
 async def stream(machine: str, result: str, request: Request):
     """SSE stream of frames, coarse → fine. Last frame has final=true."""
-    gen_key = "spectrogram" if result == "denoised_spectrogram" else result
-    gen = mock.GENERATORS.get(gen_key)
+    gen = mock.GENERATORS.get(result)
     if gen is None:
         raise HTTPException(404, f"unknown result '{result}'")
     params = dict(request.query_params)

@@ -27,7 +27,6 @@ from numpy.typing import NDArray
 from magnetics.core.spectral import (
     SpectrogramResult,
     compute_spectrogram,
-    denoise_spectrogram,
     extract_mode_at_frequency,
     fit_toroidal_mode,
     stft_layout,
@@ -156,22 +155,11 @@ def build_spectrogram_data(
     # spec.power is (n_time, n_freq); transpose to (n_freq, n_time) then crop.
     power_ft = spec.power[np.ix_(tmask, fmask)].T  # (n_freq, n_time)
 
-    # Compute denoised spectrogram power grid
-    spec_dn = denoise_spectrogram(spec)
-    power_dn_ft = spec_dn.power[np.ix_(tmask, fmask)].T
-
     data: dict[str, Any] = {
         "spectrogram": {
             "t_ms": _round_list(t_sel),
             "f_kHz": _round_list(f_sel),
             "power": _sigfig(power_ft).tolist(),
-            "scale": "linear",
-            "units": "cross-power (T/s)^2",
-        },
-        "denoised_spectrogram": {
-            "t_ms": _round_list(t_sel),
-            "f_kHz": _round_list(f_sel),
-            "power": _sigfig(power_dn_ft).tolist(),
             "scale": "linear",
             "units": "cross-power (T/s)^2",
         }
