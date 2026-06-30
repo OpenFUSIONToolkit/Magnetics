@@ -47,12 +47,19 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         } as Partial<Plotly.PlotData>,
       ];
       if (node.overlay) {
+        const labels = node.overlay.points.map((p) => p.label ?? "");
+        const named = labels.some((l) => l !== "");
         traces.push({
           type: "scatter", mode: "markers",
           x: node.overlay.points.map((p) => p.x),
           y: node.overlay.points.map((p) => p.y),
+          text: labels,
           marker: { symbol: node.overlay.symbol ?? "square", size: 6, color: ink, line: { color: inkEdge, width: 0.5 } },
-          hoverinfo: "x+y",
+          // named overlays (sensor dots) show the pointname + position on hover;
+          // unlabelled ones fall back to bare coordinates.
+          ...(named
+            ? { hovertemplate: "%{text}<br>(%{x:.0f}, %{y:.0f})<extra></extra>" }
+            : { hoverinfo: "x+y" as const }),
         } as Partial<Plotly.PlotData>);
       }
       return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;

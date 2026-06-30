@@ -69,6 +69,16 @@ def node(shot: str, node_id: str, request: Request):
         raise HTTPException(422, str(e))
 
 
+@app.get("/api/channels/{shot}")
+def channels(shot: str):
+    """Per-shot channel diagnostic: which fetched pointnames each analysis consumes,
+    and which are idle (droppable from the pull). 404 if the shot isn't available."""
+    try:
+        return nodes.channel_usage(shot)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+
 class FetchRequest(BaseModel):
     shot: int
     analysis: str = "both"

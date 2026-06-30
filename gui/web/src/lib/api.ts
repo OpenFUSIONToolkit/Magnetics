@@ -45,6 +45,22 @@ export async function fetchNode(
 
 export const usingLiveBackend = (): boolean => !!API_BASE;
 
+/** Per-shot channel diagnostic: which fetched pointnames the analysis uses vs. idle. */
+export interface ChannelUsage {
+  shot: string;
+  n_total: number;
+  n_used: number;
+  used: { name: string; roles: string[] }[];
+  unused: string[];
+}
+
+/** Which pointnames each analysis consumes for a shot; null without a live backend
+ *  (the static mock has no channel introspection). */
+export async function fetchChannelUsage(shot: string): Promise<ChannelUsage | null> {
+  if (!API_BASE) return null;
+  return getJSON<ChannelUsage>(`${API_BASE}/api/channels/${shot}`);
+}
+
 /** Parameters for a live shot pull (POST /api/fetch). */
 export interface FetchBody {
   shot: number;
