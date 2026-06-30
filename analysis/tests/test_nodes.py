@@ -68,6 +68,15 @@ def test_mode_shape_node_has_band():
         assert all(lo <= y <= up for lo, y, up in zip(s["lower"], s["y"], s["upper"]))
 
 
+def test_mode_similarity_node():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "mode_similarity")
+    assert n["kind"] == "scatter2d"
+    assert n["points"] and all(0.0 <= p["y"] <= 1.0 for p in n["points"])  # MAC ∈ [0,1]
+    assert n["meta"].get("best_n_by_shape") is not None
+    assert 0.0 <= n["meta"]["peak_mac"] <= 1.0
+
+
 def test_fit_quality_node_has_finite_k():
     shot = _first_shot()
     n = nodes.build_node(shot, "fit_quality")

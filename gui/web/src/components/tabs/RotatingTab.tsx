@@ -108,6 +108,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
     node: modeShapeNode,
   } = useNode(machine, "mode_shape", { time: cursorMs });
 
+  // Fetch the shape-based MAC mode-number identification (eigspec eq 9)
+  const {
+    node: modeSimilarityNode,
+  } = useNode(machine, "mode_similarity", { time: cursorMs });
+
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
     if (specNode && specNode.kind === "heatmap" && specNode.x.length > 0) {
@@ -690,18 +695,32 @@ export default function RotatingTab({ machine }: { machine: string }) {
     );
   };
 
-  // GP mode shape with ±2σ band — only shown when the backend serves a real shape
-  // (no fabricated fallback; the band is genuine predictive uncertainty).
+  // GP mode shape with ±2σ band + shape-based MAC mode id — only shown when the
+  // backend serves real data (no fabricated fallback; band is genuine predictive σ).
   const renderModeShape = () => {
-    if (!modeShapeNode || modeShapeNode.kind !== "line") return null;
-    const m = modeShapeNode.meta as Record<string, number | string> | undefined;
+    const hasShape = modeShapeNode && modeShapeNode.kind === "line";
+    const hasMac = modeSimilarityNode && modeSimilarityNode.kind === "scatter2d";
+    if (!hasShape && !hasMac) return null;
+    const sm = modeShapeNode?.meta as Record<string, number | string> | undefined;
+    const mm = modeSimilarityNode?.meta as Record<string, number | string> | undefined;
     return (
-      <div style={{ overflow: "auto" }}>
-        <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-          Toroidal Mode Shape — GP fit ±2σ
-          {m?.f_kHz != null ? ` @ ${m.f_kHz} kHz` : ""}
-        </h4>
-        <NodeView node={modeShapeNode} height={200} />
+      <div style={{ display: "flex", flexDirection: "row", gap: "8px" }}>
+        {hasShape && (
+          <div style={{ flex: 2, overflow: "auto" }}>
+            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+              Toroidal Mode Shape — GP fit ±2σ{sm?.f_kHz != null ? ` @ ${sm.f_kHz} kHz` : ""}
+            </h4>
+            <NodeView node={modeShapeNode!} height={200} />
+          </div>
+        )}
+        {hasMac && (
+          <div style={{ flex: 1, overflow: "auto" }}>
+            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+              Shape MAC (n = {String(mm?.best_n_by_shape ?? "")})
+            </h4>
+            <NodeView node={modeSimilarityNode!} height={200} />
+          </div>
+        )}
       </div>
     );
   };

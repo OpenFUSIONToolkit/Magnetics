@@ -322,6 +322,22 @@ def _mode_shape(shot, params=None) -> dict:
               "note": "GP toroidal mode shape (eigspec §2.2.2); shaded = ±2σ"})
 
 
+# ── mode_similarity: shape-based toroidal-n identification via MAC ────────────
+def _mode_similarity(shot, params=None) -> dict:
+    """MAC of the measured array shape vs ideal pure-mode templates e^{−inφ} (eq 9):
+    a geometry-aware, shape-based mode-number identification cross-checking the
+    cross-phase fit. Peak MAC marks the best-matching toroidal n."""
+    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    z = mode_shape.shape_vector(mode.phase, mode.amplitude)
+    ns, macs, best = mode_shape.mac_n_spectrum(mode.toroidal_angle, z)
+    points = [{"x": int(n), "y": round(float(m), 4)} for n, m in zip(ns, macs)]
+    return contracts.scatter2d(
+        points, {"x": "toroidal n", "y": "MAC"},
+        meta={"best_n_by_shape": best, "peak_mac": round(float(macs.max()), 3),
+              "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
+              "note": "shape similarity (MAC, eigspec eq 9) vs pure-mode templates"})
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -332,6 +348,7 @@ _BUILDERS = {
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
     "mode_shape": _mode_shape,
+    "mode_similarity": _mode_similarity,
 }
 
 

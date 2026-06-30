@@ -7,6 +7,8 @@ from magnetics.core.mode_shape import (
     ModeShapeResult,
     gp_mode_shape,
     gp_periodic_fit,
+    mac,
+    mac_n_spectrum,
     mode_pattern_2d,
     periodic_kernel,
     shape_vector,
@@ -120,3 +122,59 @@ class TestModePattern2D:
         assert p.shape == (th_g.size, phi_g.size)   # row-major [θ][φ]
         assert np.all(np.isfinite(p))
         assert p.dtype.kind == "f"                  # real-valued
+
+
+class TestMAC:
+    def test_identical_vectors(self):
+        v = np.array([1.0, 1j, -1.0, -1j])
+        assert mac(v, v) == 1.0
+
+    def test_invariant_to_scale_and_phase(self):
+        # MAC ignores a global complex scale (amplitude × phase)
+        v = np.array([1.0, 2j, -3.0, 0.5j])
+        assert abs(mac(v, 4.2 * np.exp(1.3j) * v) - 1.0) < 1e-12
+
+    def test_orthogonal_is_zero(self):
+        assert mac(np.array([1.0, 0.0, 1.0, 0.0]),
+                   np.array([0.0, 1.0, 0.0, 1.0])) == 0.0
+
+    def test_zero_vector_safe(self):
+        assert mac(np.zeros(4, complex), np.ones(4, complex)) == 0.0
+
+    def test_bounded_unit_interval(self):
+        rng = np.random.default_rng(7)
+        for _ in range(20):
+            a = rng.standard_normal(8) + 1j * rng.standard_normal(8)
+            b = rng.standard_normal(8) + 1j * rng.standard_normal(8)
+            assert 0.0 <= mac(a, b) <= 1.0 + 1e-12
+
+
+class TestMacNSpectrum:
+    def test_peaks_at_true_mode(self):
+        phi = np.array([0.0, 33.0, 66.0, 120.0, 200.0, 300.0])
+        n_true = 3
+        z = shape_vector(-n_true * phi, np.ones_like(phi))  # phase = -n·φ
+        ns, macs, best = mac_n_spectrum(phi, z)
+        assert abs(best) == n_true
+        assert macs.max() > 0.99
+        assert ns.shape == macs.shape
+
+    def test_agrees_with_cross_phase_fit(self):
+        # the shape-MAC n must match the cross-phase fit's n (same sign convention),
+        # since both consume the same extract_mode_at_frequency phases
+        from magnetics.core.spectral import (
+            extract_mode_at_frequency,
+            fit_toroidal_mode,
+        )
+        rng = np.random.default_rng(5)
+        fs = 50_000
+        t = np.linspace(0, 0.1, int(fs * 0.1), endpoint=False)
+        phi = np.array([0.0, 33.0, 66.0, 120.0, 200.0, 300.0])
+        sigs = np.vstack([
+            np.sin(2 * np.pi * 3000.0 * t - np.deg2rad(2 * p)) + 0.05 * rng.standard_normal(t.size)
+            for p in phi
+        ])
+        mode = extract_mode_at_frequency(sigs, phi, t, frequency=3000.0)
+        fit = fit_toroidal_mode(mode)
+        _, _, best = mac_n_spectrum(phi, shape_vector(mode.phase, mode.amplitude))
+        assert best == fit.n

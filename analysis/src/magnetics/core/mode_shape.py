@@ -200,6 +200,45 @@ def shape_vector(
 
 
 # ---------------------------------------------------------------------------
+# Modal Assurance Criterion + shape-based mode identification (eigspec eq 9)
+# ---------------------------------------------------------------------------
+
+
+def mac(v: NDArray[np.complexfloating], w: NDArray[np.complexfloating]) -> float:
+    """Modal Assurance Criterion (eq 9): |v†w|² / ((v†v)(w†w)), in [0, 1].
+
+    A phase- and amplitude-independent similarity of two complex shape vectors —
+    1 when they describe the same spatial pattern (up to a complex scale), 0 when
+    orthogonal. The building block for mode tracking and clustering in eigspec.
+    """
+    v = np.asarray(v, dtype=np.complex128)
+    w = np.asarray(w, dtype=np.complex128)
+    den = float(np.real(np.vdot(v, v) * np.vdot(w, w)))
+    if den <= 0.0:
+        return 0.0
+    return float(np.abs(np.vdot(v, w)) ** 2 / den)
+
+
+def mac_n_spectrum(
+    angle_deg: NDArray[np.floating],
+    complex_shape: NDArray[np.complexfloating],
+    *,
+    n_range: tuple[int, int] = (-6, 6),
+) -> tuple[NDArray[np.integer], NDArray[np.floating], int]:
+    """MAC of a measured shape vector against ideal pure-mode templates e^{−inφ}.
+
+    Gives a *shape-based*, geometry-aware toroidal mode-number identification (how
+    closely the measured array pattern resembles each pure rotating mode), a useful
+    cross-check on the cross-phase fit. Returns (n_values, mac_values, best_n).
+    """
+    phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
+    z = np.asarray(complex_shape, dtype=np.complex128)
+    ns = np.arange(n_range[0], n_range[1] + 1)
+    macs = np.array([mac(z, np.exp(-1j * n * phi)) for n in ns])
+    return ns, macs, int(ns[int(np.argmax(macs))])
+
+
+# ---------------------------------------------------------------------------
 # 2-D (θ, φ) modal pattern (eq 23)
 # ---------------------------------------------------------------------------
 
