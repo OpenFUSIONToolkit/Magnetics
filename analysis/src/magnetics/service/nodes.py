@@ -42,11 +42,17 @@ def _array_channels(shot, families: tuple[str, ...]):
 
 
 def _stack(shot, names):
-    """Load channels, truncate to common length, return (t_ms, matrix[ch,time])."""
-    series = [h5source.load_channel(shot, nm) for nm in names]
-    nmin = min(d.size for _, d in series)
-    t = series[0][0][:nmin]
-    mat = np.array([d[:nmin] for _, d in series], dtype=float)
+    """Load channels, truncate to common length, return (t_ms, matrix[ch,time]).
+
+    A toroidal/poloidal array shares one digitizer clock, so only the first
+    channel's time axis is needed: read time once (the reference channel) and
+    data-only for the rest, instead of materializing every channel's time vector.
+    """
+    t0, d0 = h5source.load_channel(shot, names[0])
+    datas = [d0] + [h5source.load_data(shot, nm) for nm in names[1:]]
+    nmin = min(d.size for d in datas)
+    t = t0[:nmin]
+    mat = np.array([d[:nmin] for d in datas], dtype=float)
     return t, mat
 
 

@@ -81,6 +81,27 @@ def test_identical_time_bases_deduped_and_hardlinked(tmp_path):
         assert len(refs) == 1
 
 
+def test_distinct_nonuniform_timebases_not_merged(tmp_path):
+    """Two non-uniform time axes that share (shape, start, end, N) but differ in
+    the interior MUST NOT be deduped. Keying the cache on metadata alone silently
+    hard-links the second channel to the first and corrupts its timestamps.
+    """
+    tA = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 10.0])
+    tB = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 9.0, 10.0])
+    # identical shape (8,), start 0.0, end 10.0, size 8 — only the interior differs
+    a = Channel("A", tA.copy(), np.arange(8, dtype=np.float32), ok=True)
+    b = Channel("B", tB.copy(), np.arange(8, dtype=np.float32), ok=True)
+
+    out, (got, missing) = _write(tmp_path, [a, b])
+    assert {c.name for c in got} == {"A", "B"} and not missing
+
+    import h5py
+    with h5py.File(out, "r") as h5:
+        assert len(h5["_timebases"]) == 2  # two distinct vectors stored, not one
+        np.testing.assert_array_equal(h5["A"]["time"][:], tA)
+        np.testing.assert_array_equal(h5["B"]["time"][:], tB)
+
+
 def test_all_missing_when_fetch_failed(tmp_path):
     chans = [Channel("A", ok=False, error="no data"),
              Channel("B", ok=False, error="no data")]
