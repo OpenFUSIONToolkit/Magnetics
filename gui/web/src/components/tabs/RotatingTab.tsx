@@ -6,6 +6,7 @@ import { MODE_PALETTE, POWER_SEQUENTIAL } from "../../lib/colormaps";
 import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
+import type { Node } from "../../lib/contract";
 
 // Deterministic mock generator helper (keeps React render pure)
 function generateDeterministicTimeTrace(timeSlice: number, freqPeaks: number[]) {
@@ -108,10 +109,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
     node: modeShapeNode,
   } = useNode(machine, "mode_shape", { time: cursorMs });
 
-  // Fetch the shape-based MAC mode-number identification (eigspec eq 9)
+  // Fetch the GP-smoothed poloidal mode shape (real DIII-D θ; needs the MPID array)
   const {
-    node: modeSimilarityNode,
-  } = useNode(machine, "mode_similarity", { time: cursorMs });
+    node: poloidalShapeNode,
+  } = useNode(machine, "poloidal_shape", { time: cursorMs });
 
   // Fetch the 2D (θ,φ) modal pattern on real DIII-D geometry (eigspec eq 23).
   // 422s when the shot lacks the poloidal array — the panel simply hides then.
@@ -707,66 +708,31 @@ export default function RotatingTab({ machine }: { machine: string }) {
     );
   };
 
-  // GP mode shape with ±2σ band + shape-based MAC mode id — only shown when the
-  // backend serves real data (no fabricated fallback; band is genuine predictive σ).
-  const renderModeShape = () => {
-    const hasShape = modeShapeNode && modeShapeNode.kind === "line";
-    const hasMac = modeSimilarityNode && modeSimilarityNode.kind === "scatter2d";
-    if (!hasShape && !hasMac) return null;
-    const sm = modeShapeNode?.meta as Record<string, number | string> | undefined;
-    const mm = modeSimilarityNode?.meta as Record<string, number | string> | undefined;
+  // Each analysis below renders in its OWN card panel (see the JSX), and only when
+  // the backend serves it — no fabricated fallbacks. A small helper wraps a node in
+  // a titled, bordered card consistent with the spectrogram / spectrum panels.
+  const analysisCard = (
+    title: string,
+    node: Node | null,
+    kind: Node["kind"],
+    height: number,
+    subtitle?: string,
+  ) => {
+    if (!node || node.kind !== kind) return null;
     return (
-      <div style={{ display: "flex", flexDirection: "row", gap: "8px" }}>
-        {hasShape && (
-          <div style={{ flex: 2, overflow: "auto" }}>
-            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-              Toroidal Mode Shape — GP fit ±2σ{sm?.f_kHz != null ? ` @ ${sm.f_kHz} kHz` : ""}
-            </h4>
-            <NodeView node={modeShapeNode!} height={200} />
-          </div>
-        )}
-        {hasMac && (
-          <div style={{ flex: 1, overflow: "auto" }}>
-            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-              Shape MAC (n = {String(mm?.best_n_by_shape ?? "")})
-            </h4>
-            <NodeView node={modeSimilarityNode!} height={200} />
-          </div>
-        )}
+      <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: 0, minHeight: 0 }}>
+        <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+          {title}
+          {subtitle ? <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}> · {subtitle}</span> : null}
+        </h4>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <NodeView node={node} height={height} />
+        </div>
       </div>
     );
   };
 
-  // 2D (θ,φ) modal pattern on real geometry — hidden unless the shot has the
-  // poloidal array (the backend 422s otherwise; no fabricated stand-in).
-  const renderModePattern = () => {
-    if (!modePatternNode || modePatternNode.kind !== "contour") return null;
-    const m = modePatternNode.meta as Record<string, number | string> | undefined;
-    return (
-      <div style={{ overflow: "auto" }}>
-        <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-          2D Modal Pattern (θ, φ){m?.f_kHz != null ? ` @ ${m.f_kHz} kHz` : ""}
-        </h4>
-        <NodeView node={modePatternNode} height={240} />
-      </div>
-    );
-  };
-
-  // Full-array shape-coherence-over-time track (eigspec fig 9) — sustained high
-  // MAC marks a persistent mode; drops mark mode changes.
-  const renderModeTrack = () => {
-    if (!modeTrackNode || modeTrackNode.kind !== "line") return null;
-    const m = modeTrackNode.meta as Record<string, number | string> | undefined;
-    return (
-      <div style={{ overflow: "auto" }}>
-        <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-          Mode Tracking — shape coherence vs time
-          {m?.dominant_n != null ? ` (dominant n = ${m.dominant_n})` : ""}
-        </h4>
-        <NodeView node={modeTrackNode} height={200} />
-      </div>
-    );
-  };
+  const shapeMeta = (n: Node | null) => (n?.meta as Record<string, number | string> | undefined);
 
   return (
     <div style={{ display: "flex", gap: sidebarExpanded ? "0px" : "16px", height: "100%", position: "relative" }}>
@@ -1241,18 +1207,31 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
         <DraggableDivider direction="vertical" onDelta={handlePanel23Delta} />
 
-        {/* Panel 3: Mode Structure Fits */}
+        {/* Panel 3: Mode Structure Fits (toroidal/poloidal phase fits) */}
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel3Height, minHeight: 0 }}>
           <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
             Mode Structure Fits (Error Bars Active)
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
             {renderModeStructure()}
-            {renderModeShape()}
-            {renderModeTrack()}
-            {renderModePattern()}
           </div>
         </div>
+
+        {/* Each eigspec analysis in its own card — rendered only when the backend
+            serves it (poloidal shape & 2D pattern need a shot with the MPID array). */}
+        {analysisCard("Toroidal Mode Shape", modeShapeNode, "line", 220,
+          shapeMeta(modeShapeNode)?.f_kHz != null
+            ? `GP fit ±2σ · markers = probes @ ${shapeMeta(modeShapeNode)!.f_kHz} kHz` : "GP fit ±2σ")}
+        {analysisCard("Poloidal Mode Shape", poloidalShapeNode, "line", 220,
+          shapeMeta(poloidalShapeNode)?.f_kHz != null
+            ? `GP fit ±2σ · markers = probes @ ${shapeMeta(poloidalShapeNode)!.f_kHz} kHz` : "GP fit ±2σ")}
+        {analysisCard("2D Modal Pattern (θ, φ)", modePatternNode, "contour", 260,
+          shapeMeta(modePatternNode)?.f_kHz != null
+            ? `Re{poloidal ⊗ toroidal}, eq 23 @ ${shapeMeta(modePatternNode)!.f_kHz} kHz` : "eigspec eq 23")}
+        {analysisCard("Mode Persistence", modeTrackNode, "line", 200,
+          shapeMeta(modeTrackNode)?.dominant_n != null
+            ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`
+            : "shape similarity to the dominant mode vs time")}
       </div>
     </div>
   );

@@ -60,7 +60,7 @@ def test_phase_fit_node_has_real_error_bars():
     assert n["meta"].get("phase_sigma_deg") is not None
 
 
-def test_mode_shape_node_has_band():
+def test_mode_shape_node_has_band_and_markers():
     shot = _first_shot()
     n = nodes.build_node(shot, "mode_shape")
     assert n["kind"] == "line"
@@ -69,19 +69,31 @@ def test_mode_shape_node_has_band():
         assert len(s["lower"]) == len(s["upper"]) == len(s["y"])
         # band brackets the mean everywhere
         assert all(lo <= y <= up for lo, y, up in zip(s["lower"], s["y"], s["upper"]))
+        # measured probe markers present (cf. Olofsson fig 10)
+        assert len(s["markers"]["x"]) == len(s["markers"]["y"]) > 0
+
+
+def test_poloidal_shape_node():
+    shot = _first_shot()
+    try:
+        n = nodes.build_node(shot, "poloidal_shape")
+    except Exception as e:  # noqa: BLE001 — shot may lack the MPID poloidal array
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    assert n["kind"] == "line"
+    assert {s["name"] for s in n["series"]} >= {"Re", "Im"}
+    assert all("markers" in s for s in n["series"])
 
 
 def test_mode_nodes_share_one_stft():
-    # phase_fit, mode_shape, mode_similarity, mode_track all read ONE cached
-    # full-array STFT rather than recomputing it; cursor moves index into it
+    # phase_fit, mode_shape, mode_track all read ONE cached full-array STFT rather
+    # than recomputing it; cursor moves and frequency changes index into it
     shot = _first_shot()
     nodes._array_spectrum.cache_clear()
     nodes.build_node(shot, "phase_fit", {"time": "100"})
     hits0 = nodes._array_spectrum.cache_info().hits
-    nodes.build_node(shot, "mode_shape", {"time": "100"})      # same array+f → hit
-    nodes.build_node(shot, "mode_similarity", {"time": "250"})  # moved cursor → still hit
+    nodes.build_node(shot, "mode_shape", {"time": "100"})  # same array → hit
     nodes.build_node(shot, "mode_track")
-    assert nodes._array_spectrum.cache_info().hits >= hits0 + 3
+    assert nodes._array_spectrum.cache_info().hits >= hits0 + 2
 
 
 def test_mode_track_node():
@@ -91,15 +103,6 @@ def test_mode_track_node():
     s = n["series"][0]
     assert len(s["x"]) == len(s["y"]) and all(0.0 <= y <= 1.0 for y in s["y"])
     assert n["meta"].get("ref_t_ms") is not None
-
-
-def test_mode_similarity_node():
-    shot = _first_shot()
-    n = nodes.build_node(shot, "mode_similarity")
-    assert n["kind"] == "scatter2d"
-    assert n["points"] and all(0.0 <= p["y"] <= 1.0 for p in n["points"])  # MAC ∈ [0,1]
-    assert n["meta"].get("best_n_by_shape") is not None
-    assert 0.0 <= n["meta"]["peak_mac"] <= 1.0
 
 
 def test_fit_quality_node_has_finite_k():

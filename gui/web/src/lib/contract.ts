@@ -59,10 +59,18 @@ export interface Scatter2DNode {
 
 /** One or more 1-D traces — amplitude & phase vs time, GP mode shapes, etc.
  *  A series may carry a `lower`/`upper` envelope (same length as `y`), drawn as a
- *  shaded ±band — e.g. the 2σ uncertainty of a Gaussian-process mode shape. */
+ *  shaded ±band — e.g. the 2σ uncertainty of a Gaussian-process mode shape — and/or
+ *  `markers` (the discrete measured points the curve was fit to). */
 export interface LineNode {
   kind: "line";
-  series: { name: string; x: number[]; y: number[]; lower?: number[]; upper?: number[] }[];
+  series: {
+    name: string;
+    x: number[];
+    y: number[];
+    lower?: number[];
+    upper?: number[];
+    markers?: { x: number[]; y: number[] };
+  }[];
   axes: Axes;
   meta?: Record<string, unknown>;
 }

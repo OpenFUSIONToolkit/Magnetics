@@ -156,6 +156,14 @@ export default function NodeView({ node, height }: { node: Node; height?: number
           type: "scatter", mode: "lines", name: s.name, x: s.x, y: s.y,
           line: { color, width: 1.6 },
         } as Partial<Plotly.PlotData>);
+        // measured probe values the curve was fit to (Olofsson fig 10)
+        if (s.markers) {
+          traces.push({
+            type: "scatter", mode: "markers", x: s.markers.x, y: s.markers.y,
+            name: `${s.name} (probes)`, showlegend: false, hoverinfo: "x+y",
+            marker: { color, size: 6, line: { color: inkEdge, width: 0.5 } },
+          } as Partial<Plotly.PlotData>);
+        }
       });
       return (
         <Plot

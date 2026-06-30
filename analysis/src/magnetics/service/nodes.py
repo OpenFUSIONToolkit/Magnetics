@@ -353,29 +353,45 @@ def _phase_fit(shot, params=None) -> dict:
                       "error bars = 1σ cross-spectral phase uncertainty"})
 
 
-# ── mode_shape: GP-smoothed toroidal eigenmode shape with 2σ bands ───────────
-def _mode_shape(shot, params=None) -> dict:
-    """Smooth toroidal mode shape (re/im of the complex shape vector) with a ±2σ
-    uncertainty band, via the periodic-kernel GP (eigspec §2.2.2)."""
-    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
-    # GP smooth with the band seeded from the Tier-1 per-probe σ (heteroscedastic).
-    ms = _gp_shape(mode)
+# ── mode shape: GP-smoothed eigenmode shape (re/im) with 2σ bands + markers ───
+def _shape_line(ms, x_label, meta) -> dict:
+    """Build a `line` node for a GP mode shape: Re/Im smooth curves with ±2σ bands
+    and the measured per-probe values as overlaid markers (cf. Olofsson fig 10)."""
     grid = ms.grid_deg.tolist()
+    ang = ms.angle_deg.tolist()
     series = [
         {"name": "Re", "x": grid, "y": ms.re_mean.tolist(),
          "lower": (ms.re_mean - 2 * ms.re_sigma).tolist(),
-         "upper": (ms.re_mean + 2 * ms.re_sigma).tolist()},
+         "upper": (ms.re_mean + 2 * ms.re_sigma).tolist(),
+         "markers": {"x": ang, "y": ms.re_obs.tolist()}},
         {"name": "Im", "x": grid, "y": ms.im_mean.tolist(),
          "lower": (ms.im_mean - 2 * ms.im_sigma).tolist(),
-         "upper": (ms.im_mean + 2 * ms.im_sigma).tolist()},
+         "upper": (ms.im_mean + 2 * ms.im_sigma).tolist(),
+         "markers": {"x": ang, "y": ms.im_obs.tolist()}},
     ]
-    return contracts.line(
-        series, {"x": "φ (deg)", "y": "shape (a.u.)"},
-        meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "n_probes": len(arr),
-              "length_scale_rad": round(float(ms.length_scale), 3),
-              "noise": round(float(ms.noise), 4),
-              "note": "GP toroidal mode shape (eigspec §2.2.2); shaded = ±2σ"})
+    return contracts.line(series, {"x": x_label, "y": "shape (a.u.)"}, meta=meta)
+
+
+def _mode_shape(shot, params=None) -> dict:
+    """Smooth *toroidal* mode shape (re/im vs φ) with a ±2σ band, via the
+    periodic-kernel GP (eigspec §2.2.2), plus the measured probe markers."""
+    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    ms = _gp_shape(mode)
+    return _shape_line(ms, "φ (deg)", {
+        "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
+        "length_scale_rad": round(float(ms.length_scale), 3),
+        "note": "GP toroidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
+
+
+def _poloidal_shape(shot, params=None) -> dict:
+    """Smooth *poloidal* mode shape (re/im vs θ) with a ±2σ band, on the real DIII-D
+    poloidal array (cf. Olofsson fig 10(b)). Needs a shot with the MPID array."""
+    arr, mode, f_khz, t0_ms = _poloidal_mode(shot, params)
+    ms = _gp_shape(mode)
+    return _shape_line(ms, "θ (deg)", {
+        "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
+        "length_scale_rad": round(float(ms.length_scale), 3),
+        "note": "GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
 
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
@@ -427,28 +443,11 @@ def _mode_pattern(shot, params=None) -> dict:
               "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry"})
 
 
-# ── mode_similarity: shape-based toroidal-n identification via MAC ────────────
-def _mode_similarity(shot, params=None) -> dict:
-    """MAC of the measured array shape vs ideal pure-mode templates e^{−inφ} (eq 9):
-    a geometry-aware, shape-based mode-number identification cross-checking the
-    cross-phase fit. Peak MAC marks the best-matching toroidal n."""
-    arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
-    z = mode_shape.shape_vector(mode.phase, mode.amplitude)
-    ns, macs, best = mode_shape.mac_n_spectrum(mode.toroidal_angle, z)
-    points = [{"x": int(n), "y": round(float(m), 4)} for n, m in zip(ns, macs)]
-    return contracts.scatter2d(
-        points, {"x": "toroidal n", "y": "MAC"},
-        meta={"best_n_by_shape": best, "peak_mac": round(float(macs.max()), 3),
-              "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
-              "note": "shape similarity (MAC, eigspec eq 9) vs pure-mode templates"})
-
-
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
 def _mode_track(shot, params=None) -> dict:
-    """Track the full toroidal array's mode over time at a fixed frequency: MAC
-    similarity to the strongest-mode reference slice vs time (eigspec fig 9). A
-    sustained high MAC marks a persistent mode; drops mark mode changes. Reads the
-    cached full-array STFT, so it's cheap once the spectrum exists."""
+    """Mode persistence: the full array's shape MAC-similarity to the strongest mode
+    slice vs time (eigspec fig 9). A sustained value near 1 means the same spatial
+    mode persists; a drop marks a mode change. Reads the cached full-array STFT."""
     f_khz = _f(params, "f_khz", None)
     if f_khz is None:
         f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
@@ -457,14 +456,14 @@ def _mode_track(shot, params=None) -> dict:
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
-    series = [{"name": "shape MAC to ref", "x": tr.t_ms.tolist(),
-               "y": tr.mac_to_ref.tolist()}]
+    series = [{"name": "shape similarity to dominant mode",
+               "x": tr.t_ms.tolist(), "y": tr.mac_to_ref.tolist()}]
     return contracts.line(
-        series, {"x": "time (ms)", "y": "shape MAC"},
+        series, {"x": "time (ms)", "y": "shape similarity (0–1)"},
         meta={"f_kHz": f_khz, "ref_t_ms": round(float(tr.ref_t_ms), 1),
               "dominant_n": int(vals[int(counts.argmax())]), "shot": str(shot),
               "n_probes": len(arr),
-              "note": "shape coherence to reference over time (eigspec fig 9)"})
+              "note": "1 = same spatial mode persists; drops mark mode changes (fig 9)"})
 
 
 _BUILDERS = {
@@ -477,8 +476,8 @@ _BUILDERS = {
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
     "mode_shape": _mode_shape,
+    "poloidal_shape": _poloidal_shape,
     "mode_pattern": _mode_pattern,
-    "mode_similarity": _mode_similarity,
     "mode_track": _mode_track,
 }
 
