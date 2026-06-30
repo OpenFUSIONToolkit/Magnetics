@@ -129,11 +129,16 @@ def theta_of(name: str, shot=None) -> float:
 
 
 def sensor(name: str, shot=None) -> dict:
-    """Full geometry record for one channel at `shot`."""
+    """Full geometry record for one channel at `shot` — shot-correct (r, z, φ, θ)
+    from the device table plus name-derived kind/family. r/z are None for a channel
+    with no table geometry at this shot (φ then name-parsed, θ the cosmetic fallback)."""
+    g = _geom(name, shot)
     return {
         "name": name,
         "phi": phi_of(name, shot),
         "theta": theta_of(name, shot),
+        "r": float(g["r"]) if g and g.get("r") is not None else None,
+        "z": float(g["z"]) if g and g.get("z") is not None else None,
         "kind": kind_of(name),
         "family": family_of(name),
     }

@@ -2,9 +2,11 @@
 
 The machines are clearly fake (MOCK-A / MOCK-B, never a real shot number), but:
 
-  • SENSOR POSITIONS are REAL DIII-D geometry (see _real_geometry.py) — static,
-    published layout — so the Sensors view and the contour's sensor overlay are
-    genuinely correct.
+  • SENSOR POSITIONS are REAL DIII-D geometry — resolved through the canonical,
+    shot-aware device table (data/device/diiid.json via data.diiid), the single
+    source of geometry truth — so the Sensors view and the contour's sensor overlay
+    are genuinely correct. _mock_roster.py only says *which* probes each fake machine
+    has (its composition); the positions themselves are never duplicated here.
   • FIELD and SPECTROGRAM VALUES are fabricated (numpy), shaped qualitatively from
     the real reduced shots so the plots look right:
         MOCK-A ← 164672 : dense, well-conditioned (K~6.7), m/n=2/1 LOCKED, ±~6.5 G
@@ -19,7 +21,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._real_geometry import GEOMETRY
+from ..data import diiid
+from ._mock_roster import ROSTER
+
+# Mock machines aren't real shots, so they have no shot of their own to resolve
+# geometry at; we read every mock sensor's real position from the shot-aware device
+# table at one modern reference shot (full coverage for both rosters). Positions
+# barely move across campaigns, so this is the genuine published layout.
+_GEOM_REF_SHOT = 184927
 
 # Per-machine qualitative profile, grounded in the real reduced shots.
 _PROFILE = {
@@ -46,7 +55,11 @@ def _profile(machine: str) -> dict:
 
 
 def _geometry(machine: str) -> dict:
-    return GEOMETRY.get(machine, GEOMETRY["MOCK-A"])
+    """Mock-machine sensor block — composition (roster + array labels) from
+    _mock_roster, positions resolved through the shot-aware device table via diiid."""
+    spec = ROSTER.get(machine, ROSTER["MOCK-A"])
+    return {"sensors": [diiid.sensor(n, _GEOM_REF_SHOT) for n in spec["sensors"]],
+            "arrays": spec["arrays"]}
 
 
 # ── geometry (Suh) — REAL positions, instant single final frame ─────────────
