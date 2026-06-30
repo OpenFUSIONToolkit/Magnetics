@@ -2,8 +2,8 @@
 
 A standalone, OMFIT-free translation of the OMFIT magnetics **3D spatial-fit** workflow — the
 SLCONTOUR-style quasi-stationary modal decomposition of locked / slowly-rotating MHD modes
-(VISION.md §4.1). It runs locally (no OMFIT, no MDSplus) against the example netCDF data in
-`../data/<shot>/`.
+(VISION.md §4.1). It runs locally (no OMFIT, no MDSplus) against the project-canonical data:
+per-shot signals in `data/datafile/shot_<shot>.h5` and device geometry in `data/device/<device>.json`.
 
 It fits the spatial field pattern at each time slice with a cylindrical-Fourier basis
 
@@ -21,27 +21,41 @@ metric — warn K > 10, error K > 20), per-coefficient error bars, and reduced �
 
 | local module | role | OMFIT magnetics module script |
 |---|---|---|
-| `io_data.py` | `load_shot` reads RAW / PLASMA_PARAMS / COUPLING netCDF (the "fetch" step) | `fetch_magnetics.py` |
+| `io_data.py` | `load_shot` reads `shot_<n>.h5` signals + the device JSON geometry (the "fetch" + "init" steps) | `fetch_magnetics.py` / `init_magnetics.py` |
 | `prep.py` | trim, DC-comp, integrate, causal filter, detrend, SVD-condition | `prep_magnetics.py` |
 | `fit.py` | basis matrix + SVD least-squares modal fit | `fit_magnetics.py` |
 | `run.py` | `run_steps` orchestrator (load → prep → fit) | `run_magnetics.py` |
 | `plots.py` | sensor map, signals, fit quality, mode amp/phase, φ-vs-time contour, SVD diagnostics | `plot_magnetics_*.py` |
-| `omfit_compat.py` | shim for OMFIT-runtime symbols (`printi`, `cornernote`, `uband`, `is_device`, subset filters, wall) | (OMFIT framework) |
+| `omfit_compat.py` | OMFIT-runtime shim (`printi`, `cornernote`, `uband`, `is_device`) + the device layer (geometry, named subsets, wall — all from the device JSON) | (OMFIT framework) |
 
-This package is **fully self-contained**: it has no runtime dependency on any other directory and
-runs even if the source OMFIT module is absent. Device reference tables (sensor geometry, named
-subsets, wall) are bundled under [`DATA/DIII-D/`](DATA/README.md) — see the next section.
+This package runs without OMFIT or MDSplus; it reads only the project-canonical data files (below).
 
 ## Data
 
-The example shots live in `../data/<shot>/` as three netCDF (HDF5) files — the Datasets that
-`fetch_magnetics.py` normally builds from MDSplus:
+### Per-shot signals — `data/datafile/shot_<shot>.h5`
 
-- `RAW` — `signal(channel, time)` + per-channel geometry (`*_end1/2` already derived), `signal_sigma`.
-- `PLASMA_PARAMS` — `Bt`, `Ip` (time base in **ms**), `helicity` attr.
-- `COUPLING` — `dc_coupling(coil, channel)` DC vacuum-compensation matrix (used only by `prep`'s DC compensation).
+One HDF5 file per shot (the PTDATA fetch output): a group per channel with `data` + `time`
+(hard-linked into a shared `_timebases` group), **all time in milliseconds**. Channels sample at
+several rates (integrated probes ~50 kHz, bdots ~200 kHz, coils/`ip`/`bt` ~20 kHz). Root attrs
+include `device`, `shot`, `tmin`/`tmax` (ms), `channels_fetched`/`channels_missing`.
 
-`RAW` time is in **seconds**; `prep` aligns the ms plasma traces to it.
+`io_data.load_shot` turns this into the Datasets the pipeline expects:
+
+- `raw` — `signal(channel, time)` (time in **seconds**), `signal_sigma` (a constant 2e-5 T), and the
+  per-channel geometry joined from the device JSON, including the derived `*_end1/2` coordinates.
+  All sensor channels are linearly interpolated onto a single common time axis (the densest native
+  grid, clipped to the window they share).
+- `plasma` — `Ip`, `Bt` from the `ip`/`bt` channels (time in **ms**), `helicity` attr (default −1).
+- `coupling` — `None`; the new files carry no DC vacuum-coupling matrix, so `prep`'s DC compensation
+  (`dc_comp=True`) is unavailable.
+
+### Device geometry — `data/device/<device>.json`
+
+The canonical device description (`diiid.json` for DIII-D): `R0`, the `wall` outline, the per-sensor
+base geometry (`r, z, phi, tilt, length, delta_phi, na, pair`), and named `sensor_sets`. Loaded via
+`omfit_compat` (`load_device`, `sensor_geometry`, `load_wall`, `resolve_channel_filter`).
+`sensor_geometry` derives `theta` and the `*_end1/2` sensor-end coordinates from the base geometry
+(the OMFIT `init_magnetics.py` step).
 
 ## Quick start
 
@@ -51,68 +65,61 @@ from run import run_steps
 import plots
 
 # load → prep → fit the LFS-midplane toroidal Bp array for n = 1,2,3
-r = run_steps(154551, channel_filter='Bp_LFS_midplane', ns=(1, 2, 3), ms=(0,),
-              time_trim=(2.5, 4.2), prep_kwargs=dict(cutoff_hz=(5, 250), energy=0.98))
+r = run_steps(199749, channel_filter='Bp_LFS_midplane', ns=(1, 2, 3), ms=(0,),
+              time_trim=(3.3, 3.5), prep_kwargs=dict(cutoff_hz=(5, 250), energy=0.98))
 
 print('condition number K =', r.condition_number)
 plots.plot_fit_modes(r.fit)                 # amplitude & phase of each mode vs time
 plots.plot_slice(r.fit, fix_coord='theta')  # the SLCONTOUR φ-vs-time contour
 ```
 
-`channel_filter` accepts a regex, a list of regexes, or a friendly subset name (e.g.
-`'Bp_LFS_midplane'`, `'Bp_LFS_R+1'`, `'Bp_All'`, `'3D_coils'`). List them all with
-`io_data.available_subsets('DIII-D')`.
+`channel_filter` accepts a regex, a list of regexes, or a friendly subset name — with or without
+underscores (e.g. `'Bp_LFS_midplane'` or `'Bp LFS midplane'`, `'Bp_All'`, `'All_3D_Coils'`). List
+them all with `io_data.available_subsets('DIII-D')`. `time_trim` must fall inside the shot file's
+window (shot 199749 spans **3.3–3.5 s**).
 
-## Device reference tables — `DATA/DIII-D/`
+## Device file — `data/device/diiid.json`
 
-Bundled with the package (provenance in [`DATA/README.md`](DATA/README.md)) so it is self-contained.
-These are **device** tables, distinct from the per-shot data in `../data/<shot>/`:
+All device metadata lives in this single JSON (replacing the old bundled `DATA/DIII-D/*.txt` tables):
 
-| file | content | loader (`omfit_compat`) |
+| key | content | loader (`omfit_compat`) |
 |---|---|---|
-| `channel_filters.txt` | named sensor subsets (`Bp_LFS_midplane`, `Bp_All`, …) | `load_channel_filters` |
-| `coil_filters.txt` | named 3D-coil subsets (`C`, `IL`, `IU`, `3D_coils`) | `load_coil_filters` |
-| `diiid_sensors.txt` | master sensor geometry (`r, z, phi, tilt, length, …`) | `load_sensor_table` |
-| `diiid_bdots.txt` | bdot sensor positions/sizes | `load_bdot_table` |
-| `channel_alternates.txt` | new→old PTDATA name map | `load_channel_alternates` |
-| `diiid.txt` | machine `R0` + `&wall` outline | `load_wall` |
-
-`resolve_channel_filter` / `list_sensor_subsets` merge the sensor **and** coil tables, so every name
-in either is a valid `channel_filter`. The fit currently takes geometry from the RAW netCDF;
-`load_sensor_table` is a reference loader (deriving the `*_end` coordinates — the `init` step — is
-future work, only needed if a shot file ever lacks geometry).
+| `sensor_sets` | named sensor subsets (`Bp LFS midplane`, `Bp All`, `All 3D Coils`, …) | `list_sensor_subsets`, `resolve_channel_filter` |
+| `sensors` | per-sensor base geometry (`r, z, phi, tilt, length, …`) → derived ends | `sensor_geometry` (alias `load_sensor_table`) |
+| `R0`, `wall` | machine major radius + first-wall outline | `load_wall` |
 
 ## The worked example
 
-`example_154551.ipynb` walks the full pipeline on **DIII-D 154551** (VISION's reference "rotating
-n=1 that slows and locks"). It produces: the sensor map, conditioned signals, data/design-matrix
-SVD diagnostics, fit quality, the mode amplitude & phase vs time (rotating → locking), and the
-φ-vs-time contour.
+[`example_magnetics.ipynb`](example_magnetics.ipynb) walks the full pipeline end to end (sensor map,
+conditioned signals, SVD diagnostics, fit quality, mode amplitude & phase, and the φ-vs-time
+contour). It is **shot-agnostic**: a single *Parameters* cell at the top sets `SHOT`,
+`CHANNEL_FILTER`, `TIME_TRIM`, and the mode lists — change those to analyse a different shot or
+array. It defaults to shot **199749** (`Bp_LFS_midplane`, `time_trim=(3.3, 3.5)`).
 
-Run it on the uv environment (Python 3.14):
+Run it on the uv environment (Python 3.14), e.g. a quick headless smoke test of the same pipeline:
 
 ```bash
 cd analysis
-# one-time: register the uv venv as a Jupyter kernel
-uv run --with ipykernel python -m ipykernel install --user --name magnetics-uv --display-name "Magnetics (uv 3.14)"
-# then either open it in Jupyter and pick the "Magnetics (uv 3.14)" kernel ...
-uv run --with jupyterlab jupyter lab magnetics-code/example_154551.ipynb
-# ... or execute headless:
+uv run python -c "import sys; sys.path.insert(0,'magnetics-code'); \
+from run import run_steps; r=run_steps(199749, channel_filter='Bp_LFS_midplane', \
+time_trim=(3.3,3.5), prep_kwargs=dict(cutoff_hz=(5,250), energy=0.98)); \
+print('K =', r.condition_number)"
+
+# or execute the whole notebook headless (regenerates its outputs):
 uv run --with nbconvert jupyter nbconvert --to notebook --execute --inplace \
-    magnetics-code/example_154551.ipynb --ExecutePreprocessor.kernel_name=magnetics-uv
+    magnetics-code/example_magnetics.ipynb --ExecutePreprocessor.kernel_name=magnetics-uv
 ```
 
 ## Dependencies
 
-Added to the `analysis` uv project: `xarray`, `scipy`, `h5netcdf`, `h5py`, `ipykernel` (all install
-cleanly on the pinned Python 3.14). `io_data` prefers the `h5netcdf` engine and falls back to a
-backend-free `h5py` loader if no netCDF backend is available.
+Added to the `analysis` uv project: `xarray`, `scipy`, `h5py`, `ipykernel` (all install cleanly on
+the pinned Python 3.14). `io_data` reads the shot HDF5 directly with `h5py`.
 
 ## Notes & limitations
 
-- The example `RAW` carries the integrated **`MPID*`** Bp signals (the raw `MPI66M*D` bdot channels
-  are empty in this file), so the LFS-midplane fit uses `'MPID66M.*'` (10 sensors, resolves |n| ≤ 4)
-  with `integrate=False`.
+- The LFS-midplane fit uses the integrated **`MPID66M*`** Bp array (`'Bp_LFS_midplane'`,
+  `integrate=False`). For shot 199749 the file has 9 of the 10 sensors (`MPID66M020` is in
+  `channels_missing`), which still resolves the low-n structure.
 - Reduced χ² runs above 1 because the constant 2e-5 T sensor sigma is optimistic relative to the
   higher-n structure not in the n ≤ 3 basis; the residuals remain small vs. the signals.
 - Out of scope (not ported): spectrogram/MODESPEC, 3D coil-current fits, the remote IDL
