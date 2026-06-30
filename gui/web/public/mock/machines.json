@@ -1,4 +1,4 @@
 [
-  { "id": "164672", "label": "DIII-D 164672 (mock)", "device": "DIII-D", "note": "MOCK · m/n=2/1 locked mode · well-conditioned", "mock": true },
-  { "id": "147131", "label": "DIII-D 147131 (mock)", "device": "DIII-D", "note": "MOCK · rotating n=1 · ill-conditioned", "mock": true }
+  { "id": "MOCK-A", "label": "MOCK-A", "device": "synthetic", "note": "fake · dense array · m/n=2/1 LOCKED · well-conditioned (K~7)", "mock": true },
+  { "id": "MOCK-B", "label": "MOCK-B", "device": "synthetic", "note": "fake · sparse legacy array · ROTATING n=1 · ill-conditioned (K~21)", "mock": true }
 ]
