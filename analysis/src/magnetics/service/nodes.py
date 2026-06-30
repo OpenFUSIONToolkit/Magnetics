@@ -20,7 +20,7 @@ from pathlib import Path as _Path
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import diiid, h5source
+from ..data import device_config, diiid, h5source
 
 # magnetics-code/ is not an installed package — add it to sys.path so run_steps and
 # the other scripts (lazy-imported inside _qs_run) are importable. This runs at
@@ -51,6 +51,11 @@ def _i(params, key, default=None):
 
 def _flag(params, key) -> bool:
     return bool(params) and str(params.get(key, "")).lower() in ("1", "true", "yes", "on")
+
+
+def _device_id(device: str) -> str:
+    """Display device name → device-file stem, e.g. 'DIII-D' → 'diiid'."""
+    return "".join(c for c in str(device).lower() if c.isalnum())
 
 
 def machines() -> list[dict]:
@@ -114,17 +119,26 @@ def _array_channels(shot, families: tuple[str, ...]):
     return out
 
 
-@lru_cache(maxsize=1)
-def _real_theta() -> dict:
-    """name → real poloidal angle θ (deg) from the published DIII-D layout in
-    ``_real_geometry`` (the genuine static positions), unioned over machines. Lets
-    the poloidal arrays carry physical θ instead of ``diiid``'s cosmetic offset."""
-    from . import _real_geometry
-    out: dict[str, float] = {}
-    for machine in _real_geometry.GEOMETRY.values():
-        for s in machine["sensors"]:
-            out[s["name"]] = float(s["theta"])
-    return out
+def _kappa_at(shot, t0_ms=None):
+    """Plasma elongation κ at the cursor time (or the shot median), from the fetched
+    ``kappa`` EFIT channel. None when the pull didn't include it — the poloidal map
+    then falls back to the geometric angle. κ outside a sane [1, 4] band is rejected
+    as a bad EFIT sample."""
+    try:
+        if "kappa" not in h5source.channel_names(shot):
+            return None
+        t, d = h5source.load_channel(shot, "kappa")
+    except (KeyError, OSError):
+        return None
+    d = np.asarray(d, dtype=float)
+    good = np.isfinite(d)
+    if not np.any(good):
+        return None
+    if t0_ms is None:
+        k = float(np.median(d[good]))
+    else:
+        k = float(np.interp(t0_ms, np.asarray(t, dtype=float)[good], d[good]))
+    return k if 1.0 <= k <= 4.0 else None
 
 
 @lru_cache(maxsize=16)
@@ -162,7 +176,7 @@ def _geometry(shot, params=None) -> dict:
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "θ (deg)"},
         meta={"n_sensors": len(points), "shot": str(shot),
-              "note": "θ is approximate (no geometry table yet)"})
+              "note": "real sensor geometry from data/device (φ, θ = atan2(z, r−R0))"})
 
 
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
@@ -481,9 +495,9 @@ def _toroidal_arr(shot):
     arr = _array_channels(shot, ("MPI_BDOT",))
     if len(arr) >= 4:
         return arr
-    theta = _real_theta()                          # integrated-Bp midplane fallback
+    # integrated-Bp midplane fallback: real θ from the device file picks the θ≈0 ring
     arr = [(n, p) for n, p in _array_channels(shot, ("MPID",))
-           if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)]
+           if diiid.has_geometry(n) and ((th := diiid.theta_of(n)) < 20.0 or th > 340.0)]
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a mode fit")
     return arr
@@ -580,23 +594,37 @@ def _mode_shape(shot, params=None) -> dict:
 def _poloidal_shape(shot, params=None) -> dict:
     """Smooth *poloidal* mode shape (re/im vs θ) with a ±2σ band, on the real DIII-D
     poloidal array (cf. Olofsson fig 10(b)). Needs a shot with the MPID array."""
-    arr, mode, f_khz, t0_ms = _poloidal_mode(shot, params)
+    arr, mode, f_khz, t0_ms, kappa = _poloidal_mode(shot, params)
     ms = _gp_shape(mode)
-    return _shape_line(ms, "θ (deg)", {
+    x_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
+    note = ("GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"
+            + (f"; θ* straightened for κ={kappa:.2f}" if kappa is not None
+               else "; geometric θ (no κ in this pull)"))
+    return _shape_line(ms, x_label, {
         "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
         "length_scale_rad": round(float(ms.length_scale), 3),
-        "note": "GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
+        "kappa": round(float(kappa), 3) if kappa is not None else None,
+        "note": note})
 
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
-    theta = _real_theta()
-    arr = [(name, theta[name]) for name in h5source.channel_names(shot)
-           if diiid.family_of(name) == "MPID" and name in theta]
+    """The integrated-Bp poloidal array, each probe at its real geometric θ from the
+    device file. Returns (name, θ_geo) sorted by θ; needs ≥4 distinct angles."""
+    arr = [(name, diiid.theta_of(name)) for name in h5source.channel_names(shot)
+           if diiid.family_of(name) == "MPID" and diiid.has_geometry(name)]
     arr.sort(key=lambda nt: nt[1])
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
         raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
     return arr
+
+
+def _theta_star(thetas_deg, kappa):
+    """Geometric θ → elongation-corrected θ* when κ is known, else θ unchanged.
+    Returns (angles_deg, used_star)."""
+    if kappa is None:
+        return np.asarray(thetas_deg, dtype=float), False
+    return geometry.elongation_theta_star(thetas_deg, kappa), True
 
 
 def _toroidal_n(shot, t0_s, f_khz):
@@ -612,20 +640,23 @@ def _toroidal_n(shot, t0_s, f_khz):
 def _poloidal_mode(shot, params):
     """Per-probe phase/amplitude across the poloidal array vs θ. The probes span φ, so
     the toroidal nφ ramp is removed (phase += n·φ → −m·θ + const) using the toroidal n
-    at the same (t0, f). Returns (arr, mode, f_khz, t0_ms)."""
+    at the same (t0, f). The probe angles are mapped to the elongation-corrected θ*
+    (using the EFIT κ at the cursor) when available, so an `m` mode is a clean sinusoid
+    rather than a κ-distorted one. Returns (arr, mode, f_khz, t0_ms, kappa)."""
     t0_ms = _f(params, "time", None)
     f_khz = _f(params, "f_khz", None)
     if f_khz is None:
         f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _poloidal_arr(str(shot))
-    thetas = np.array([th for _, th in arr], dtype=float)
+    kappa = _kappa_at(str(shot), t0_ms)
+    thetas, _used = _theta_star([th for _, th in arr], kappa)
     pphis = np.array([diiid.phi_of(n) or 0.0 for n, _ in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
     detrended = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
     mode = dataclasses.replace(mode, phase=detrended)
-    return arr, mode, f_khz, t0_ms
+    return arr, mode, f_khz, t0_ms, kappa
 
 
 def _gp_shape(mode):
@@ -636,16 +667,20 @@ def _gp_shape(mode):
 
 
 # ── mode_pattern: 2D (θ, φ) modal pattern from toroidal × poloidal shapes ─────
-def _pattern_overlay(shot) -> dict:
+def _pattern_overlay(shot, kappa=None) -> dict:
     """The real sensors that built the pattern, as (φ, θ) dots labelled by pointname:
-    the poloidal array at its (φ, θ) and the toroidal array along θ≈0. Lets the GUI
-    show where the field is actually sampled (and name each probe on hover)."""
+    the poloidal array at its (φ, θ) and the toroidal array along θ≈0. The poloidal
+    dots use the same elongation-corrected θ* as the pattern axis (when κ is known) so
+    they land on the field they sampled. Lets the GUI show where the field is actually
+    sampled (and name each probe on hover)."""
     pts = []
     try:
-        for nm, th in _poloidal_arr(str(shot)):
+        arr = _poloidal_arr(str(shot))
+        th_star, _ = _theta_star([th for _, th in arr], kappa)
+        for (nm, _th), ths in zip(arr, th_star):
             phi = diiid.phi_of(nm)
             if phi is not None:
-                pts.append({"x": float(phi), "y": float(th), "label": nm})
+                pts.append({"x": float(phi), "y": float(ths), "label": nm})
     except ValueError:
         pass
     try:
@@ -658,18 +693,24 @@ def _pattern_overlay(shot) -> dict:
 
 def _mode_pattern(shot, params=None) -> dict:
     """Rank-2 (θ, φ) modal pattern (eigspec eq 23) — the outer product of the GP
-    toroidal and poloidal mode shapes, on real DIII-D probe geometry."""
+    toroidal and poloidal mode shapes, on real DIII-D probe geometry. The poloidal
+    axis is the elongation-corrected θ* when the EFIT κ is available."""
     _, tmode, f_khz, t0_ms = _toroidal_mode(shot, params)
-    _, pmode, _, _ = _poloidal_mode(shot, params)
+    _, pmode, _, _, kappa = _poloidal_mode(shot, params)
     phi_g, th_g, pattern = mode_shape.mode_pattern_2d(_gp_shape(tmode), _gp_shape(pmode))
     zmax = float(np.nanmax(np.abs(pattern))) or 1.0
+    y_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
+    note = ("2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D geometry; "
+            "dots = probe locations"
+            + (f"; θ* straightened for κ={kappa:.2f}" if kappa is not None
+               else "; geometric θ (no κ in this pull)"))
     return contracts.contour(
         phi_g.tolist(), th_g.tolist(), pattern.tolist(),
-        {"x": "φ (deg)", "y": "θ (deg)", "z": "mode pattern (a.u.)"},
-        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot),
+        {"x": "φ (deg)", "y": y_label, "z": "mode pattern (a.u.)"},
+        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot, kappa),
         meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry; "
-                      "dots = probe locations"})
+              "kappa": round(float(kappa), 3) if kappa is not None else None,
+              "note": note})
 
 
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
@@ -849,8 +890,18 @@ def _sensor_map_rz(shot, params=None) -> dict:
     channels = list(run.prepared["channel"].values)
     device = str(raw.attrs.get("device", "DIII-D"))
 
-    from omfit_compat import load_wall  # magnetics-code/ on sys.path
-    r_wall, z_wall = load_wall(device)
+    # Vessel wall from the device description (data/device/<id>.json) when present;
+    # fall back to the OMFIT-compat loader for devices without a committed wall.
+    r_wall = z_wall = None
+    try:
+        wall = device_config.load(_device_id(device)).wall()
+        if wall is not None:
+            r_wall, z_wall = wall
+    except (FileNotFoundError, OSError):
+        pass
+    if r_wall is None:
+        from omfit_compat import load_wall  # magnetics-code/ on sys.path
+        r_wall, z_wall = load_wall(device)
 
     series = []
     for c in channels:

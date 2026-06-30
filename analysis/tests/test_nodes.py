@@ -146,13 +146,16 @@ def test_fit_quality_node_has_finite_k():
     assert n["fields"]
 
 
-def test_real_theta_has_full_poloidal_coverage():
-    # the real-θ table must span well beyond the midplane (else no honest 2D pattern)
-    theta = nodes._real_theta()
-    assert len(theta) > 20
-    vals = sorted(theta.values())
-    assert min(vals) < 60.0 and max(vals) > 170.0   # HFS / off-midplane probes present
-    assert "MPID67A217" in theta                      # a known off-midplane probe
+def test_device_theta_has_full_poloidal_coverage():
+    # the device-file θ must span well beyond the midplane (else no honest 2D pattern)
+    from magnetics.data import device_config, diiid
+    dev = device_config.load("diiid")
+    thetas = [diiid.theta_of(nm) for nm in dev._sensors if diiid.family_of(nm) == "MPID"]
+    assert len(thetas) > 20
+    assert min(thetas) < 60.0 and max(thetas) > 170.0  # HFS / off-midplane probes present
+    assert diiid.has_geometry("MPID67A217")            # a known off-midplane probe
+    # θ is the real geometric angle, not the old cosmetic flat offset
+    assert abs(diiid.theta_of("MPID67A217") - 52.5) < 2.0
 
 
 def test_mode_pattern_node():
@@ -163,6 +166,27 @@ def test_mode_pattern_node():
         pytest.skip(f"no poloidal array in this shot: {e}")
     assert n["kind"] == "contour"
     assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])  # [θ][φ]
+
+
+def test_elongation_theta_star_threads_into_poloidal_nodes(monkeypatch):
+    """With κ available the poloidal axis is the corrected θ*; absent κ it's geometric."""
+    shot = _first_shot()
+    try:
+        nodes.build_node(shot, "mode_pattern")  # needs the poloidal array
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"no poloidal array in this shot: {e}")
+
+    # κ absent → geometric θ, honest "no κ" label
+    monkeypatch.setattr(nodes, "_kappa_at", lambda *a, **k: None)
+    mp = nodes.build_node(shot, "mode_pattern", {"time": 3000})
+    assert mp["meta"]["kappa"] is None and "κ-corrected" not in mp["axes"]["y"]
+
+    # κ present → θ* axis + κ in meta
+    monkeypatch.setattr(nodes, "_kappa_at", lambda *a, **k: 1.85)
+    mp = nodes.build_node(shot, "mode_pattern", {"time": 3000})
+    ps = nodes.build_node(shot, "poloidal_shape", {"time": 3000})
+    assert mp["meta"]["kappa"] == 1.85 and "κ-corrected" in mp["axes"]["y"]
+    assert ps["meta"]["kappa"] == 1.85 and "κ-corrected" in ps["axes"]["x"]
 
 
 def test_unknown_node_raises():
