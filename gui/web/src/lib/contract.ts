@@ -50,7 +50,7 @@ export interface HeatmapNode {
 /** Scattered points — sensor geometry, phase-vs-angle fits. */
 export interface Scatter2DNode {
   kind: "scatter2d";
-  points: { x: number; y: number; label?: string; group?: string }[];
+  points: { x: number; y: number; label?: string; group?: string; error_x?: number; error_y?: number }[];
   axes: Axes;
   /** optional fitted line through the points (slope = n or m). */
   fit?: { x: number[]; y: number[] };

@@ -2,56 +2,89 @@
 // one component, so theming and lifecycle (resize, cleanup) live in exactly one
 // place. Build your traces + layout, hand them here. See <NodeView> for the
 // generic kind→trace mapping.
+//
+// Plotly's imperative API can throw transiently when react/purge race (concurrent
+// plots, fast re-renders) — the `_redrawFromAutoMarginCount` crash. We guard every
+// Plotly call so a transient throw can never blank the React tree.
 import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist-min";
-import { FONT } from "./colormaps";
+import { plotChrome } from "./colormaps";
+import { useStore } from "../store";
 
 export interface PlotProps {
   data: Partial<Plotly.PlotData>[];
   layout?: Partial<Plotly.Layout>;
   height?: number;
   onClick?: (e: Plotly.PlotMouseEvent) => void;
+  onRelayout?: (eventData: any) => void;
 }
 
-const BASE_LAYOUT: Partial<Plotly.Layout> = {
-  paper_bgcolor: "rgba(0,0,0,0)",
-  plot_bgcolor: "#0a0f16",
-  font: FONT,
-  margin: { l: 60, r: 20, t: 16, b: 48 },
-  showlegend: false,
-  xaxis: { gridcolor: "#16202d", zerolinecolor: "#24323f", linecolor: "#24323f", ticks: "outside", tickcolor: "#24323f" },
-  yaxis: { gridcolor: "#16202d", zerolinecolor: "#24323f", linecolor: "#24323f", ticks: "outside", tickcolor: "#24323f" },
-};
+function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
+  const c = plotChrome(theme);
+  const axis = {
+    gridcolor: c.gridcolor,
+    zerolinecolor: c.zerolinecolor,
+    linecolor: c.linecolor,
+    ticks: "outside" as const,
+    tickcolor: c.tickcolor,
+  };
+  return {
+    paper_bgcolor: c.paper_bgcolor,
+    plot_bgcolor: c.plot_bgcolor,
+    font: c.font,
+    margin: { l: 60, r: 20, t: 16, b: 48 },
+    showlegend: false,
+    xaxis: axis,
+    yaxis: axis,
+  };
+}
 
-export default function Plot({ data, layout, height = 320, onClick }: PlotProps) {
+export default function Plot({ data, layout, height = 320, onClick, onRelayout }: PlotProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const theme = useStore((s) => s.theme);
 
   useEffect(() => {
-    if (!ref.current) return;
+    const el = ref.current;
+    if (!el) return;
+    const base = baseLayout(theme);
     const merged: Partial<Plotly.Layout> = {
-      ...BASE_LAYOUT,
+      ...base,
       ...layout,
       height,
-      xaxis: { ...BASE_LAYOUT.xaxis, ...(layout?.xaxis as object) },
-      yaxis: { ...BASE_LAYOUT.yaxis, ...(layout?.yaxis as object) },
+      xaxis: { ...base.xaxis, ...(layout?.xaxis as object) },
+      yaxis: { ...base.yaxis, ...(layout?.yaxis as object) },
     };
-    Plotly.react(ref.current, data as Plotly.Data[], merged, {
-      displayModeBar: false,
-      responsive: true,
-    });
-    const el = ref.current;
-    const handler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
-    // @ts-expect-error plotly event typing is loose on the dist build
-    if (onClick) el.on("plotly_click", handler);
+    try {
+      Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true });
+      const clickHandler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
+      // @ts-expect-error plotly event typing is loose on the dist build
+      if (onClick) el.on("plotly_click", clickHandler);
+      // @ts-expect-error plotly event typing is loose on the dist build
+      if (onRelayout) el.on("plotly_relayout", onRelayout);
+    } catch {
+      /* transient Plotly layout race (e.g. StrictMode remount); next render re-syncs */
+    }
     return () => {
-      // @ts-expect-error plotly cleanup helper is untyped on the dist build
-      el.removeAllListeners?.("plotly_click");
+      try {
+        // @ts-expect-error plotly cleanup helper is untyped on the dist build
+        el.removeAllListeners?.("plotly_click");
+        // @ts-expect-error plotly cleanup helper is untyped on the dist build
+        el.removeAllListeners?.("plotly_relayout");
+      } catch {
+        /* noop */
+      }
     };
-  }, [data, layout, height, onClick]);
+  }, [data, layout, height, onClick, onRelayout, theme]);
 
   useEffect(() => {
     const el = ref.current;
-    return () => { if (el) Plotly.purge(el); };
+    return () => {
+      try {
+        if (el) Plotly.purge(el);
+      } catch {
+        /* noop */
+      }
+    };
   }, []);
 
   return <div ref={ref} style={{ height, width: "100%" }} />;

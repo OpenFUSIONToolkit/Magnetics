@@ -1,9 +1,10 @@
 // Small hook: fetch a named analysis node for a machine and track load/error.
 // Views use this instead of hand-rolling fetch + useState each time.
 //
-// State is keyed by (machine, node, params): when those change, the stored key
-// no longer matches and we report `loading` until the new fetch resolves — so
-// stale data never flashes, without calling setState synchronously in the effect.
+// State is keyed by (machine, node, params). Stale-while-revalidate: when the key
+// changes we keep returning the last node while the new fetch is in flight, so a
+// consumer plot never unmounts/blanks mid-refetch (which crashes Plotly when e.g.
+// a time-slider changes the fetch params).
 import { useEffect, useState } from "react";
 import { fetchNode } from "./api";
 import type { Node } from "./contract";
@@ -30,8 +31,8 @@ export function useNode(
 
   const fresh = entry.key === key;
   return {
-    node: fresh ? entry.node : null,
+    node: entry.node,                                  // keep stale node during refetch
     error: fresh ? entry.error : null,
-    loading: !fresh || (!entry.node && !entry.error),
+    loading: entry.node === null && !(fresh && entry.error),
   };
 }
