@@ -21,11 +21,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from . import mock
+from ..data import h5source
+from . import mock, nodes
 
-app = FastAPI(title="magnetics mock service", version="0.1.0",
-              description="MOCK data in the CONTRACT.md shapes — for GUI development.")
+app = FastAPI(title="magnetics service", version="0.1.0",
+              description="Real kind-nodes from fetched shot data, with a MOCK fallback.")
 
 # permissive CORS for the Vite dev server
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -45,7 +47,74 @@ def health():
 
 @app.get("/api/machines")
 def machines():
-    return mock.MACHINES
+    """Real fetched shots if any HDF5 files are present, else the mock machines."""
+    nodes.refresh()  # pick up any file fetched since the service started
+    real = nodes.machines()
+    return real if real else mock.MACHINES
+
+
+@app.get("/api/node/{shot}/{node_id}")
+def node(shot: str, node_id: str, request: Request):
+    """A single bare kind-node built from real fetched shot data — the REST shape
+    the GUI's useNode() consumes (data → core → contract). 404 if the shot/node
+    isn't available, 422 if the data can't support that analysis."""
+    try:
+        return nodes.build_node(shot, node_id, dict(request.query_params))
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+class FetchRequest(BaseModel):
+    shot: int
+    analysis: str = "both"
+    backend: str = "mdsthin"  # mdsthin (default) | toksearch (WIP) | remote (WIP) | auto
+    tmin: float | None = None
+    tmax: float | None = None
+    decimate: int = 1
+    username: str | None = None
+    password: str | None = None  # fed to ssh via askpass; localhost only, not stored
+    duo: str | None = None       # Duo passcode, or "1" for push (default)
+    # remote backend overrides (None → fetcher defaults: omega via cybele, conda)
+    remote_host: str | None = None
+    ssh_jump: str | None = None
+    remote_dir: str | None = None
+    remote_setup: str | None = None
+
+
+@app.post("/api/fetch")
+def post_fetch(req: FetchRequest) -> dict:
+    """Pull a shot live via the toksearch/mdsthin fetcher, then expose it.
+
+    Works where the fetcher works (GA cluster, or laptop with creds/Duo or a
+    key-based ssh-config gateway). Offline it returns a clear error and the cached
+    shots keep serving.
+    """
+    h5source._ensure_catalog_on_path()
+    try:
+        import toksearch_fetch  # repo-root data/ module
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail=f"fetcher unavailable: {exc}") from exc
+    # only pass remote overrides the caller actually set, so fetcher defaults hold
+    remote_kw = {k: v for k, v in {
+        "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
+        "remote_dir": req.remote_dir, "remote_setup": req.remote_setup,
+    }.items() if v is not None}
+    try:
+        out = toksearch_fetch.fetch_shot(
+            req.shot, req.analysis, backend=req.backend, username=req.username,
+            password=req.password, duo=req.duo,
+            tmin=req.tmin, tmax=req.tmax, decimate=req.decimate, **remote_kw)
+    except SystemExit as exc:  # fetcher uses sys.exit for missing deps/creds
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400,
+                            detail=f"fetch failed: {exc}") from exc
+    h5source.refresh()
+    return {"ok": True, "shot": str(req.shot), "file": out,
+            "machines": nodes.machines()}
 
 
 @app.get("/api/{machine}/{result}")
