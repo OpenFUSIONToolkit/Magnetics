@@ -60,6 +60,21 @@ function generateDeterministicTimeTrace(timeSlice: number, freqPeaks: number[]) 
   return { times, values };
 }
 
+// Honest placeholder shown in LIVE mode wherever a panel has no real backend node
+// (loading, or a view not yet wired). Guarantees the GUI never shows fabricated/demo
+// data against a live backend.
+function PanelPlaceholder({ text, height = 200 }: { text: string; height?: number }) {
+  return (
+    <div style={{
+      height, display: "flex", alignItems: "center", justifyContent: "center",
+      color: "var(--text-dim)", fontSize: "11px", textAlign: "center", padding: "12px",
+      border: "1px dashed var(--border)", borderRadius: "4px",
+    }}>
+      {text}
+    </div>
+  );
+}
+
 export default function RotatingTab({ machine }: { machine: string }) {
   const { cursorMs, setCursorMs } = useStore();
   // Foreground ink that flips with the theme so the raw dB/dt trace stays visible on
@@ -229,18 +244,21 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // static mock JSON. The label keys off usingLiveBackend() so real data reads as live.
   const hasStaticFiles = !!specNode && !specError;
   const live = usingLiveBackend();
-  const dataSourceText = !hasStaticFiles
-    ? "Synthetic Generator (Dynamic)"
-    : live ? "Live Backend (real data)" : "Mock Files (Static)";
-  const dataSourceColor = !hasStaticFiles
-    ? "var(--accent)"
-    : live ? "var(--good)" : "var(--warn)";
+  // In LIVE mode no synthetic/mock data is ever produced (every generator below
+  // short-circuits on `live`), so the source is always the live backend — while a
+  // node loads we show a loading state, never "Synthetic Generator".
+  const dataSourceText = live
+    ? `Live backend${machine ? ` · shot ${machine}` : ""}`
+    : hasStaticFiles ? "Mock fixtures (static demo)" : "Synthetic generator (demo)";
+  const dataSourceColor = live
+    ? "var(--good)"
+    : hasStaticFiles ? "var(--accent)" : "var(--warn)";
 
   // --- 2. DYNAMIC SYNTHETIC DATA GENERATOR ---
   // When static files aren't found, we synthesize mode activity
   const syntheticSpecNode = useMemo(() => {
-    if (hasStaticFiles) return null;
-    
+    if (live || hasStaticFiles) return null;  // never fabricate against a live backend
+
     // Fourier Uncertainty Principle Coupling:
     // Large window size -> higher frequency resolution (smaller df), lower time resolution (larger dt)
     const dt = (fftWindow / 512) * 10;   // dt = 5ms (for 256), 10ms (for 512), 20ms (for 1024), 40ms (for 2048)
@@ -293,7 +311,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "Time (ms)", y: "f (kHz)", z: "log<sub>10</sub> power" },
       discrete: false,
     };
-  }, [hasStaticFiles, fftWindow]);
+  }, [live, hasStaticFiles, fftWindow]);
 
   // Merge loaded specNode with controls/display settings
   const processedSpecNode = useMemo(() => {
@@ -459,7 +477,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
     const coh = liveCoh
       ? freqs.map((_, fIdx) => (liveCoh.z[fIdx] ? liveCoh.z[fIdx][tIdx] : 0))
-      // Fallback (no backend): synthesize coherence from power peaks.
+      // Live but coherence node not yet loaded → zeros, never a synthesized stand-in.
+      : live
+      ? freqs.map(() => 0)
+      // Fallback (mock demo only): synthesize coherence from power peaks.
       : power.map((p) => {
           const rawCoh = p > 0.05 ? 0.9 - (0.1 / p) : 0.15 + p * 2.0;
           return Math.max(0.0, Math.min(1.0, rawCoh));
@@ -479,7 +500,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
             return v == null ? 0 : v;
           });
         })()
-      // Fallback (no backend): synthesize mode number from the active-mode bands.
+      // Live but mode-number node not yet loaded → zeros, never a synthesized n.
+      : live
+      ? freqs.map(() => 0)
+      // Fallback (mock demo only): synthesize mode number from the active-mode bands.
       : coh.map((c, fIdx) => {
           if (c < gateFrac) return 0;
           const f = freqs[fIdx];
@@ -497,10 +521,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const nModeGated = nMode.map((v, i) => (power[i] >= pfloor ? v : 0));
 
     return { freqs, power, coh, nMode: nModeGated };
-  }, [hasStaticFiles, specNode, modeNumberNode, coherenceNode, syntheticSpecNode, cursorMs, powerGate, gateFrac, currentModeFreqs]);
+  }, [live, hasStaticFiles, specNode, modeNumberNode, coherenceNode, syntheticSpecNode, cursorMs, powerGate, gateFrac, currentModeFreqs]);
 
   // Toroidal & Poloidal wave stripes data (Array Tab)
   const arrayStripesData = useMemo(() => {
+    // No backend node feeds the array wave-stripes yet → no demo data in live mode.
+    if (live) return { times: [], phiAngles: [], thetaAngles: [], toroidalZ: [], poloidalZ: [] };
     const centerT = cursorMs || 2500;
     const times = Array.from({ length: 81 }, (_, i) => centerT - 20 + i * 0.5); // cursorMs +/- 20ms, step = 0.5 ms (double resolution!)
     const phiAngles = Array.from({ length: 72 }, (_, i) => i * 5); // 0 to 355 deg, step = 5 deg (double resolution!)
@@ -536,10 +562,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
     });
 
     return { times, phiAngles, thetaAngles, toroidalZ, poloidalZ };
-  }, [cursorMs, currentModeFreqs, pestLambda1, pestLambda2]);
+  }, [live, cursorMs, currentModeFreqs, pestLambda1, pestLambda2]);
 
-  // Mode structure poloidal node (computed dynamically from fittype option)
+  // Mode structure poloidal node (synthetic demo; no backend poloidal-fit node wired yet)
   const processedPoloidalNode = useMemo(() => {
+    if (live) return null;  // no fabricated poloidal fit against a live backend
     const m = fittype === 2 ? 3 : fittype === 1 ? 2 : 1;
     const angles = Array.from({ length: 31 }, (_, i) => (i * 360) / 30); // 31 probes
     
@@ -586,13 +613,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "θ (deg)", y: "phase (deg)" },
       meta: { m_fit: m },
     };
-  }, [fittype, pestLambda1, pestLambda2, btCompMode, gateFrac]);
+  }, [live, fittype, pestLambda1, pestLambda2, btCompMode, gateFrac]);
 
-  // Toroidal node processing
+  // Toroidal node processing — real phase_fit node when present, else (mock only) synth.
   const processedToroidalNode = useMemo(() => {
     if (hasStaticFiles && phaseNode && phaseNode.kind === "scatter2d") {
       return phaseNode;
     }
+    if (live) return null;  // live but phase_fit not loaded → placeholder, no synth
     // Synthesize toroidal fit (n = 2)
     const n = 2;
     // Add active probePhi1 and probePhi2 toroidal probe positions dynamically
@@ -628,7 +656,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "φ (deg)", y: "phase (deg)" },
       meta: { n_fit: n },
     };
-  }, [hasStaticFiles, phaseNode, probePhi1, probePhi2, btCompMode, gateFrac]);
+  }, [live, hasStaticFiles, phaseNode, probePhi1, probePhi2, btCompMode, gateFrac]);
 
   // --- 3. RENDER SUB-COMPONENTS ---
   const renderSpectrogram = () => {
@@ -719,15 +747,16 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   const renderSubInterval = () => {
     const { freqs, power, coh, nMode } = subIntervalData;
+    // The raw dB/dt trace has no backend node yet; only synthesize it in mock/demo mode.
     const activeFreqs = currentModeFreqs[0] > 0 ? currentModeFreqs : [8.0];
-    const rawTrace = generateDeterministicTimeTrace(cursorMs, activeFreqs);
+    const rawTrace = live ? null : generateDeterministicTimeTrace(cursorMs, activeFreqs);
 
     const rawPlotData = [
       {
         type: "scatter" as const,
         mode: "lines" as const,
-        x: rawTrace.times,
-        y: rawTrace.values,
+        x: rawTrace?.times ?? [],
+        y: rawTrace?.values ?? [],
         line: { color: ink, width: 1.2 },
       },
     ];
@@ -786,7 +815,9 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Raw Signal <span style={{ textTransform: "none" }}>dB/dt (4&nbsp;ms window)</span>
           </h4>
-          <Plot data={rawPlotData} height={250} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} />
+          {rawTrace
+            ? <Plot data={rawPlotData} height={250} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} />
+            : <PanelPlaceholder text="raw dB/dt trace — not yet wired to the backend" height={250} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleSubintervalSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
@@ -801,6 +832,21 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   const renderArrayContour = () => {
     const { times, phiAngles, thetaAngles, toroidalZ, poloidalZ } = arrayStripesData;
+
+    if (times.length === 0) {  // live: no backend node feeds the array wave-stripes yet
+      return (
+        <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "8px" }}>
+          <div style={{ flex: 1 }}>
+            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>Toroidal Array Waves</h4>
+            <PanelPlaceholder text="array wave-stripes — not yet wired to the backend" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>Poloidal Array Waves</h4>
+            <PanelPlaceholder text="array wave-stripes — not yet wired to the backend" />
+          </div>
+        </div>
+      );
+    }
 
     const toroidalTrace = [
       {
@@ -849,22 +895,26 @@ export default function RotatingTab({ machine }: { machine: string }) {
   };
 
   const renderModeStructure = () => {
-    const toroidalMeta = processedToroidalNode.meta as Record<string, number> | undefined;
-    const poloidalMeta = processedPoloidalNode.meta as Record<string, number> | undefined;
+    const toroidalMeta = processedToroidalNode?.meta as Record<string, number> | undefined;
+    const poloidalMeta = processedPoloidalNode?.meta as Record<string, number> | undefined;
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: modeLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Phase Fit <span style={{ textTransform: "none" }}>(n = {String(toroidalMeta?.n_estimate ?? toroidalMeta?.n_fit ?? "")})</span>
           </h4>
-          <NodeView node={processedToroidalNode} height={200} />
+          {processedToroidalNode
+            ? <NodeView node={processedToroidalNode} height={200} />
+            : <PanelPlaceholder text={`toroidal phase fit · waiting for phase_fit at t=${cursorMs.toFixed(0)} ms`} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Poloidal Phase Fit <span style={{ textTransform: "none" }}>(m = {String(poloidalMeta?.m_fit ?? "")}, fittype = {fittype})</span>
+            Poloidal Phase Fit{poloidalMeta ? ` (m = ${String(poloidalMeta.m_fit ?? "")}, fittype = ${fittype})` : ""}
           </h4>
-          <NodeView node={processedPoloidalNode} height={200} />
+          {processedPoloidalNode
+            ? <NodeView node={processedPoloidalNode} height={200} />
+            : <PanelPlaceholder text="poloidal phase fit — not yet wired to the backend" />}
         </div>
       </div>
     );
@@ -1051,7 +1101,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
             {/* fittype */}
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <label htmlFor="fittype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Poloidal Fit (fittype)</label>
+              <label htmlFor="fittype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Poloidal Fit (fittype) <em style={{ opacity: 0.7 }}>(not wired)</em></label>
               <select
                 id="fittype-select"
                 value={fittype}
@@ -1073,7 +1123,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
             {/* btype */}
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <label htmlFor="btype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Baseline Method (btype)</label>
+              <label htmlFor="btype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Baseline Method (btype) <em style={{ opacity: 0.7 }}>(not wired)</em></label>
               <select
                 id="btype-select"
                 value={btype}
@@ -1153,7 +1203,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   padding: "4px 0",
                 }}
               >
-                <span>Advanced Params</span>
+                <span>Advanced Params <em style={{ opacity: 0.7, textTransform: "none" }}>(not wired)</em></span>
                 <span>{advancedExpanded ? "▼" : "▶"}</span>
               </button>
 
@@ -1429,7 +1479,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         {/* Panel 3: Mode Structure Fits (toroidal/poloidal phase fits) */}
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel3Height, minHeight: 0 }}>
           <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
-            Mode Structure Fits (Error Bars Active)
+            Mode Structure Fits
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
             {renderModeStructure()}
