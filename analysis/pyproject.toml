@@ -8,11 +8,17 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    # data-reading (Slow Rollers' shot loaders / Data layer)
+    "h5netcdf>=1.8.1",
+    "h5py>=3.16.0",
+    "xarray>=2026.4.0",
+    "mdsthin>=1.0",
     "matplotlib>=3.11.0",
     "numpy>=2.4.6",
-    "scipy>=1.15.0",
+    "scipy>=1.18.0",
 ]
 
+# Web deps stay optional so the library imports cleanly for notebook users.
 [project.optional-dependencies]
 service = [
     "fastapi>=0.138.0",
@@ -27,7 +33,8 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.15.18",
-    # notebook tooling (Rapid Rotators' examples + clean notebook commits)
+    # notebook tooling (examples + clean notebook commits)
+    "ipykernel>=7.3.0",
     "jupyter>=1.1.0",
     "nbconvert>=7.16",
     "nbstripout>=0.9.1",
