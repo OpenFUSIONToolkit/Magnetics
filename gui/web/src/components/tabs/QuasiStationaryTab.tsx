@@ -145,6 +145,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [fitQualityOpen, setFitQualityOpen] = useState(false);
   const [sensorMapOpen, setSensorMapOpen]   = useState(false);
 
+  // ── Deferred fetch: only compute when user clicks Plot ────────────
+  const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
+
   const qsParams = useMemo(() => {
     const p: Record<string, string> = {
       ns, ms,
@@ -174,21 +177,42 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     setTimeRange(null);
   }, [tminMs, tmaxMs]);
 
-  // ── Node fetches ──────────────────────────────────────────────────
-  const { node: qualityRaw } = useNode(machine, "fit_quality", qsParams);
+  // Auto-commit on mount so plots load immediately without requiring a click.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial commit to trigger fetch on mount
+    setCommittedParams(qsParams);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount only
+  }, []);
+
+  // When Plot is clicked (committedParams changes), reset zoom to fit new data.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom when new computation is triggered
+    setTimeRange(null);
+  }, [committedParams]);
+
+  // null fetchMachine suppresses all useNode fetches until initial commit fires.
+  const fetchMachine = committedParams !== null ? machine : null;
+  // Highlight the Plot button when settings have drifted from the last commit.
+  const paramsDirty = committedParams !== null && committedParams !== qsParams;
+
+  // ── Node fetches — gated by fetchMachine (null until Plot is clicked) ──
+  const { node: qualityRaw } = useNode(fetchMachine, "fit_quality", committedParams ?? {});
   const qualityNode = qualityRaw?.kind === "metrics" ? (qualityRaw as MetricsNode) : null;
 
   // Time-series nodes
-  const { node: phiTimeNode }   = useNode(machine, "phi_t",      qsParams);
-  const { node: ampNode }       = useNode(machine, "amplitude",   qsParams);
-  const { node: phaseTimeNode } = useNode(machine, "phase_t",     qsParams);
+  const { node: phiTimeNode }                   = useNode(fetchMachine, "phi_t",      committedParams ?? {});
+  const { node: ampNode, error: ampError }       = useNode(fetchMachine, "amplitude",   committedParams ?? {});
+  const { node: phaseTimeNode }                 = useNode(fetchMachine, "phase_t",     committedParams ?? {});
 
   // Sensor maps, signal conditioning, fit quality time series
-  const { node: sensorRzRaw }    = useNode(machine, "sensor_map_rz",         qsParams);
-  const { node: sensorCylRaw }   = useNode(machine, "sensor_map_cylindrical", qsParams);
-  const { node: signalRaw }      = useNode(machine, "signal_conditioning",    qsParams);
-  const { node: chiSqRaw }       = useNode(machine, "chi_sq_t",               qsParams);
-  const { node: fitResRaw }      = useNode(machine, "fit_residuals",          qsParams);
+  const { node: sensorRzRaw }    = useNode(fetchMachine, "sensor_map_rz",         committedParams ?? {});
+  const { node: sensorCylRaw }   = useNode(fetchMachine, "sensor_map_cylindrical", committedParams ?? {});
+  const { node: signalRaw }      = useNode(fetchMachine, "signal_conditioning",    committedParams ?? {});
+  const { node: chiSqRaw }       = useNode(fetchMachine, "chi_sq_t",               committedParams ?? {});
+  const { node: fitResRaw }      = useNode(fetchMachine, "fit_residuals",          committedParams ?? {});
+
+  // No-data guard: 404 means the shot's HDF5 file hasn't been pulled yet.
+  const noData = committedParams !== null && ampError?.includes("fetch failed (404)") === true;
 
   const sensorRzNode  = sensorRzRaw?.kind  === "line" ? (sensorRzRaw  as LineNode) : null;
   const sensorCylNode = sensorCylRaw?.kind === "line" ? (sensorCylRaw as LineNode) : null;
@@ -586,7 +610,34 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
             style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          {paramsDirty && (
+            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
+          )}
+          <button
+            onClick={() => setCommittedParams(qsParams)}
+            style={{
+              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              background: paramsDirty ? "var(--accent)" : "var(--panel)",
+              color: paramsDirty ? "#fff" : "var(--text-dim)",
+              border: "1px solid var(--border)",
+              fontWeight: paramsDirty ? 600 : 400,
+            }}
+          >
+            Plot
+          </button>
+        </div>
       </div>
+
+      {/* ── Plot content — show immediately; message only if data unavailable ── */}
+      {noData ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <strong>No data for shot {machine}.</strong><br />
+          The HDF5 file for this shot has not been fetched yet.<br />
+          Use the <strong>pull panel</strong> in the left sidebar to fetch the data, then click Plot.
+        </div>
+      ) : (<>
 
       {/* ── Section D+E: Time-series results — PRIMARY, at top ────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -707,6 +758,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           </div>
         )}
       </div>
+      </>)}
     </div>
   );
 }
