@@ -50,7 +50,7 @@ def run_steps(
     channel_filter="Bp_LFS_midplane",
     ns=(1, 2, 3),
     ms=(0,),
-    time_trim=(2.5, 4.2),
+    time_trim=(3.3, 3.5),
     prep_kwargs=None,
     fit_kwargs=None,
     data_root=None,
@@ -58,14 +58,16 @@ def run_steps(
 ):
     """Run load -> prep -> fit for one shot and one channel filter.
 
-    :param shot: shot number or shot directory.
-    :param channel_filter: regex/list or a friendly name from channel_filters.txt
-        (default ``'Bp_LFS_midplane'`` -> the LFS midplane toroidal Bp array).
+    :param shot: shot number or a path to a ``shot_<n>.h5`` file.
+    :param channel_filter: regex/list or a friendly name from the device file's
+        ``sensor_sets`` (default ``'Bp_LFS_midplane'`` -> the LFS midplane
+        toroidal Bp array).
     :param ns, ms: toroidal / poloidal mode numbers for the fit basis.
-    :param time_trim: (t1, t2) seconds analysis window.
+    :param time_trim: (t1, t2) seconds analysis window (must fall inside the
+        shot file's window — e.g. shot 199749 spans 3.3-3.5 s).
     :param prep_kwargs: extra keyword args for :func:`prep.prepare`.
     :param fit_kwargs: extra keyword args for :func:`fit.fit`.
-    :param data_root: override the example-data root directory.
+    :param data_root: override the ``data/datafile`` root directory.
     :param verbose: print progress.
     :return: :class:`MagneticsRun`.
     """

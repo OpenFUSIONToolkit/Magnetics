@@ -2551,6 +2551,13 @@
         "ISLD1B341"
       ]
     },
+    "Bp and Bp Dot All": {
+      "type": "composite",
+      "sets": [
+        "Bp All",
+        "Bp LFS midplane bdot"
+      ]
+    },
     "Br All": {
       "type": "composite",
       "sets": [
@@ -2619,5 +2626,5 @@
         "Br LFS R+2"
       ]
     }
-    }
+  }
 }

@@ -355,22 +355,65 @@ def track_mode_shape(
     )
 
 
+def active_time_window(
+    spectrum,
+    *,
+    power_floor_frac: float = 0.1,
+    pad_frac: float = 0.05,
+) -> tuple[float, float]:
+    """[t_start, t_end] (s) bracketing where the band-integrated array power exceeds
+    ``power_floor_frac`` of its peak.
+
+    Time-resolved tracks otherwise span the whole PTDATA record — mostly dead pre/post-
+    shot signal — which both wastes time resolution and makes the most-common mode number
+    a spurious n=0. Restricting to the active span fixes both. Returns the full span if
+    nothing clears the floor. Power is accumulated per probe to avoid materializing the
+    full (probe, time, freq) magnitude array.
+    """
+    t = np.asarray(spectrum.time, dtype=np.float64)
+    spec = np.asarray(spectrum.spec)
+    env = np.zeros(t.size)
+    for p in range(spec.shape[0]):
+        env += (np.abs(spec[p]) ** 2).sum(axis=1)        # (n_times,)
+    peak = float(env.max()) if env.size else 0.0
+    if peak <= 0.0:
+        return float(t[0]), float(t[-1])
+    active = np.flatnonzero(env >= power_floor_frac * peak)
+    if active.size == 0:
+        return float(t[0]), float(t[-1])
+    t0, t1 = float(t[active[0]]), float(t[active[-1]])
+    pad = pad_frac * (t1 - t0)
+    return max(float(t[0]), t0 - pad), min(float(t[-1]), t1 + pad)
+
+
+def _slice_indices(times, n_slices, t_range):
+    """Evenly-spaced column indices into ``times``, restricted to ``t_range`` (s) when
+    given so a track samples only the active window."""
+    lo, hi = 0, times.size - 1
+    if t_range is not None:
+        sel = np.flatnonzero((times >= t_range[0]) & (times <= t_range[1]))
+        if sel.size >= 2:
+            lo, hi = int(sel[0]), int(sel[-1])
+    return np.unique(np.linspace(lo, hi, min(n_slices, hi - lo + 1)).astype(int))
+
+
 def track_from_spectrum(
     spectrum,
     angle_deg: NDArray[np.floating],
     frequency: float,
     *,
     n_slices: int = 60,
+    t_range: tuple[float, float] | None = None,
     ref_time_s: float | None = None,
     n_range: tuple[int, int] = (-6, 6),
 ) -> ModeTrackResult:
     """Time-resolved mode track from a precomputed ``ArrayShapeSpectrum`` (the fast
-    path used by the service): subsample to ``n_slices`` columns, read each slice's
-    shape via ``mode_from_spectrum`` (an array index, not a fresh STFT), and MAC each
-    to the strongest-amplitude reference. Same result as :func:`track_mode_shape`,
-    but the expensive STFT is computed once upstream and shared."""
+    path used by the service): subsample to ``n_slices`` columns (within ``t_range`` if
+    given), read each slice's shape via ``mode_from_spectrum`` (an array index, not a
+    fresh STFT), and MAC each to the strongest-amplitude reference. Same result as
+    :func:`track_mode_shape`, but the expensive STFT is computed once upstream and shared."""
     times = np.asarray(spectrum.time, dtype=np.float64)
-    idx = np.unique(np.linspace(0, times.size - 1, min(n_slices, times.size)).astype(int))
+    idx = _slice_indices(times, n_slices, t_range)
 
     shapes, ns, strength = [], [], []
     for ti in idx:
@@ -392,6 +435,64 @@ def track_from_spectrum(
         n_by_time=np.array(ns, dtype=int),
         ref_t_ms=float(centers[ref_idx] * 1e3),
         frequency=float(frequency),
+    )
+
+
+@dataclass(slots=True)
+class ModeRidgeResult:
+    kind: str                          # "mode_ridge"
+    t_ms: NDArray[np.floating]         # slice-center times (ms)
+    n_by_time: NDArray[np.integer]     # best-fit toroidal n of the strongest mode
+    freq_khz: NDArray[np.floating]     # dominant in-band frequency per slice (kHz)
+    amplitude: NDArray[np.floating]    # array amplitude at the ridge
+
+
+def ridge_track_from_spectrum(
+    spectrum,
+    angle_deg: NDArray[np.floating],
+    *,
+    fmin: float = 1000.0,
+    fmax: float = 25000.0,
+    n_slices: int = 240,
+    t_range: tuple[float, float] | None = None,
+    n_range: tuple[int, int] = (-6, 6),
+) -> ModeRidgeResult:
+    """Best-fit toroidal n vs time, following the *dominant in-band frequency at each
+    slice* instead of one global frequency.
+
+    A fixed-frequency n(t) reports only whatever lives in that single bin and is
+    meaningless when several modes coexist at different frequencies. Here each slice
+    fits n at its own peak-power frequency, so the trace tracks the strongest mode as it
+    evolves (and its frequency drifts). This is a 1-D *strongest-mode* summary; the full
+    (time, frequency) n-map (``spectral.array_mode_spectrogram``) remains the complete
+    view of all simultaneous modes.
+    """
+    times = np.asarray(spectrum.time, dtype=np.float64)
+    freqs = np.asarray(spectrum.freq_band, dtype=np.float64)
+    band = np.flatnonzero((freqs >= fmin) & (freqs <= fmax))
+    if band.size == 0:
+        band = np.arange(freqs.size)
+    idx = _slice_indices(times, n_slices, t_range)
+
+    # band-integrated array power Σ_probes|Z|² at just the sampled (slice, band) cells
+    spec = np.asarray(spectrum.spec)
+    sub = spec[np.ix_(np.arange(spec.shape[0]), idx, band)]   # (n_probes, n_idx, n_band)
+    powtf = (np.abs(sub) ** 2).sum(axis=0)                    # (n_idx, n_band)
+
+    ns, fkhz, amps = [], [], []
+    for j, ti in enumerate(idx):
+        f_hz = float(freqs[int(band[int(np.argmax(powtf[j]))])])
+        mode = mode_from_spectrum(spectrum, angle_deg, float(times[ti]), f_hz)
+        ns.append(fit_toroidal_mode(mode, n_range=n_range).n)
+        fkhz.append(f_hz / 1e3)
+        amps.append(float(np.sum(np.abs(mode.amplitude))))
+
+    return ModeRidgeResult(
+        kind="mode_ridge",
+        t_ms=times[idx] * 1e3,
+        n_by_time=np.array(ns, dtype=int),
+        freq_khz=np.array(fkhz, dtype=float),
+        amplitude=np.array(amps, dtype=float),
     )
 
 
