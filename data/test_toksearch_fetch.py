@@ -108,3 +108,21 @@ def test_all_missing_when_fetch_failed(tmp_path):
     out, (got, missing) = _write(tmp_path, chans)
     assert not got
     assert {c.name for c in missing} == {"A", "B"}
+
+
+def test_legacy_pointname_written_under_canonical_id(tmp_path):
+    """A channel fetched under a legacy pointname is relabeled to the canonical id
+    (so downstream stays shot-agnostic) and records the queried name as an attr."""
+    t = np.linspace(0.0, 1.0, 8)
+    # the fetch loop already relabeled c.name -> canonical id; query_names carries
+    # {canonical id -> queried (legacy) pointname}.
+    c = Channel("MPID66M067", t, np.ones(8, np.float32), ok=True)
+    out = str(tmp_path / "shot.h5")
+    _write_h5(out, 150000, "both", "test", [c], compression="lzf",
+              tmin=None, tmax=None, stride=1,
+              query_names={"MPID66M067": "MPID067U"})
+
+    import h5py
+    with h5py.File(out, "r") as h5:
+        assert "MPID66M067" in h5 and "MPID067U" not in h5   # keyed by canonical id
+        assert h5["MPID66M067"].attrs["pointname"] == "MPID067U"

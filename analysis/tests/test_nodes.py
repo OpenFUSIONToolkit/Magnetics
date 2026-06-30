@@ -147,8 +147,14 @@ def test_fit_quality_node_has_finite_k():
 
 
 def test_real_theta_has_full_poloidal_coverage():
-    # the real-θ table must span well beyond the midplane (else no honest 2D pattern)
-    theta = nodes._real_theta()
+    # θ derived from the device table's (r,z) must span well beyond the midplane
+    # (else no honest 2D pattern). Driven by the device catalog, not fetched data,
+    # so it's deterministic; uses a modern shot so the seed segment is active.
+    import devices
+    dev = devices.load_device("diiid")
+    shot = 184927
+    theta = {name: diiid.real_theta_of(name, shot) for name in dev["sensors"]}
+    theta = {k: v for k, v in theta.items() if v is not None}
     assert len(theta) > 20
     vals = sorted(theta.values())
     assert min(vals) < 60.0 and max(vals) > 170.0   # HFS / off-midplane probes present

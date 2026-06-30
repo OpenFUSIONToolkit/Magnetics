@@ -54,7 +54,11 @@ def health():
 @app.get("/api/machines")
 def machines():
     """Real fetched shots if any HDF5 files are present, else the mock machines."""
-    nodes.refresh()  # pick up any file fetched since the service started
+    # Re-index the data dir only — do NOT call nodes.refresh(), which also clears the
+    # shared per-shot STFT caches (~100 MB/shot). The shot list just needs the file
+    # index; blowing away the caches here forces a full STFT rebuild on the next node
+    # request after every /api/machines poll (startup, post-pull, manual refresh).
+    h5source.refresh()
     real = nodes.machines()
     return real if real else mock.MACHINES
 

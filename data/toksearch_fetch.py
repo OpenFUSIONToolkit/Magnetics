@@ -55,29 +55,45 @@ from typing import Callable
 import numpy as np
 
 import magnetics_signals as ms
+# Shared device config + shot-aware geometry resolution (one impl for fetch +
+# analysis). `load_device` is the single source of truth for a machine's mdsip
+# addresses/geometry; `pointname_at` maps a canonical sensor id → the pointname
+# valid at a shot (None = out of range / decommissioned).
+from devices import load_device, pointname_at
 
 # All fetched shot files land here: data/datafile/ (next to this script).
 DATA_DIR = Path(__file__).resolve().parent / "datafile"
 
-# Per-device config (mdsip gateway/server, geometry, ...) lives in data/device/.
-DEVICE_DIR = Path(__file__).resolve().parent / "device"
 
+def _resolve_pointnames(dev, pointnames, shot):
+    """Map canonical sensor ids -> the MDS pointnames valid at `shot`.
 
-def load_device(device: str) -> dict:
-    """Load data/device/<device>.json (case-insensitive), or raise with the list.
-
-    The device file is the single source of truth for that machine's mdsip
-    `gateway` and `server` addresses (among other things), so the fetcher stays
-    device-agnostic: pass `--device nstxu` and it reads nstxu.json's servers.
+    Returns ``(query_pointnames, canonical_of, skipped)``:
+      * ``query_pointnames`` — the names to actually fetch (a legacy/alternate
+        pointname for an old shot, else the canonical id), out-of-range and
+        decommissioned (``NotAvailable``) sensors dropped;
+      * ``canonical_of`` — ``{queried pointname -> canonical sensor id}`` so the
+        writer can relabel groups back to the shot-agnostic id;
+      * ``skipped`` — canonical ids with no valid segment at this shot.
+    Names the device file doesn't model (plasma ip/bt/kappa) pass through unchanged.
     """
-    path = DEVICE_DIR / f"{device.lower()}.json"
-    if not path.exists():
-        avail = ", ".join(sorted(p.stem for p in DEVICE_DIR.glob("*.json"))) \
-            or "none"
-        raise ValueError(f"unknown device {device!r}; "
-                         f"available in {DEVICE_DIR}: {avail}")
-    with open(path) as f:
-        return json.load(f)
+    sensors_cfg = dev.get("sensors", {})
+    shot_i = int(shot)
+    query: list[str] = []
+    canonical_of: dict[str, str] = {}
+    skipped: list[str] = []
+    for cid in pointnames:
+        if cid not in sensors_cfg:       # unmodeled (plasma params, etc.)
+            query.append(cid)
+            canonical_of[cid] = cid
+            continue
+        pt = pointname_at(dev, cid, shot_i)
+        if pt is None:                   # out of range / NotAvailable
+            skipped.append(cid)
+            continue
+        query.append(pt)
+        canonical_of[pt] = cid
+    return query, canonical_of, skipped
 
 
 def _plasma_signal(entry):
@@ -585,9 +601,20 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress,
 
 
 # --- HDF5 writer (lzf + chunked + deduped time bases) -------------------------
+def _attr_names(h5, attr):
+    """Read a "S"-dtype channel-name list attr back as a set of str."""
+    arr = h5.attrs.get(attr)
+    if arr is None:
+        return set()
+    return {x.decode() if isinstance(x, bytes) else str(x) for x in arr}
+
+
 def _write_h5(path, shot, analysis, backend, channels, *, compression,
-              tmin, tmax, stride, device="DIII-D"):
+              tmin, tmax, stride, device="DIII-D", query_names=None,
+              merge=False):
     import h5py
+
+    query_names = query_names or {}
 
     comp = None if compression in (None, "none") else compression
     missing = [c for c in channels if not c.ok]
@@ -609,22 +636,36 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
             c.time = t
             got.append(c)
 
-    with h5py.File(path, "w") as h5:
-        h5.attrs["shot"] = shot
-        h5.attrs["device"] = device
-        h5.attrs["source"] = "PTDATA via ptdata2()"
-        h5.attrs["analysis"] = analysis
-        h5.attrs["backend"] = backend
-        h5.attrs["tmin"] = "*" if tmin is None else float(tmin)
-        h5.attrs["tmax"] = "*" if tmax is None else float(tmax)
-        h5.attrs["decimate"] = int(stride)
+    # merge -> append new channels into an existing shot file (same window +
+    # decimation, already verified by the caller); else write fresh.
+    append = merge and Path(path).exists()
+    with h5py.File(path, "a" if append else "w") as h5:
+        if not append:
+            h5.attrs["shot"] = shot
+            h5.attrs["device"] = device
+            h5.attrs["source"] = "PTDATA via ptdata2()"
+            h5.attrs["analysis"] = analysis
+            h5.attrs["backend"] = backend
+            h5.attrs["tmin"] = "*" if tmin is None else float(tmin)
+            h5.attrs["tmax"] = "*" if tmax is None else float(tmax)
+            h5.attrs["decimate"] = int(stride)
+        else:
+            # record the added selection alongside any earlier one
+            prev = h5.attrs.get("analysis")
+            prev = prev.decode() if isinstance(prev, bytes) else str(prev or "")
+            labels = [s for s in prev.split("+") if s]
+            if analysis and analysis not in labels:
+                labels.append(analysis)
+            h5.attrs["analysis"] = "+".join(labels)
 
         # Dedup identical time bases: store each unique vector once and hard-link
         # every channel's "time" to it. inspect_h5.py still sees a per-channel
-        # "time" dataset (a hard link is transparent), but we write it once.
-        tb_grp = h5.create_group("_timebases")
+        # "time" dataset (a hard link is transparent), but we write it once. On a
+        # merge we keep existing time bases and number new ones after them (we do
+        # not dedup across the merge boundary -- a minor, harmless storage cost).
+        tb_grp = h5.require_group("_timebases")
         tb_cache: dict[tuple, str] = {}
-        tb_n = 0
+        tb_n = len(tb_grp)
         for c in got:
             # Content-address the time vector: identical vectors share storage,
             # but two distinct vectors that happen to share (shape, endpoints, N)
@@ -642,16 +683,56 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
                 tb_grp[tb_name].attrs["time_units"] = "ms"
                 tb_cache[key] = tb_name
 
+            if c.name in h5:        # re-fetched (e.g. --force on a merge): replace
+                del h5[c.name]
             g = h5.create_group(c.name)
             g.create_dataset("data", data=c.data, compression=comp,
                              chunks=True if comp else None)
             g["time"] = tb_grp[tb_name]  # hard link -> shared time base
             g.attrs["time_units"] = "ms"
+            if c.name in query_names:    # fetched under a legacy pointname
+                g.attrs["pointname"] = query_names[c.name]
 
-        h5.attrs["channels_fetched"] = np.array([c.name for c in got], dtype="S")
-        h5.attrs["channels_missing"] = np.array([c.name for c in missing],
-                                                dtype="S")
+        # Union new channels with whatever the file already recorded; a name that
+        # is now fetched is removed from the missing list.
+        fetched = _attr_names(h5, "channels_fetched") | {c.name for c in got}
+        missing_names = ((_attr_names(h5, "channels_missing")
+                          | {c.name for c in missing}) - fetched)
+        h5.attrs["channels_fetched"] = np.array(sorted(fetched), dtype="S")
+        h5.attrs["channels_missing"] = np.array(sorted(missing_names), dtype="S")
     return got, missing
+
+
+def _existing_channels(path, tmin, tmax, stride):
+    """Names already attempted in an existing shot file IF its reduction matches.
+
+    Returns the set of channel names already in `path` (fetched OR previously
+    missing) -- but only when the file's window (tmin/tmax) and decimation equal
+    this request, so we never reuse samples taken at a different resolution.
+    Returns None if the file is unreadable or its reduction differs (caller then
+    overwrites instead of merging).
+    """
+    import h5py
+    want_tmin = "*" if tmin is None else float(tmin)
+    want_tmax = "*" if tmax is None else float(tmax)
+
+    def _eq(cur, want):
+        if isinstance(cur, bytes):
+            cur = cur.decode()
+        if isinstance(want, str) or isinstance(cur, str):
+            return str(cur) == str(want)
+        return float(cur) == float(want)
+
+    try:
+        with h5py.File(path, "r") as h5:
+            if not (_eq(h5.attrs.get("tmin"), want_tmin)
+                    and _eq(h5.attrs.get("tmax"), want_tmax)
+                    and int(h5.attrs.get("decimate", 1)) == int(stride)):
+                return None
+            return _attr_names(h5, "channels_fetched") | \
+                _attr_names(h5, "channels_missing")
+    except Exception:
+        return None
 
 
 # --- public API ---------------------------------------------------------------
@@ -662,7 +743,7 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                server: str | None = None, tcp: bool = False,
                tmin: float | None = None, tmax: float | None = None,
                decimate: int = 1, workers: int = 4, batch_size: int = 40,
-               out: str | None = None, compression: str = "lzf",
+               out: str | None = None, compression: str = "lzf", force: bool = False,
                remote_host: str = "omega", ssh_jump: str | None = None,
                remote_dir: str = "~/magnetics_fetch", remote_python: str | None = None,
                progress: Progress | None = None) -> str:
@@ -680,6 +761,9 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
     given, the pull is that set's signals (composites flattened) plus the device's
     plasma current, toroidal field, and elongation -- instead of the `analysis`
     sensor groups.
+    Incremental by default: if a shot file already exists with the SAME window +
+    decimation, signals already in it (fetched or previously missing) are skipped
+    and the newly-pulled ones are merged in. `force=True` re-pulls everything.
     `remote_host`/`ssh_jump` are normally ~/.ssh/config aliases (default host "omega"
     carries its own ProxyJump, so ssh_jump stays None). `remote_python` overrides the
     cluster env interpreter run_remote invokes directly.
@@ -748,12 +832,48 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         tree_signals = ms.tree_signals_for(analysis)
         label = analysis
 
+    # Shot-aware pointname resolution: map canonical ids -> the pointnames valid
+    # at THIS shot, dropping channels the shot can't have so we never query them.
+    shot_i = int(shot)
+    pointnames, canonical_of, skipped = _resolve_pointnames(dev, pointnames, shot_i)
+    if skipped:
+        progress(0.0, f"{len(skipped)} sensors not valid at shot {shot_i}")
+
     if backend == "auto":
         try:
             import toksearch  # noqa: F401
             backend = "toksearch"
         except ImportError:
             backend = "mdsthin"
+
+    # Default output lives under data/datafile/; honor an explicit --out as given.
+    out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out = str(out_path)
+
+    # Incremental fetch: skip signals already in an existing shot file (with the
+    # same window + decimation) and merge the rest in. `force` re-pulls all.
+    merge = False
+    n_skipped = 0
+    if not force and out_path.exists():
+        existing = _existing_channels(out_path, tmin, tmax, stride)
+        if existing is None:
+            sys.stderr.write(
+                f"{out} exists but with a different window/decimation; "
+                "overwriting (pass a separate --out to keep the old file).\n")
+        else:
+            merge = True
+            before = len(pointnames) + len(tree_signals)
+            pointnames = [p for p in pointnames if p not in existing]
+            tree_signals = {k: v for k, v in tree_signals.items()
+                            if k not in existing}
+            n_skipped = before - (len(pointnames) + len(tree_signals))
+
+    if merge and not pointnames and not tree_signals:
+        sys.stderr.write(
+            f"All {n_skipped} requested signals already in {out}; nothing to "
+            "fetch.\n")
+        return out
 
     t0 = time.perf_counter()
     if backend == "toksearch":
@@ -781,16 +901,27 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         raise ValueError(f"unknown backend {backend!r}")
     elapsed = time.perf_counter() - t0
 
-    # Default output lives under data/datafile/; honor an explicit --out as given.
-    out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out = str(out_path)
+    # Relabel each fetched channel from its queried (possibly legacy) pointname
+    # back to the canonical sensor id, so HDF5 groups and downstream analysis stay
+    # shot-agnostic by id even when an old shot was pulled under an old name; keep
+    # the queried name for traceability (written as a per-channel attr).
+    query_names: dict[str, str] = {}
+    for c in channels:
+        cid = canonical_of.get(c.name, c.name)
+        if cid != c.name:
+            query_names[cid] = c.name
+            c.name = cid
+
+    # out_path was resolved before the (possibly incremental) fetch above.
+    n_fetch = len(pointnames) + len(tree_signals)
     got, missing = _write_h5(out, shot, label, backend, channels,
                              compression=compression, tmin=tmin, tmax=tmax,
-                             stride=stride, device=device_name)
+                             stride=stride, device=device_name,
+                             query_names=query_names, merge=merge)
+    skipped_note = f", {n_skipped} cached" if n_skipped else ""
     sys.stderr.write(
-        f"Saved {len(got)}/{len(pointnames)} channels to {out} "
-        f"({len(missing)} missing, {backend}, {elapsed:.1f}s)\n")
+        f"Saved {len(got)}/{n_fetch} channels to {out} "
+        f"({len(missing)} missing{skipped_note}, {backend}, {elapsed:.1f}s)\n")
     if missing:
         # group missing channels by reason so a re-run is self-diagnosing
         by_reason: dict[str, list[str]] = {}
@@ -799,6 +930,10 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         for reason, names in sorted(by_reason.items()):
             shown = ", ".join(names[:12]) + (" ..." if len(names) > 12 else "")
             sys.stderr.write(f"  missing [{reason}] x{len(names)}: {shown}\n")
+    if skipped:
+        shown = ", ".join(skipped[:12]) + (" ..." if len(skipped) > 12 else "")
+        sys.stderr.write(f"  skipped [not valid at shot {shot_i}] "
+                         f"x{len(skipped)}: {shown}\n")
     return out
 
 
@@ -846,6 +981,9 @@ def main(argv=None) -> int:
                     help="GA username (mdsthin/remote); optional when the gateway "
                          "ssh-config alias already sets User")
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
+    ap.add_argument("--force", action="store_true",
+                    help="re-pull every signal even if an existing shot file "
+                         "already has it (default: skip cached signals + merge)")
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument("--remote-host", default="omega",
                     help="remote: cluster host — normally an ssh-config alias whose "
@@ -865,7 +1003,7 @@ def main(argv=None) -> int:
                username=args.username, gateway=args.gateway, server=args.server,
                tcp=args.tcp, tmin=args.tmin, tmax=args.tmax,
                decimate=args.decimate, workers=args.workers,
-               batch_size=args.batch_size, out=args.out,
+               batch_size=args.batch_size, out=args.out, force=args.force,
                compression=args.compression, remote_host=args.remote_host,
                ssh_jump=args.ssh_jump, remote_dir=args.remote_dir,
                remote_python=args.remote_python)
