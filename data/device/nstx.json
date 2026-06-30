@@ -1,83 +1,88 @@
 {
- "name": "NSTX-U",
+ "name": "NSTX/NSTX-U",
  "R0": 0.934,
  "gateway": "flux.pppl.gov",
  "server": "skylark.pppl.gov:8501",
  "access": "mdsplus_tree",
  "tree": "fastmag",
- "note": "NSTX-U (shot >= 200000) magnetics. Sensor toroidal (phi) and poloidal (theta) ANGLES and gain/na calibration are authoritative, parsed from the shot-indexed NSTX config files /u/eric/nstx/mm/ (here: 204a_hf.txt + 2015a_hn.mm, for shots ~204203-204770) via OMFIT get_bdot_info_NSTX.py. r,z are APPROXIMATE (placed at minor radius 0.62 m about R0 from the poloidal angle) for the cross-section view only. Geometry is shot-indexed: see config_hf.mm / config_hn.mm for other shot ranges (NSTX < 200000 uses a different hf row format with no time-delay column). Sensor keys are the MDSplus 'fastmag' tree node paths used directly as the fetch TDI; calibrated signal = raw * gain / na. Fetch is tree-based (openTree), NOT PTDATA.",
+ "note": "Shot-aware NSTX & NSTX-U magnetics, built from the shot-indexed config files /u/eric/nstx/mm (config_hf.mm + config_hn.mm and all referenced per-shot tables) the OMFIT get_bdot_info_NSTX.py way. Each channel's segments carry the toroidal (phi) and poloidal (theta) ANGLES + gain/na for that shot range; signal = raw*gain/na. A segment with pointname 'NotAvailable' = channel dropped for that range. Sensor keys are the 'fastmag' tree node paths (used directly as the fetch TDI). Fetch is tree-based (openTree), NOT PTDATA. r,z are APPROXIMATE (minor radius 0.62 m about R0=0.934 from theta) for the cross-section view only; phi/theta are authoritative. Wall + plasma pointnames are the NSTX-U values from EFIT01 (shot 204718); the NSTX-era (<200000) wall differs and is not yet captured.",
  "wall": {
-  "r": [
-   0.3148,
-   0.3148,
-   0.415,
-   0.415,
-   0.5715,
-   0.617,
-   1.194,
-   1.0433,
-   1.3192,
-   1.3358,
-   1.4851,
-   1.4791,
-   1.5174,
-   1.5313,
-   1.5464,
-   1.5608,
-   1.567,
-   1.5657,
-   1.5543,
-   1.5341,
-   1.5181,
-   1.4818,
-   1.4851,
-   1.3358,
-   1.3192,
-   1.0433,
-   1.194,
-   0.617,
-   0.5715,
-   0.415,
-   0.415,
-   0.3148,
-   0.3148,
-   0.3148
-  ],
-  "z": [
-   0.0,
-   1.05,
-   1.27,
-   1.6234,
-   1.6234,
-   1.628,
-   1.401,
-   1.43,
-   1.0397,
-   0.9976,
-   0.545,
-   0.4995,
-   0.306,
-   0.2355,
-   0.1586,
-   0.0801,
-   0.0,
-   -0.0177,
-   -0.1123,
-   -0.221,
-   -0.3026,
-   -0.486,
-   -0.545,
-   -0.9976,
-   -1.0397,
-   -1.43,
-   -1.401,
-   -1.628,
-   -1.6234,
-   -1.6234,
-   -1.27,
-   -1.05,
-   0.0,
-   0.0
+  "segments": [
+   {
+    "since_shot": 100000,
+    "r": [
+     0.3148,
+     0.3148,
+     0.415,
+     0.415,
+     0.5715,
+     0.617,
+     1.194,
+     1.0433,
+     1.3192,
+     1.3358,
+     1.4851,
+     1.4791,
+     1.5174,
+     1.5313,
+     1.5464,
+     1.5608,
+     1.567,
+     1.5657,
+     1.5543,
+     1.5341,
+     1.5181,
+     1.4818,
+     1.4851,
+     1.3358,
+     1.3192,
+     1.0433,
+     1.194,
+     0.617,
+     0.5715,
+     0.415,
+     0.415,
+     0.3148,
+     0.3148,
+     0.3148
+    ],
+    "z": [
+     0.0,
+     1.05,
+     1.27,
+     1.6234,
+     1.6234,
+     1.628,
+     1.401,
+     1.43,
+     1.0397,
+     0.9976,
+     0.545,
+     0.4995,
+     0.306,
+     0.2355,
+     0.1586,
+     0.0801,
+     0.0,
+     -0.0177,
+     -0.1123,
+     -0.221,
+     -0.3026,
+     -0.486,
+     -0.545,
+     -0.9976,
+     -1.0397,
+     -1.43,
+     -1.401,
+     -1.628,
+     -1.6234,
+     -1.6234,
+     -1.27,
+     -1.05,
+     0.0,
+     0.0
+    ]
+   }
   ]
  },
  "plasma pointnames": {
@@ -98,373 +103,2675 @@
   }
  },
  "sensors": {
-  "\\top.mirnov.rawdata:fm_dt216_01:input_15": {
-   "r": 1.4898,
-   "z": 0.2747,
-   "phi": 351.4,
-   "theta": 26.3,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": 0.99,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_15"
+  "\\MM_L6810_01:INPUT_01": {
+   "segments": [
+    {
+     "since_shot": 101760,
+     "r": 1.4686,
+     "z": 0.3139,
+     "phi": 330.0,
+     "theta": 30.42,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 106766,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_13": {
-   "r": 1.4883,
-   "z": 0.2778,
-   "phi": 338.6,
-   "theta": 26.62,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -0.9,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_13"
+  "\\MM_L6810_02:INPUT_01": {
+   "segments": [
+    {
+     "since_shot": 101760,
+     "r": 1.4686,
+     "z": 0.3139,
+     "phi": 0.0,
+     "theta": 30.42,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 106766,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_12": {
-   "r": 1.4891,
-   "z": 0.2761,
-   "phi": 268.2,
-   "theta": 26.44,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": 1.0,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_12"
+  "\\bdot_l1dmivvhf10_raw": {
+   "segments": [
+    {
+     "since_shot": 122887,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123051,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123118,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 123345,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123596,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123632,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 126801,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 133262,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 133444,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 133975,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 134851,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 137588,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139871,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139949,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139972,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140129,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140130,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140530,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140682,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140701,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141301,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141335,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141412,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141418,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141475,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141479,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142296,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142368,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142507,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142517,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142518,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142522,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_11": {
-   "r": 1.4902,
-   "z": 0.274,
-   "phi": 260.7,
-   "theta": 26.23,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.02,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_11"
+  "\\bdot_l1dmivvhf11_raw": {
+   "segments": [
+    {
+     "since_shot": 122887,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123051,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123118,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 123345,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123596,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123632,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 126801,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 133262,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 133444,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 133975,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 134851,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 137588,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139871,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139949,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139972,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140129,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140130,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140530,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140682,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140701,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141301,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141335,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141412,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141418,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141475,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141479,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142296,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142368,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142440,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_09": {
-   "r": 1.4912,
-   "z": 0.2719,
-   "phi": 176.5,
-   "theta": 26.01,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -0.98,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_09"
+  "\\bdot_l1dmivvhf12_raw": {
+   "segments": [
+    {
+     "since_shot": 123051,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123118,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 123345,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123596,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123632,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 126801,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139871,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139949,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139972,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140129,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140130,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140530,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140682,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140701,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141301,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141335,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141412,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141418,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141475,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141479,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142296,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142368,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142507,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142517,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142518,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142522,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_08": {
-   "r": 1.4898,
-   "z": 0.2748,
-   "phi": 171.4,
-   "theta": 26.31,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": 1.07,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_08"
+  "\\bdot_l1dmivvhf1_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.4687,
+     "z": 0.3138,
+     "phi": 330.0,
+     "theta": 30.41,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 330.0,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_06": {
-   "r": 1.4897,
-   "z": 0.275,
-   "phi": 158.6,
-   "theta": 26.33,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.1,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_06"
+  "\\bdot_l1dmivvhf2_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.4687,
+     "z": 0.3138,
+     "phi": 350.0,
+     "theta": 30.41,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 338.7,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 115151,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 338.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134101,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 338.7,
+     "theta": 27.17,
+     "gain": -0.2,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134851,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 338.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141523,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141613,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 338.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_05": {
-   "r": 1.4902,
-   "z": 0.2739,
-   "phi": 153.0,
-   "theta": 26.22,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": 1.02,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_05"
+  "\\bdot_l1dmivvhf3_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.4687,
+     "z": 0.3138,
+     "phi": 0.0,
+     "theta": 30.41,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 345.1,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 118649,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 345.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134101,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 134851,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 345.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141523,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141613,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 345.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_14": {
-   "r": 1.4879,
-   "z": 0.2786,
-   "phi": 345.0,
-   "theta": 26.7,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.11,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_14"
+  "\\bdot_l1dmivvhf4_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.4687,
+     "z": 0.3138,
+     "phi": 340.0,
+     "theta": 30.41,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 351.5,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134101,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 134851,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 351.5,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 138904,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 351.5,
+     "theta": 27.17,
+     "gain": 1.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 351.5,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141523,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141613,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 351.5,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_10": {
-   "r": 1.4873,
-   "z": 0.2798,
-   "phi": 254.3,
-   "theta": 26.83,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.15,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_10"
+  "\\bdot_l1dmivvhf5_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.5245,
+     "z": 0.189,
+     "phi": 330.0,
+     "theta": 17.75,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 110709,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 114140,
+     "r": 1.4687,
+     "z": 0.3138,
+     "phi": 354.6,
+     "theta": 30.41,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 119939,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 120312,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142379,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142380,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_07": {
-   "r": 1.4906,
-   "z": 0.2732,
-   "phi": 165.0,
-   "theta": 26.14,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.13,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_07"
+  "\\bdot_l1dmivvhf6_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.5042,
+     "z": -0.2434,
+     "phi": 330.0,
+     "theta": -23.12,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 110709,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 114140,
+     "r": 1.5042,
+     "z": -0.2434,
+     "phi": 330.0,
+     "theta": -23.12,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 119939,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 120312,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123051,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 123088,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 126801,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134101,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_04": {
-   "r": 1.536,
-   "z": 0.1483,
-   "phi": 153.0,
-   "theta": 13.84,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -0.98,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_04"
+  "\\bdot_l1dmivvhf7_raw": {
+   "segments": [
+    {
+     "since_shot": 106766,
+     "r": 1.5042,
+     "z": -0.2434,
+     "phi": 273.0,
+     "theta": -23.12,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 110709,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 114140,
+     "r": 1.533,
+     "z": 0.1598,
+     "phi": 330.0,
+     "theta": 14.94,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 119939,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 120312,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 122270,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123051,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 126801,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134101,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 165.1,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_03": {
-   "r": 1.554,
-   "z": 0.0004,
-   "phi": 153.0,
-   "theta": 0.04,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.03,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_03"
+  "\\bdot_l1dmivvhf8_raw": {
+   "segments": [
+    {
+     "since_shot": 114140,
+     "r": 1.5042,
+     "z": 0.2434,
+     "phi": 330.0,
+     "theta": 23.12,
+     "gain": 0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 114873,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 115151,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 118649,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 119939,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 120312,
+     "r": 1.5352,
+     "z": -0.1516,
+     "phi": 355.8,
+     "theta": -14.15,
+     "gain": 0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 122270,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 122887,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123051,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123778,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 126801,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 134101,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 137588,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 137640,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 137944,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 138441,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 138904,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 171.5,
+     "theta": 27.17,
+     "gain": -0.5,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139210,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\top.mirnov.rawdata:fm_dt216_01:input_02": {
-   "r": 1.5365,
-   "z": -0.1464,
-   "phi": 153.0,
-   "theta": -13.66,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -1.0,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_02"
+  "\\bdot_l1dmivvhf9_raw": {
+   "segments": [
+    {
+     "since_shot": 123051,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123118,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 123345,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123596,
+     "r": 1.4856,
+     "z": -0.2831,
+     "phi": 355.8,
+     "theta": -27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 123632,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 126801,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 133262,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 133444,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 158.7,
+     "theta": 27.17,
+     "gain": -1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 133975,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 134851,
+     "r": 1.5352,
+     "z": 0.1516,
+     "phi": 355.8,
+     "theta": 14.15,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 137588,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139210,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139871,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 139949,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 139972,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140129,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140130,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140530,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 140682,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 140701,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141301,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141335,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141412,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141418,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 141475,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 141479,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142296,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142368,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142507,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142517,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 142518,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 142522,
+     "r": 1.4856,
+     "z": 0.2831,
+     "phi": 355.8,
+     "theta": 27.17,
+     "gain": 1.0,
+     "na": 0.00457
+    },
+    {
+     "since_shot": 200000,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
   "\\top.mirnov.rawdata:fm_dt216_01:input_01": {
-   "r": 1.4914,
-   "z": -0.2715,
-   "phi": 153.0,
-   "theta": -25.97,
-   "kind": "Bp",
-   "array": "hf",
-   "gain": -0.94,
-   "na": 0.00321,
-   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_01"
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4596,
+     "z": -0.3288,
+     "phi": 153.0,
+     "theta": -32.03,
+     "gain": -0.98,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4914,
+     "z": -0.2715,
+     "phi": 153.0,
+     "theta": -25.97,
+     "gain": -0.94,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4914,
+     "z": -0.2715,
+     "phi": 153.0,
+     "theta": -25.97,
+     "gain": -1.02,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn3_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 29.8,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn3_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_02": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.53,
+     "z": -0.171,
+     "phi": 153.0,
+     "theta": -16.01,
+     "gain": -1.03,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.5365,
+     "z": -0.1464,
+     "phi": 153.0,
+     "theta": -13.66,
+     "gain": -1.0,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.5365,
+     "z": -0.1464,
+     "phi": 153.0,
+     "theta": -13.66,
+     "gain": -0.98,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn2_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 49.9,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn2_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_03": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.554,
+     "z": 0.0005,
+     "phi": 153.0,
+     "theta": 0.05,
+     "gain": -1.06,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.554,
+     "z": 0.0004,
+     "phi": 153.0,
+     "theta": 0.04,
+     "gain": -1.03,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.554,
+     "z": 0.0004,
+     "phi": 153.0,
+     "theta": 0.04,
+     "gain": -0.94,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn1_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 59.9,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn1_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_04": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.5293,
+     "z": 0.1732,
+     "phi": 153.0,
+     "theta": 16.22,
+     "gain": -1.05,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.536,
+     "z": 0.1483,
+     "phi": 153.0,
+     "theta": 13.84,
+     "gain": -0.98,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.536,
+     "z": 0.1483,
+     "phi": 153.0,
+     "theta": 13.84,
+     "gain": -0.96,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn16_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 160.0,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn16_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_05": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4579,
+     "z": 0.3316,
+     "phi": 153.0,
+     "theta": 32.33,
+     "gain": -0.97,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4902,
+     "z": 0.2739,
+     "phi": 153.0,
+     "theta": 26.22,
+     "gain": -1.02,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 204203,
+     "r": 1.4902,
+     "z": 0.2739,
+     "phi": 153.0,
+     "theta": 26.22,
+     "gain": 1.02,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn15_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 165.0,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn15_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_06": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4601,
+     "z": 0.3281,
+     "phi": 158.6,
+     "theta": 31.95,
+     "gain": -1.08,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4897,
+     "z": 0.275,
+     "phi": 158.6,
+     "theta": 26.33,
+     "gain": -1.1,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4897,
+     "z": 0.275,
+     "phi": 158.6,
+     "theta": 26.33,
+     "gain": -0.93,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn14_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 170.0,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn14_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_07": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4572,
+     "z": 0.3327,
+     "phi": 165.0,
+     "theta": 32.45,
+     "gain": 0.84,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4906,
+     "z": 0.2732,
+     "phi": 165.0,
+     "theta": 26.14,
+     "gain": -1.13,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn13_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 254.6,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn13_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_08": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4593,
+     "z": 0.3294,
+     "phi": 171.4,
+     "theta": 32.09,
+     "gain": -1.01,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4898,
+     "z": 0.2748,
+     "phi": 171.4,
+     "theta": 26.31,
+     "gain": -1.07,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 204203,
+     "r": 1.4898,
+     "z": 0.2748,
+     "phi": 171.4,
+     "theta": 26.31,
+     "gain": 1.07,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4898,
+     "z": 0.2748,
+     "phi": 171.4,
+     "theta": 26.31,
+     "gain": 0.99,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn12_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 258.1,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn12_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_09": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4579,
+     "z": 0.3316,
+     "phi": 176.5,
+     "theta": 32.33,
+     "gain": -1.0,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4912,
+     "z": 0.2719,
+     "phi": 176.5,
+     "theta": 26.01,
+     "gain": -0.98,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4912,
+     "z": 0.2719,
+     "phi": 176.5,
+     "theta": 26.01,
+     "gain": -1.0,
+     "na": 0.00321
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn11_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 261.6,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn11_raw"
+  "\\top.mirnov.rawdata:fm_dt216_01:input_10": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4584,
+     "z": 0.3308,
+     "phi": 260.7,
+     "theta": 32.25,
+     "gain": 0.75,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4873,
+     "z": 0.2798,
+     "phi": 254.3,
+     "theta": 26.83,
+     "gain": -1.15,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4873,
+     "z": 0.2798,
+     "phi": 254.3,
+     "theta": 26.83,
+     "gain": -1.14,
+     "na": 0.00321
+    }
+   ]
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_11": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4515,
+     "z": 0.3415,
+     "phi": 254.3,
+     "theta": 33.42,
+     "gain": 1.02,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4902,
+     "z": 0.274,
+     "phi": 260.7,
+     "theta": 26.23,
+     "gain": 1.02,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 204203,
+     "r": 1.4902,
+     "z": 0.274,
+     "phi": 260.7,
+     "theta": 26.23,
+     "gain": -1.02,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4902,
+     "z": 0.274,
+     "phi": 260.7,
+     "theta": 26.23,
+     "gain": -0.98,
+     "na": 0.00321
+    }
+   ]
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_12": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4582,
+     "z": 0.331,
+     "phi": 268.2,
+     "theta": 32.27,
+     "gain": 0.91,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4891,
+     "z": 0.2761,
+     "phi": 268.2,
+     "theta": 26.44,
+     "gain": 1.0,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4891,
+     "z": 0.2761,
+     "phi": 268.2,
+     "theta": 26.44,
+     "gain": 1.1,
+     "na": 0.00321
+    }
+   ]
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_13": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4588,
+     "z": 0.3302,
+     "phi": 338.6,
+     "theta": 32.18,
+     "gain": 0.94,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4883,
+     "z": 0.2778,
+     "phi": 338.6,
+     "theta": 26.62,
+     "gain": 0.9,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 204203,
+     "r": 1.4883,
+     "z": 0.2778,
+     "phi": 338.6,
+     "theta": 26.62,
+     "gain": -0.9,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4883,
+     "z": 0.2778,
+     "phi": 338.6,
+     "theta": 26.62,
+     "gain": -1.06,
+     "na": 0.00321
+    }
+   ]
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_14": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4585,
+     "z": 0.3307,
+     "phi": 351.4,
+     "theta": 32.23,
+     "gain": 0.98,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4879,
+     "z": 0.2786,
+     "phi": 345.0,
+     "theta": 26.7,
+     "gain": -1.11,
+     "na": 0.00321
+    }
+   ]
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_15": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4585,
+     "z": 0.3306,
+     "phi": 345.0,
+     "theta": 32.22,
+     "gain": 0.99,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 202500,
+     "r": 1.4898,
+     "z": 0.2747,
+     "phi": 351.4,
+     "theta": 26.3,
+     "gain": 0.99,
+     "na": 0.00321
+    },
+    {
+     "since_shot": 205174,
+     "r": 1.4898,
+     "z": 0.2747,
+     "phi": 351.4,
+     "theta": 26.3,
+     "gain": 1.02,
+     "na": 0.00321
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_1": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 30.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_2": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 50.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_3": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 60.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_4": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 155.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_5": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 170.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_6": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 180.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_03:INPUT_7": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 270.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_04:INPUT_1": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 290.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_04:INPUT_2": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 300.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_04:INPUT_3": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 330.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_04:INPUT_4": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 350.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
+  },
+  "\\MM_H912_04:INPUT_5": {
+   "segments": [
+    {
+     "since_shot": 100621,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 0.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109397,
+     "pointname": "NotAvailable"
+    }
+   ]
   },
   "\\bdot_l1dmivvhn10_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 292.5,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn10_raw"
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 291.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109770,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 290.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 131630,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 291.0,
+     "theta": -33.47,
+     "gain": 0.5,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 292.5,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn9_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 295.9,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": -1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn9_raw"
+  "\\bdot_l1dmivvhn11_raw": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 261.6,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn8_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 299.4,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": -1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn8_raw"
+  "\\bdot_l1dmivvhn12_raw": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 258.1,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn7_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 302.8,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn7_raw"
+  "\\bdot_l1dmivvhn13_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 268.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109770,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 270.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 112608,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 254.6,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn6_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 339.5,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn6_raw"
+  "\\bdot_l1dmivvhn14_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 180.0,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109770,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 180.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 170.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 204771,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 170.0,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    }
+   ]
   },
-  "\\bdot_l1dmivvhn5_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 344.8,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn5_raw"
+  "\\bdot_l1dmivvhn15_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 170.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 165.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn16_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 155.0,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109770,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 155.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 160.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn1_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 60.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 131630,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 59.9,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn2_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 50.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 131630,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 49.9,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn3_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 30.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 131630,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 29.8,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
   },
   "\\bdot_l1dmivvhn4_raw": {
-   "r": 1.4512,
-   "z": -0.3419,
-   "phi": 349.9,
-   "theta": -33.47,
-   "kind": "Bp",
-   "array": "hn",
-   "gain": 1.0,
-   "na": 0.0052,
-   "node": "\\bdot_l1dmivvhn4_raw"
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 0.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 349.9,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 204771,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 349.9,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn5_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 350.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 112608,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 130000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 350.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 344.8,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn6_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 330.0,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109770,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 330.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 131630,
+     "pointname": "NotAvailable"
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 339.5,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn7_raw": {
+   "segments": [
+    {
+     "since_shot": 109397,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 300.0,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 109770,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 300.0,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    },
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 302.8,
+     "theta": -33.47,
+     "gain": 1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn8_raw": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 299.4,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    }
+   ]
+  },
+  "\\bdot_l1dmivvhn9_raw": {
+   "segments": [
+    {
+     "since_shot": 200000,
+     "r": 1.4512,
+     "z": -0.3419,
+     "phi": 295.9,
+     "theta": -33.47,
+     "gain": -1.0,
+     "na": 0.0052
+    }
+   ]
   }
  },
  "sensor_sets": {
   "HF toroidal array": {
    "type": "list",
    "sensors": [
-    "\\top.mirnov.rawdata:fm_dt216_01:input_15",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_13",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_12",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_11",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_09",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_08",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_06",
+    "\\MM_L6810_01:INPUT_01",
+    "\\MM_L6810_02:INPUT_01",
+    "\\bdot_l1dmivvhf10_raw",
+    "\\bdot_l1dmivvhf11_raw",
+    "\\bdot_l1dmivvhf12_raw",
+    "\\bdot_l1dmivvhf1_raw",
+    "\\bdot_l1dmivvhf2_raw",
+    "\\bdot_l1dmivvhf3_raw",
+    "\\bdot_l1dmivvhf4_raw",
+    "\\bdot_l1dmivvhf5_raw",
+    "\\bdot_l1dmivvhf6_raw",
+    "\\bdot_l1dmivvhf7_raw",
+    "\\bdot_l1dmivvhf8_raw",
+    "\\bdot_l1dmivvhf9_raw",
     "\\top.mirnov.rawdata:fm_dt216_01:input_05",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_14",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_06",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_07",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_08",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_09",
     "\\top.mirnov.rawdata:fm_dt216_01:input_10",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_07"
+    "\\top.mirnov.rawdata:fm_dt216_01:input_11",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_12",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_13",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_14",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_15"
    ]
   },
   "HF poloidal array": {
    "type": "list",
    "sensors": [
-    "\\top.mirnov.rawdata:fm_dt216_01:input_05",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_04",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_03",
+    "\\bdot_l1dmivvhf10_raw",
+    "\\bdot_l1dmivvhf11_raw",
+    "\\bdot_l1dmivvhf12_raw",
+    "\\bdot_l1dmivvhf5_raw",
+    "\\bdot_l1dmivvhf6_raw",
+    "\\bdot_l1dmivvhf7_raw",
+    "\\bdot_l1dmivvhf8_raw",
+    "\\bdot_l1dmivvhf9_raw",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_01",
     "\\top.mirnov.rawdata:fm_dt216_01:input_02",
-    "\\top.mirnov.rawdata:fm_dt216_01:input_01"
+    "\\top.mirnov.rawdata:fm_dt216_01:input_03",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_04"
    ]
   },
   "HF all": {
@@ -477,22 +2784,34 @@
   "HN toroidal array": {
    "type": "list",
    "sensors": [
-    "\\bdot_l1dmivvhn3_raw",
-    "\\bdot_l1dmivvhn2_raw",
-    "\\bdot_l1dmivvhn1_raw",
-    "\\bdot_l1dmivvhn16_raw",
-    "\\bdot_l1dmivvhn15_raw",
-    "\\bdot_l1dmivvhn14_raw",
-    "\\bdot_l1dmivvhn13_raw",
-    "\\bdot_l1dmivvhn12_raw",
-    "\\bdot_l1dmivvhn11_raw",
+    "\\MM_H912_03:INPUT_1",
+    "\\MM_H912_03:INPUT_2",
+    "\\MM_H912_03:INPUT_3",
+    "\\MM_H912_03:INPUT_4",
+    "\\MM_H912_03:INPUT_5",
+    "\\MM_H912_03:INPUT_6",
+    "\\MM_H912_03:INPUT_7",
+    "\\MM_H912_04:INPUT_1",
+    "\\MM_H912_04:INPUT_2",
+    "\\MM_H912_04:INPUT_3",
+    "\\MM_H912_04:INPUT_4",
+    "\\MM_H912_04:INPUT_5",
     "\\bdot_l1dmivvhn10_raw",
-    "\\bdot_l1dmivvhn9_raw",
-    "\\bdot_l1dmivvhn8_raw",
-    "\\bdot_l1dmivvhn7_raw",
-    "\\bdot_l1dmivvhn6_raw",
+    "\\bdot_l1dmivvhn11_raw",
+    "\\bdot_l1dmivvhn12_raw",
+    "\\bdot_l1dmivvhn13_raw",
+    "\\bdot_l1dmivvhn14_raw",
+    "\\bdot_l1dmivvhn15_raw",
+    "\\bdot_l1dmivvhn16_raw",
+    "\\bdot_l1dmivvhn1_raw",
+    "\\bdot_l1dmivvhn2_raw",
+    "\\bdot_l1dmivvhn3_raw",
+    "\\bdot_l1dmivvhn4_raw",
     "\\bdot_l1dmivvhn5_raw",
-    "\\bdot_l1dmivvhn4_raw"
+    "\\bdot_l1dmivvhn6_raw",
+    "\\bdot_l1dmivvhn7_raw",
+    "\\bdot_l1dmivvhn8_raw",
+    "\\bdot_l1dmivvhn9_raw"
    ]
   },
   "All Mirnov": {
