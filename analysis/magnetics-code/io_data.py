@@ -1,20 +1,29 @@
-"""Local replacement for ``SCRIPTS/fetch_magnetics.py`` (the MDSplus fetch).
+"""Shot loader — reads the per-shot HDF5 file and the device JSON.
 
-In OMFIT, ``fetch`` pulls every requested channel from MDSplus and assembles the
-``INPUTS/RAW``, ``INPUTS/PLASMA_PARAMS`` and ``INPUTS/COUPLING`` ``xarray``
-Datasets.  Here the example data has already been fetched and saved to netCDF
-(``analysis/data/<shot>/{RAW,PLASMA_PARAMS,COUPLING}``), with the per-channel
-geometry already derived by ``init_magnetics.py``.  So "fetch" is just a loader.
+Replaces the old "fetch" step (and the netCDF ``RAW``/``PLASMA_PARAMS``/
+``COUPLING`` loader).  Inputs now come from the project-canonical locations:
 
-``RAW`` layout (what ``fetch_magnetics.py`` produces):
-  dims  : channel (192) x time (204800, seconds)
-  vars  : signal(channel,time), signal_sigma(channel),
-          and per-channel geometry r,z,phi,theta,tilt,length,delta_phi,na,pair,
-          plus the sensor-end coordinates *_end1/*_end2.
-  attrs : shot, device, sigma_type
+  * raw sensor signals from ``data/datafile/shot_<shot>.h5``, and
+  * device/sensor geometry from ``data/device/<device>.json`` (via
+    :mod:`omfit_compat`).
 
-``PLASMA_PARAMS`` : Bt, Ip on a time base in **milliseconds**, attr helicity.
-``COUPLING``      : dc_coupling(coil, channel) DC vacuum-compensation matrix.
+``shot_<shot>.h5`` layout (what the PTDATA fetch produces):
+  * one group per fetched channel, each with ``data`` (samples) and ``time``
+    (a hard-link into ``_timebases``); **all time is in milliseconds**.
+  * a ``_timebases`` group holding the few shared time vectors (channels sample
+    at several rates — integrated probes ~50 kHz, bdots ~200 kHz, coils/ip/bt
+    ~20 kHz).
+  * root attrs: ``device``, ``shot``, ``tmin``/``tmax`` (ms), ``channels_*``.
+
+Because the downstream :mod:`prep`/:mod:`fit` operate on a single
+``signal(channel, time)`` matrix, the loader **interpolates every sensor channel
+onto one common time axis** — the densest native grid present, clipped to the
+window all channels share — and converts that axis to **seconds**.  The global
+``ip``/``bt`` traces go into the ``plasma`` Dataset on their native **ms** base.
+
+Sensor geometry (the per-channel ``r,z,phi,theta,...`` and the derived
+``*_end1/2`` coordinates the fit needs) is attached from the device JSON; see
+:func:`omfit_compat.sensor_geometry`.
 """
 
 from __future__ import annotations
@@ -25,14 +34,25 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
-#: Default location of the example shot directories.
+from omfit_compat import list_sensor_subsets, printw, resolve_channel_filter, sensor_geometry
+
+#: Default location of the per-shot HDF5 files (repo ``data/datafile/``; this
+#: file lives in ``analysis/magnetics-code/``, so it is two levels up).
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "data"))
+DATAFILE_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", "data", "datafile"))
+
+#: Groups in the HDF5 file that are not geometry-bearing sensor channels.
+_NON_SENSOR_GROUPS = {"_timebases"}
+#: Channel groups routed to the ``plasma`` Dataset rather than ``raw``.
+_PLASMA_CHANNELS = {"ip": "Ip", "bt": "Bt"}
+#: Constant per-channel measurement uncertainty (T) — the documented optimistic
+#: sensor sigma the historical data effectively carried.
+_DEFAULT_SIGMA = 2.0e-5
 
 
 @dataclass
 class ShotData:
-    """Bundle of the three input Datasets for one shot."""
+    """Bundle of the input Datasets for one shot."""
 
     shot: int
     device: str
@@ -41,105 +61,140 @@ class ShotData:
     coupling: xr.Dataset | None = None
 
 
-def _open(path):
-    """Open a netCDF/HDF5 file as an xarray Dataset.
+def shot_path(shot, data_root=DATAFILE_ROOT):
+    """Resolve the HDF5 path for ``shot`` (an int/str shot number, or a path)."""
+    if os.path.isfile(str(shot)):
+        return str(shot)
+    return os.path.join(data_root, f"shot_{int(shot)}.h5")
 
-    Tries the standard backends; if no compiled netCDF backend is usable it
-    falls back to reading the HDF5 directly with h5py and rebuilding the
-    Dataset.  These files are netCDF4 (== HDF5), so the fallback is lossless.
+
+def _read_group(group):
+    """Return ``(data, time_ms)`` float arrays for one channel group."""
+    return np.asarray(group["data"][:], dtype=float), np.asarray(group["time"][:], dtype=float)
+
+
+def load_shot(shot, data_root=DATAFILE_ROOT, helicity=-1):
+    """Load the ``raw`` (sensors) and ``plasma`` (Ip/Bt) Datasets for ``shot``.
+
+    :param shot: shot number (int/str) or a path to a ``shot_<n>.h5`` file.
+    :param data_root: directory holding the ``shot_<n>.h5`` files.
+    :param helicity: field/current helicity convention used to orient mode signs
+        (default ``-1``; the new data files do not store it).
+    :return: :class:`ShotData` (``coupling`` is ``None`` — the new files carry no
+        DC vacuum-coupling matrix).
     """
-    for engine in ("h5netcdf", "netcdf4"):
-        try:
-            return xr.load_dataset(path, engine=engine)
-        except (ValueError, ImportError, OSError):
-            continue
-    return _open_with_h5py(path)
-
-
-def _open_with_h5py(path):
-    """Backend-free fallback loader using h5py (handles the netCDF4 dim scales)."""
     import h5py
 
+    path = shot_path(shot, data_root)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"No shot file at {path!r}")
+
     with h5py.File(path, "r") as fh:
-        # dimension scales (CLASS == DIMENSION_SCALE) become coordinates
-        dim_names = [k for k in fh if fh[k].attrs.get("CLASS", b"") == b"DIMENSION_SCALE"]
+        device = _attr_str(fh.attrs.get("device", "DIII-D"))
+        shot_no = int(np.atleast_1d(fh.attrs.get("shot", _shot_from_path(path)))[0])
 
-        def _decode(arr):
-            if arr.dtype.kind in ("S", "O"):
-                return np.array([v.decode() if isinstance(v, bytes) else v for v in arr])
-            return arr[:]
+        geo = sensor_geometry(device)
+        geo_channels = set(str(c) for c in geo["channel"].values)
 
-        # map each dataset's dimensions via its attached DIMENSION_LIST refs
-        def _dims_for(dset):
-            dl = dset.attrs.get("DIMENSION_LIST")
-            if dl is None:
-                # a dimension scale indexes itself
-                return (dset.name.lstrip("/"),)
-            dims = []
-            for refs in dl:
-                ref = refs[0] if np.ndim(refs) else refs
-                dims.append(fh[ref].name.lstrip("/"))
-            return tuple(dims)
-
-        coords = {name: _decode(fh[name]) for name in dim_names}
-        data_vars = {}
-        for k in fh:
-            if k in dim_names:
+        sensor_sigs, sensor_times, sensor_names = {}, {}, []
+        plasma_sigs, plasma_times = {}, {}
+        for name in fh:
+            if name in _NON_SENSOR_GROUPS:
                 continue
-            dset = fh[k]
-            data_vars[k] = (_dims_for(dset), _decode(dset))
-        attrs = {k: _scalar(v) for k, v in fh.attrs.items() if not k.startswith("_NC")}
-        ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
-    return ds
+            data, t_ms = _read_group(fh[name])
+            if name in _PLASMA_CHANNELS:
+                plasma_sigs[name] = data
+                plasma_times[name] = t_ms
+                continue
+            if name not in geo_channels:
+                printw(f"Channel {name!r} has no geometry in {device} device file -> skipping")
+                continue
+            sensor_names.append(name)
+            sensor_sigs[name] = data
+            sensor_times[name] = t_ms / 1.0e3  # ms -> seconds
+
+    if not sensor_names:
+        raise ValueError(f"No geometry-bearing sensor channels found in {path!r}")
+
+    raw = _build_raw(sensor_names, sensor_sigs, sensor_times, geo, shot_no, device)
+    plasma = _build_plasma(plasma_sigs, plasma_times, helicity)
+
+    return ShotData(shot=shot_no, device=device, raw=raw, plasma=plasma, coupling=None)
 
 
-def _scalar(v):
-    """Unwrap length-1 arrays / bytes from HDF5 attributes."""
-    if isinstance(v, bytes):
-        return v.decode()
-    arr = np.atleast_1d(v)
-    return arr[0] if arr.size == 1 else v
+def _build_raw(names, sigs, times, geo, shot_no, device):
+    """Assemble the ``raw`` Dataset by interpolating channels onto one time axis."""
+    # Densest native grid (most samples), clipped to the window all channels share.
+    ref = max(names, key=lambda c: times[c].size)
+    lo = max(t[0] for t in times.values())
+    hi = min(t[-1] for t in times.values())
+    ref_t = times[ref]
+    grid = ref_t[(ref_t >= lo) & (ref_t <= hi)]
+    if grid.size == 0:
+        raise ValueError("Channels share no overlapping time window")
+
+    signal = np.empty((len(names), grid.size), dtype=np.float32)
+    for i, c in enumerate(names):
+        signal[i] = np.interp(grid, times[c], sigs[c])
+
+    raw = xr.Dataset(
+        {"signal": (("channel", "time"), signal)},
+        coords={"channel": names, "time": grid},
+    )
+
+    # Attach per-channel geometry (base + derived ends) from the device file.
+    geo_sel = geo.sel(channel=names)
+    for var in geo_sel.variables:
+        if var == "channel":
+            continue
+        raw[var] = geo_sel[var]
+
+    raw["signal_sigma"] = ("channel", np.full(len(names), _DEFAULT_SIGMA))
+    raw.attrs.update(shot=shot_no, device=device, sigma_type=_DEFAULT_SIGMA)
+    return raw
 
 
-def load_shot(shot, data_root=DATA_ROOT):
-    """Load the RAW / PLASMA_PARAMS / COUPLING Datasets for ``shot``.
+def _build_plasma(sigs, times, helicity):
+    """Assemble the ``plasma`` Dataset (Ip/Bt on a shared ms time base)."""
+    if not sigs:
+        plasma = xr.Dataset(coords={"time": np.array([], dtype=float)})
+        plasma.attrs["helicity"] = int(helicity)
+        return plasma
 
-    :param shot: shot number (int) or a path to the shot directory.
-    :param data_root: directory containing the per-shot subfolders.
-    :return: :class:`ShotData`.
-    """
-    shot_dir = shot if os.path.isdir(str(shot)) else os.path.join(data_root, str(shot))
-    if not os.path.isdir(shot_dir):
-        raise FileNotFoundError(f"No shot directory at {shot_dir!r}")
+    base = "ip" if "ip" in times else next(iter(times))
+    t_ms = times[base]
+    data_vars = {}
+    for name, var in _PLASMA_CHANNELS.items():
+        if name not in sigs:
+            continue
+        y = sigs[name] if np.array_equal(times[name], t_ms) else np.interp(t_ms, times[name], sigs[name])
+        data_vars[var] = ("time", y)
 
-    raw = _open(os.path.join(shot_dir, "RAW"))
-    plasma = _open(os.path.join(shot_dir, "PLASMA_PARAMS"))
+    plasma = xr.Dataset(data_vars, coords={"time": t_ms})
+    plasma.attrs["helicity"] = int(helicity)
+    return plasma
 
-    coupling_path = os.path.join(shot_dir, "COUPLING")
-    coupling = _open(coupling_path) if os.path.exists(coupling_path) else None
 
-    shot_no = int(np.atleast_1d(raw.attrs.get("shot", os.path.basename(shot_dir)))[0])
-    device = str(raw.attrs.get("device", "DIII-D"))
+def _attr_str(v):
+    """Decode an HDF5 attribute to a plain string."""
+    v = np.atleast_1d(v)[0] if np.ndim(v) else v
+    return v.decode() if isinstance(v, bytes) else str(v)
 
-    # Normalise the channel coordinate to plain python strings for clean regex/sel.
-    if raw["channel"].dtype.kind in ("S", "O"):
-        raw = raw.assign_coords(channel=[str(c) for c in raw["channel"].values])
 
-    # PLASMA_PARAMS carries the helicity convention used by the fit.
-    if "helicity" not in plasma.attrs:
-        plasma.attrs["helicity"] = int(np.atleast_1d(plasma.attrs.get("helicity", -1))[0])
-
-    return ShotData(shot=shot_no, device=device, raw=raw, plasma=plasma, coupling=coupling)
+def _shot_from_path(path):
+    """Best-effort shot number from a ``shot_<n>.h5`` filename."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    digits = "".join(ch for ch in stem if ch.isdigit())
+    return int(digits) if digits else 0
 
 
 def available_subsets(device="DIII-D"):
-    """All named sensor/coil subsets you can pass as ``channel_filter``.
+    """All named sensor subsets you can pass as ``channel_filter``.
 
     Thin convenience over :func:`omfit_compat.list_sensor_subsets` -> a
-    ``{name: [regex, ...]}`` mapping (e.g. ``'Bp_LFS_midplane'``, ``'3D_coils'``).
+    ``{name: [sensor, ...]}`` mapping (e.g. ``'Bp_LFS_midplane'``, ``'All_3D_Coils'``).
+    Names work with or without underscores.
     """
-    from omfit_compat import list_sensor_subsets
-
     return list_sensor_subsets(device)
 
 
@@ -147,12 +202,10 @@ def valid_channels(raw, channel_filter=".*", device="DIII-D"):
     """Channel names matching ``channel_filter`` that carry non-NaN signal.
 
     ``channel_filter`` may be a regex, a list of regexes, or a friendly subset
-    name from the device tables (e.g. ``'Bp_LFS_midplane'``, ``'3D_coils'``);
+    name from the device file (e.g. ``'Bp_LFS_midplane'``, ``'All_3D_Coils'``);
     see :func:`available_subsets`.
     """
     import re
-
-    from omfit_compat import resolve_channel_filter
 
     patterns = resolve_channel_filter(channel_filter, device)
     out = []
