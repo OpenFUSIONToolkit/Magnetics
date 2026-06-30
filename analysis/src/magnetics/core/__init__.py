@@ -12,13 +12,16 @@ from magnetics.core.mode_shape import (
     periodic_kernel,
     shape_noise,
     shape_vector,
+    track_from_spectrum,
     track_mode_shape,
 )
 from magnetics.core.spectral import (
+    ArrayShapeSpectrum,
     CrossSpectrumResult,
     ModeAtFrequencyResult,
     SpectrogramResult,
     ToroidalFitResult,
+    array_shape_spectrum,
     compute_spectrogram,
     cross_spectrum,
     denoise_spectrogram,
@@ -26,10 +29,12 @@ from magnetics.core.spectral import (
     extract_mode_at_frequency,
     fit_toroidal_mode,
     integrate_bdot,
+    mode_from_spectrum,
     stft_layout,
 )
 
 __all__ = [
+    "ArrayShapeSpectrum",
     "CrossSpectrumResult",
     "GPFitResult",
     "ModeAtFrequencyResult",
@@ -43,15 +48,18 @@ __all__ = [
     "downsample",
     "extract_mode_at_frequency",
     "fit_toroidal_mode",
+    "array_shape_spectrum",
     "gp_mode_shape",
     "gp_periodic_fit",
     "integrate_bdot",
     "mac",
     "mac_n_spectrum",
+    "mode_from_spectrum",
     "mode_pattern_2d",
     "periodic_kernel",
     "shape_noise",
     "shape_vector",
     "stft_layout",
+    "track_from_spectrum",
     "track_mode_shape",
 ]

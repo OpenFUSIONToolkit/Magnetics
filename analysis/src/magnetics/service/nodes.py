@@ -46,8 +46,7 @@ def machines() -> list[dict]:
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _toroidal_mode_cached,
-               _poloidal_mode_cached, _mode_track_cached):
+    for fn in (_spec_result, _stack_cached, _array_spectrum):
         fn.cache_clear()
 
 
@@ -268,22 +267,24 @@ def _fit_quality(shot, params=None) -> dict:
                                            "χ² pending the full fit"})
 
 
+# ── batched full-array STFT, computed once per (shot, array, f) and cached ─────
+@lru_cache(maxsize=12)
+def _array_spectrum(shot, names, f_khz):
+    """One full-array STFT for a fixed (shot, probe set, frequency) — the expensive
+    step. Every cursor position then reads the complex array pattern out of this by
+    indexing (``mode_from_spectrum``), so scrubbing is array-fast, not 40 cross-spectra
+    per move. ``names`` is a tuple so the call is hashable; cleared by ``refresh``."""
+    t_ms, mat = _stack(shot, names)
+    return spectral.array_shape_spectrum(
+        mat, np.asarray(t_ms, dtype=float) * 1e-3, f_khz * 1e3)
+
+
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
-@lru_cache(maxsize=64)
-def _toroidal_mode_cached(shot, f_khz, t0_ms, window_ms):
-    """The (expensive) full-array extraction, memoized on its real inputs so the
-    phase_fit / mode_shape / mode_similarity nodes — fetched together for one cursor
-    position — share a single compute instead of recomputing it three times."""
+def _toroidal_arr(shot):
     arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a mode fit")
-    phis = np.array([p for _, p in arr], dtype=float)
-    t_ms, mat = _stack(shot, tuple(n for n, _ in arr))
-    t_range = None if t0_ms is None else ((t0_ms - window_ms) * 1e-3, (t0_ms + window_ms) * 1e-3)
-    mode = spectral.extract_mode_at_frequency(
-        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3,
-        frequency=f_khz * 1e3, t_range=t_range)
-    return arr, mode
+    return arr
 
 
 def _toroidal_mode(shot, params):
@@ -291,8 +292,11 @@ def _toroidal_mode(shot, params):
     honoring the GUI time cursor. Returns (arr, mode, f_khz, t0_ms)."""
     f_khz = _f(params, "f_khz", 5.0)
     t0_ms = _f(params, "time", None)              # GUI cursor (ms)
-    window_ms = _f(params, "window_ms", 2.0)
-    arr, mode = _toroidal_mode_cached(str(shot), f_khz, t0_ms, window_ms)
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr), f_khz)
+    t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
+    mode = spectral.mode_from_spectrum(spec, phis, t0_s)
     return arr, mode, f_khz, t0_ms
 
 
@@ -350,21 +354,14 @@ def _mode_shape(shot, params=None) -> dict:
 
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
-@lru_cache(maxsize=32)
-def _poloidal_mode_cached(shot, f_khz, t0_ms, window_ms):
+def _poloidal_arr(shot):
     theta = _real_theta()
     arr = [(name, theta[name]) for name in h5source.channel_names(shot)
            if diiid.family_of(name) == "MPID" and name in theta]
     arr.sort(key=lambda nt: nt[1])
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
         raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
-    thetas = np.array([th for _, th in arr], dtype=float)
-    t_ms, mat = _stack(shot, tuple(n for n, _ in arr))
-    t_range = None if t0_ms is None else ((t0_ms - window_ms) * 1e-3, (t0_ms + window_ms) * 1e-3)
-    mode = spectral.extract_mode_at_frequency(
-        mat, thetas, np.asarray(t_ms, dtype=float) * 1e-3,
-        frequency=f_khz * 1e3, t_range=t_range)
-    return arr, mode
+    return arr
 
 
 def _poloidal_mode(shot, params):
@@ -372,8 +369,11 @@ def _poloidal_mode(shot, params):
     the real published θ. Returns (arr, mode, f_khz, t0_ms)."""
     f_khz = _f(params, "f_khz", 5.0)
     t0_ms = _f(params, "time", None)
-    window_ms = _f(params, "window_ms", 2.0)
-    arr, mode = _poloidal_mode_cached(str(shot), f_khz, t0_ms, window_ms)
+    arr = _poloidal_arr(str(shot))
+    thetas = np.array([th for _, th in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr), f_khz)
+    t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
+    mode = spectral.mode_from_spectrum(spec, thetas, t0_s)
     return arr, mode, f_khz, t0_ms
 
 
@@ -417,27 +417,16 @@ def _mode_similarity(shot, params=None) -> dict:
 
 
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
-@lru_cache(maxsize=16)
-def _mode_track_cached(shot, f_khz):
-    """The 40-slice full-array sweep, memoized on (shot, f_khz). The track uses the
-    strongest-mode slice as its reference, so it is cursor-independent — compute it
-    once and every later cursor move reads it back instantly."""
-    arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
-    if len(arr) < 4:
-        raise ValueError("not enough toroidal-array channels for mode tracking")
-    phis = np.array([p for _, p in arr], dtype=float)
-    t_ms, mat = _stack(shot, tuple(n for n, _ in arr))
-    tr = mode_shape.track_mode_shape(
-        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3, frequency=f_khz * 1e3)
-    return arr, tr
-
-
 def _mode_track(shot, params=None) -> dict:
     """Track the full toroidal array's mode over time at a fixed frequency: MAC
     similarity to the strongest-mode reference slice vs time (eigspec fig 9). A
-    sustained high MAC marks a persistent mode; drops mark mode changes."""
+    sustained high MAC marks a persistent mode; drops mark mode changes. Reads the
+    cached full-array STFT, so it's cheap once the spectrum exists."""
     f_khz = _f(params, "f_khz", 5.0)
-    arr, tr = _mode_track_cached(str(shot), f_khz)
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr), f_khz)
+    tr = mode_shape.track_from_spectrum(spec, phis)
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
     series = [{"name": "shape MAC to ref", "x": tr.t_ms.tolist(),
                "y": tr.mac_to_ref.tolist()}]

@@ -23,7 +23,11 @@ from numpy.typing import NDArray
 from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import minimize
 
-from magnetics.core.spectral import extract_mode_at_frequency, fit_toroidal_mode
+from magnetics.core.spectral import (
+    extract_mode_at_frequency,
+    fit_toroidal_mode,
+    mode_from_spectrum,
+)
 
 
 @dataclass(slots=True)
@@ -337,6 +341,45 @@ def track_mode_shape(
         n_by_time=np.array(ns, dtype=int),
         ref_t_ms=float(centers[ref_idx] * 1e3),
         frequency=float(frequency),
+    )
+
+
+def track_from_spectrum(
+    spectrum,
+    angle_deg: NDArray[np.floating],
+    *,
+    n_slices: int = 60,
+    ref_time_s: float | None = None,
+    n_range: tuple[int, int] = (-6, 6),
+) -> ModeTrackResult:
+    """Time-resolved mode track from a precomputed ``ArrayShapeSpectrum`` (the fast
+    path used by the service): subsample to ``n_slices`` columns, read each slice's
+    shape via ``mode_from_spectrum`` (an array index, not a fresh STFT), and MAC each
+    to the strongest-amplitude reference. Same result as :func:`track_mode_shape`,
+    but the expensive STFT is computed once upstream and shared."""
+    times = np.asarray(spectrum.time, dtype=np.float64)
+    idx = np.unique(np.linspace(0, times.size - 1, min(n_slices, times.size)).astype(int))
+
+    shapes, ns, strength = [], [], []
+    for ti in idx:
+        mode = mode_from_spectrum(spectrum, angle_deg, float(times[ti]))
+        shapes.append(shape_vector(mode.phase, mode.amplitude))
+        ns.append(fit_toroidal_mode(mode, n_range=n_range).n)
+        strength.append(float(np.sum(np.abs(mode.amplitude))))
+    shapes = np.array(shapes)
+    centers = times[idx]
+
+    ref_idx = (int(np.argmin(np.abs(centers - ref_time_s))) if ref_time_s is not None
+               else int(np.argmax(strength)))
+    macs = np.array([mac(s, shapes[ref_idx]) for s in shapes])
+
+    return ModeTrackResult(
+        kind="mode_track",
+        t_ms=centers * 1e3,
+        mac_to_ref=macs,
+        n_by_time=np.array(ns, dtype=int),
+        ref_t_ms=float(centers[ref_idx] * 1e3),
+        frequency=float(spectrum.frequency),
     )
 
 

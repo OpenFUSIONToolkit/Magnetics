@@ -459,6 +459,119 @@ def denoise_spectrogram(
 
 
 # ---------------------------------------------------------------------------
+# Batched full-array STFT (compute once, slice per cursor — eigspec speed path)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class ArrayShapeSpectrum:
+    kind: str
+    time: NDArray[np.floating]              # (n_times,) window-center times (s)
+    frequency: float                        # Hz, the analysis frequency (band center)
+    freq_band: NDArray[np.floating]         # (n_band,) Hz kept around `frequency`
+    spec: NDArray[np.complexfloating]       # (n_probes, n_times, n_band) complex STFT
+
+
+def array_shape_spectrum(
+    signals: NDArray[np.floating],
+    time: NDArray[np.floating],
+    frequency: float,
+    *,
+    slice_duration: float = 0.001,
+    window: str = "hann",
+    max_columns: int = 2000,
+    n_band: int = 5,
+) -> ArrayShapeSpectrum:
+    """One batched short-time FFT per probe, keeping only a few frequency bins around
+    ``frequency``. Computed once per shot; the cursor/track analyses then read the
+    complex array pattern at any time by indexing this — no per-cursor cross-spectra.
+
+    Inputs:
+        signals (ndarray): probe time series, shape (n_probes, n_samples).
+        time (ndarray): sample times (s), uniform.
+        frequency (float): analysis frequency (Hz); the kept band is centered here.
+        slice_duration (float): FFT window width (s).
+        n_band (int): number of frequency bins kept around `frequency` (for the local
+            coherence average in ``mode_from_spectrum``).
+    Returns:
+        result (ArrayShapeSpectrum): the per-probe complex STFT band + axes.
+    """
+    sig = np.ascontiguousarray(signals, dtype=np.float32)
+    n_probes, n = sig.shape
+    time = np.asarray(time)
+    dt = float(np.median(np.diff(time)))
+
+    n_fft, natural_hop, n_cols_natural = stft_layout(n, 1.0 / dt, slice_duration)
+    hop = (natural_hop if n_cols_natural <= max_columns
+           else max(natural_hop, (n - n_fft) // max(1, max_columns - 1)))
+    win = get_window(window, n_fft, fftbins=True).astype(np.float32)
+
+    freqs = rfftfreq(n_fft, d=dt)
+    fi = int(np.argmin(np.abs(freqs - frequency)))
+    lo = max(0, min(fi - n_band // 2, freqs.size - n_band))
+    hi = lo + n_band
+
+    bands = []
+    starts = None
+    for i in range(n_probes):
+        s, starts = _stft(sig[i], n_fft, hop, win)     # (n_frames, n_freqs)
+        bands.append(s[:, lo:hi].astype(np.complex64))
+    spec = np.stack(bands, axis=0)                       # (n_probes, n_frames, n_band)
+    t_centers = time[starts] + (n_fft / 2.0) * dt
+    return ArrayShapeSpectrum(
+        kind="array_shape_spectrum",
+        time=t_centers, frequency=float(freqs[fi]),
+        freq_band=freqs[lo:hi], spec=spec,
+    )
+
+
+def mode_from_spectrum(
+    spectrum: ArrayShapeSpectrum,
+    angle_deg: NDArray[np.floating],
+    t0_s: float,
+    *,
+    ref: int = 0,
+    t_smooth: int = 3,
+) -> ModeAtFrequencyResult:
+    """Per-probe phase/amplitude/coherence (+1σ) at one time, read from a precomputed
+    ``ArrayShapeSpectrum`` — the fast equivalent of ``extract_mode_at_frequency``.
+
+    The cross-spectrum of each probe vs. the reference is averaged over the kept
+    frequency band and a few neighboring time columns (the Welch averaging that yields
+    coherence and the Bendat–Piersol σ), then indexed by the column nearest ``t0_s``.
+    """
+    band = spectrum.spec                                 # (n_probes, n_times, n_band)
+    ti = int(np.argmin(np.abs(spectrum.time - t0_s)))
+    t_lo = max(0, min(ti - t_smooth // 2, band.shape[1] - t_smooth))
+    cells = band[:, t_lo:t_lo + t_smooth, :]             # (n_probes, n_t, n_band)
+    ref_cells = cells[ref]                               # (n_t, n_band)
+
+    # conj(sig)·ref to match scipy.signal.csd(sig, ref)'s convention in
+    # cross_spectrum, so the signed n agrees with extract_mode_at_frequency.
+    cross = np.mean(np.conj(cells) * ref_cells[None], axis=(1, 2))   # (n_probes,)
+    sxx = float(np.mean(np.abs(ref_cells) ** 2))
+    syy = np.mean(np.abs(cells) ** 2, axis=(1, 2))                   # (n_probes,)
+
+    power = np.abs(cross)
+    phase = np.rad2deg(np.angle(cross))
+    phase[phase < 0] += 360.0
+    coherence = (np.abs(cross) ** 2) / (sxx * syy + 1e-30)
+
+    k = max(1, cells.shape[1] * cells.shape[2])
+    phase_err, amp_err = _cross_spectral_errors(coherence, power, k)
+    phase_err[ref] = np.nan
+    amp_err[ref] = np.nan
+
+    return ModeAtFrequencyResult(
+        kind="mode_at_frequency",
+        frequency=spectrum.frequency,
+        phase=phase, amplitude=power, coherence=coherence,
+        toroidal_angle=np.asarray(angle_deg, dtype=np.float64),
+        phase_error=phase_err, amplitude_error=amp_err,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Multi-probe mode extraction at a single frequency
 # ---------------------------------------------------------------------------
 

@@ -448,3 +448,49 @@ class TestModeUncertaintyPropagation:
         ])
         noisy = fit_toroidal_mode(extract_mode_at_frequency(sigs, phis, t, frequency=3000.0))
         assert noisy.n_confidence <= clean.n_confidence + 1e-9
+
+
+# -----------------------------------------------------------------------
+# Batched full-array STFT (fast cursor path)
+# -----------------------------------------------------------------------
+
+
+class TestArrayShapeSpectrum:
+    def _array(self, seed=0, noise=0.1):
+        rng = np.random.default_rng(seed)
+        fs = 200_000
+        t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
+        phi = np.linspace(0, 330, 16)
+        sigs = np.vstack([
+            np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(2 * p)) + noise * rng.standard_normal(t.size)
+            for p in phi
+        ])
+        return sigs, phi, t
+
+    def test_spectrum_shape(self):
+        from magnetics.core.spectral import array_shape_spectrum
+        sigs, phi, t = self._array()
+        spec = array_shape_spectrum(sigs, t, 8000.0, n_band=5)
+        assert spec.spec.shape[0] == phi.size            # one row per probe
+        assert spec.spec.shape[2] == 5                   # kept band width
+        assert spec.spec.shape[1] == spec.time.size
+        assert abs(spec.frequency - 8000.0) < 500.0
+
+    def test_matches_extract_mode_at_frequency(self):
+        # the fast path must agree with the slow per-cursor extraction on n and phase
+        from magnetics.core.spectral import (
+            array_shape_spectrum,
+            extract_mode_at_frequency,
+            fit_toroidal_mode,
+            mode_from_spectrum,
+        )
+        sigs, phi, t = self._array()
+        t0 = 0.025
+        slow = extract_mode_at_frequency(sigs, phi, t, frequency=8000.0,
+                                         t_range=(t0 - 0.001, t0 + 0.001))
+        spec = array_shape_spectrum(sigs, t, 8000.0)
+        fast = mode_from_spectrum(spec, phi, t0)
+        assert fit_toroidal_mode(fast).n == fit_toroidal_mode(slow).n
+        d = ((fast.phase - slow.phase + 180) % 360) - 180
+        assert np.sqrt(np.mean(d**2)) < 10.0             # phases agree within ~deg
+        assert fast.phase_error[0] != fast.phase_error[0]  # ref probe NaN
