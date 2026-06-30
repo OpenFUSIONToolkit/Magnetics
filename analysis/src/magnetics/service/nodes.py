@@ -47,6 +47,41 @@ def machines() -> list[dict]:
     return h5source.list_shots()
 
 
+def channel_usage(shot: str) -> dict:
+    """Which fetched pointnames each analysis actually consumes, and which sit idle.
+
+    A diagnostic for trimming the data pull: any ``unused`` pointname can be dropped
+    from the fetch to speed it up without changing a single plot. Roles are derived
+    from the *same* selectors the nodes use (``_pick_pair`` / ``_toroidal_arr`` /
+    ``_poloidal_arr``), so this can't drift from what's really wired."""
+    h5source.shot_file(shot)  # KeyError if the shot isn't available
+    all_names = list(h5source.channel_names(shot))
+    roles: dict[str, list[str]] = {}
+
+    def tag(names, role):
+        for nm in names:
+            roles.setdefault(nm, []).append(role)
+
+    try:
+        (n1, _), (n2, _) = _pick_pair(shot)
+        tag([n1, n2], "2-point spectrogram")
+    except ValueError:
+        pass
+    try:
+        tag([n for n, _ in _toroidal_arr(str(shot))], "toroidal n-fit array")
+    except ValueError:
+        pass
+    try:
+        tag([n for n, _ in _poloidal_arr(str(shot))], "poloidal array")
+    except ValueError:
+        pass
+
+    used = [{"name": nm, "roles": roles[nm]} for nm in all_names if nm in roles]
+    unused = [nm for nm in all_names if nm not in roles]
+    return {"shot": str(shot), "n_total": len(all_names), "n_used": len(used),
+            "used": used, "unused": unused}
+
+
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
@@ -183,7 +218,7 @@ def _spectrogram(shot, params=None) -> dict:
     z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(), f.tolist(), z.tolist(),
-        {"x": "time (ms)", "y": "f (kHz)", "z": "log₁₀ power"},
+        {"x": "time (ms)", "y": "f (kHz)", "z": "log<sub>10</sub> power"},
         discrete=False,
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
 
@@ -562,6 +597,26 @@ def _gp_shape(mode):
 
 
 # ── mode_pattern: 2D (θ, φ) modal pattern from toroidal × poloidal shapes ─────
+def _pattern_overlay(shot) -> dict:
+    """The real sensors that built the pattern, as (φ, θ) dots labelled by pointname:
+    the poloidal array at its (φ, θ) and the toroidal array along θ≈0. Lets the GUI
+    show where the field is actually sampled (and name each probe on hover)."""
+    pts = []
+    try:
+        for nm, th in _poloidal_arr(str(shot)):
+            phi = diiid.phi_of(nm)
+            if phi is not None:
+                pts.append({"x": float(phi), "y": float(th), "label": nm})
+    except ValueError:
+        pass
+    try:
+        for nm, phi in _toroidal_arr(str(shot)):
+            pts.append({"x": float(phi), "y": 0.0, "label": nm})
+    except ValueError:
+        pass
+    return {"points": pts, "symbol": "circle"}
+
+
 def _mode_pattern(shot, params=None) -> dict:
     """Rank-2 (θ, φ) modal pattern (eigspec eq 23) — the outer product of the GP
     toroidal and poloidal mode shapes, on real DIII-D probe geometry."""
@@ -572,9 +627,10 @@ def _mode_pattern(shot, params=None) -> dict:
     return contracts.contour(
         phi_g.tolist(), th_g.tolist(), pattern.tolist(),
         {"x": "φ (deg)", "y": "θ (deg)", "z": "mode pattern (a.u.)"},
-        zrange=[-zmax, zmax],
+        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot),
         meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry"})
+              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry; "
+                      "dots = probe locations"})
 
 
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
