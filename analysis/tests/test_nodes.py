@@ -171,6 +171,53 @@ def test_mode_pattern_node():
     assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])  # [θ][φ]
 
 
+def test_elongation_theta_star_threads_into_poloidal_nodes(monkeypatch):
+    """With κ available the poloidal axis is the corrected θ*; absent κ it's geometric."""
+    shot = _first_shot()
+    try:
+        nodes.build_node(shot, "mode_pattern")  # needs the poloidal array
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"no poloidal array in this shot: {e}")
+
+    # κ absent → geometric θ, honest "no κ" label
+    monkeypatch.setattr(nodes, "_kappa_at", lambda *a, **k: None)
+    mp = nodes.build_node(shot, "mode_pattern", {"time": 3000})
+    assert mp["meta"]["kappa"] is None and "κ-corrected" not in mp["axes"]["y"]
+
+    # κ present → θ* axis + κ in meta
+    monkeypatch.setattr(nodes, "_kappa_at", lambda *a, **k: 1.85)
+    mp = nodes.build_node(shot, "mode_pattern", {"time": 3000})
+    ps = nodes.build_node(shot, "poloidal_shape", {"time": 3000})
+    assert mp["meta"]["kappa"] == 1.85 and "κ-corrected" in mp["axes"]["y"]
+    assert ps["meta"]["kappa"] == 1.85 and "κ-corrected" in ps["axes"]["x"]
+
+
+def test_raw_trace_node():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "raw_trace", {"time": 3000})
+    assert n["kind"] == "line" and n["series"]
+    s = n["series"][0]
+    assert len(s["x"]) == len(s["y"]) and len(s["x"]) > 1
+    assert n["meta"]["probe"]
+
+
+def test_toroidal_stripes_node():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "toroidal_stripes", {"time": 3000})
+    assert n["kind"] == "heatmap"
+    assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])  # [angle][time]
+
+
+def test_poloidal_phase_fit_node():
+    shot = _first_shot()
+    try:
+        n = nodes.build_node(shot, "poloidal_phase_fit", {"time": 3000})
+    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    assert n["kind"] == "scatter2d" and n["points"]
+    assert "m_fit" in n["meta"]
+
+
 def test_unknown_node_raises():
     shot = _first_shot()
     with pytest.raises(KeyError):

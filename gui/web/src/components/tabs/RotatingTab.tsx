@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
-import { MODE_PALETTE, POWER_SEQUENTIAL, modeColor } from "../../lib/colormaps";
+import { MODE_PALETTE, POWER_SEQUENTIAL, FIELD_DIVERGING, modeColor } from "../../lib/colormaps";
 import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
@@ -117,6 +117,9 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [fftOverlap, setFftOverlap] = useState<number>(75);
   const [probePhi1, setProbePhi1] = useState<number>(307);
   const [probePhi2, setProbePhi2] = useState<number>(340);
+  // θ origin (deg) for the 2D modal pattern: pans the periodic poloidal axis so this
+  // angle sits at the plot's origin. Default 90° (top of the machine).
+  const [patternCut, setPatternCut] = useState<number>(90);
 
   // Resizable layout dimensions
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -215,6 +218,17 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const {
     node: modeOverTimeNode,
   } = useNode(machine, "mode_over_time");
+
+  // Array wave-stripes: raw δBp(φ,t) / δBp(θ,t) over a few mode periods at the cursor.
+  const { node: toroidalStripesNode } = useNode(machine, "toroidal_stripes", { time: cursorMs });
+  const { node: poloidalStripesNode } = useNode(machine, "poloidal_stripes", { time: cursorMs });
+
+  // Poloidal phase fit (phase vs θ, φ-detrended, best-fit m) — the poloidal analogue
+  // of phase_fit. 422s when the shot lacks the poloidal array; the panel hides then.
+  const { node: poloidalPhaseFitNode } = useNode(machine, "poloidal_phase_fit", { time: cursorMs });
+
+  // One Mirnov probe's raw dB/dt time series in a 4 ms window around the cursor.
+  const { node: rawTraceNode } = useNode(machine, "raw_trace", { time: cursorMs });
 
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
@@ -572,7 +586,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   // Mode structure poloidal node (synthetic demo; no backend poloidal-fit node wired yet)
   const processedPoloidalNode = useMemo(() => {
-    if (live) return null;  // no fabricated poloidal fit against a live backend
+    if (live) return poloidalPhaseFitNode && poloidalPhaseFitNode.kind === "scatter2d"
+      ? poloidalPhaseFitNode : null;
     const m = fittype === 2 ? 3 : fittype === 1 ? 2 : 1;
     const angles = Array.from({ length: 31 }, (_, i) => (i * 360) / 30); // 31 probes
     
@@ -615,7 +630,26 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "θ (deg)", y: "phase (deg)" },
       meta: { m_fit: m },
     };
-  }, [live, fittype, gateFrac]);
+  }, [live, poloidalPhaseFitNode, fittype, gateFrac]);
+
+  // 2D modal pattern with the θ (poloidal) axis re-centred on `patternCut`. θ is
+  // periodic, so we roll the rows so the cut angle sits at the origin and the axis runs
+  // continuously cut … cut+360, with a closing row appended so the contour fills a
+  // seamless full 360° as the slider moves; the probe-dot overlay is shifted to match.
+  // Pure view transform on the real node — no refetch, so the slider is instant.
+  const processedPatternNode = useMemo(() => {
+    if (!modePatternNode || modePatternNode.kind !== "contour") return modePatternNode;
+    const { y, z, overlay } = modePatternNode;
+    const i = Math.max(0, y.findIndex((v) => v >= patternCut));
+    const newY = [...y.slice(i), ...y.slice(0, i).map((v) => v + 360)];
+    const newZ = [...z.slice(i), ...z.slice(0, i)];
+    newY.push(newY[0] + 360);   // close the loop so the fill wraps with no seam
+    newZ.push(newZ[0]);
+    const newOverlay = overlay
+      ? { ...overlay, points: overlay.points.map((p) => ({ ...p, y: p.y >= patternCut ? p.y : p.y + 360 })) }
+      : overlay;
+    return { ...modePatternNode, y: newY, z: newZ, overlay: newOverlay };
+  }, [modePatternNode, patternCut]);
 
   // Toroidal node processing — real phase_fit node when present, else (mock only) synth.
   const processedToroidalNode = useMemo(() => {
@@ -745,9 +779,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   const renderSubInterval = () => {
     const { freqs, power, coh, nMode } = subIntervalData;
-    // The raw dB/dt trace has no backend node yet; only synthesize it in mock/demo mode.
+    // Live: one probe's real dB/dt from the raw_trace node. Mock: synthesize a trace.
     const activeFreqs = currentModeFreqs[0] > 0 ? currentModeFreqs : [8.0];
-    const rawTrace = live ? null : generateDeterministicTimeTrace(cursorMs, activeFreqs);
+    const rawTrace = live
+      ? (rawTraceNode?.kind === "line" && rawTraceNode.series[0]
+          ? { times: rawTraceNode.series[0].x, values: rawTraceNode.series[0].y }
+          : null)
+      : generateDeterministicTimeTrace(cursorMs, activeFreqs);
 
     const rawPlotData = [
       {
@@ -829,49 +867,29 @@ export default function RotatingTab({ machine }: { machine: string }) {
   };
 
   const renderArrayContour = () => {
-    const { times, phiAngles, thetaAngles, toroidalZ, poloidalZ } = arrayStripesData;
-
-    if (times.length === 0) {  // live: no backend node feeds the array wave-stripes yet
-      return (
-        <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "8px" }}>
-          <div style={{ flex: 1 }}>
-            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>Toroidal Array Waves</h4>
-            <PanelPlaceholder text="array wave-stripes — not yet wired to the backend" />
-          </div>
-          <div style={{ flex: 1 }}>
-            <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>Poloidal Array Waves</h4>
-            <PanelPlaceholder text="array wave-stripes — not yet wired to the backend" />
-          </div>
-        </div>
-      );
-    }
-
-    const toroidalTrace = [
-      {
-        type: "heatmap" as const,
-        x: times,
-        y: phiAngles,
-        z: toroidalZ,
-        colorscale: POWER_SEQUENTIAL,
-        showscale: false,
-      },
-    ];
-
-    const poloidalTrace = [
-      {
-        type: "heatmap" as const,
-        x: times,
-        y: thetaAngles,
-        z: poloidalZ,
-        colorscale: POWER_SEQUENTIAL,
-        showscale: false,
-      },
-    ];
+    // Per-panel data: live → the stripe heatmap nodes; mock → the synthetic stripes.
+    const torData = live
+      ? (toroidalStripesNode?.kind === "heatmap"
+          ? { x: toroidalStripesNode.x, y: toroidalStripesNode.y, z: toroidalStripesNode.z } : null)
+      : (arrayStripesData.times.length
+          ? { x: arrayStripesData.times, y: arrayStripesData.phiAngles, z: arrayStripesData.toroidalZ } : null);
+    const polData = live
+      ? (poloidalStripesNode?.kind === "heatmap"
+          ? { x: poloidalStripesNode.x, y: poloidalStripesNode.y, z: poloidalStripesNode.z } : null)
+      : (arrayStripesData.times.length
+          ? { x: arrayStripesData.times, y: arrayStripesData.thetaAngles, z: arrayStripesData.poloidalZ } : null);
 
     const baseLayout = {
       xaxis: { title: { text: "Time (ms)" } },
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
+    const stripePlot = (d: { x: number[]; y: number[]; z: number[][] }, axisTitle: string) => (
+      <Plot
+        data={[{ type: "heatmap" as const, x: d.x, y: d.y, z: d.z, colorscale: POWER_SEQUENTIAL, showscale: false }]}
+        layout={{ ...baseLayout, yaxis: { title: { text: axisTitle } } }}
+        height={200}
+      />
+    );
 
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
@@ -879,14 +897,18 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(φ, t)</span>
           </h4>
-          <Plot data={toroidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "φ (deg)" } } }} height={200} />
+          {torData
+            ? stripePlot(torData, "φ (deg)")
+            : <PanelPlaceholder text={`toroidal array waves · waiting for stripes at t=${cursorMs.toFixed(0)} ms`} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Poloidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(θ, t)</span>
           </h4>
-          <Plot data={poloidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "θ (deg)" } } }} height={200} />
+          {polData
+            ? stripePlot(polData, "θ (deg)")
+            : <PanelPlaceholder text="poloidal array not available for this shot" />}
         </div>
       </div>
     );
@@ -912,10 +934,59 @@ export default function RotatingTab({ machine }: { machine: string }) {
           </h4>
           {processedPoloidalNode
             ? <NodeView node={processedPoloidalNode} height={200} />
-            : <PanelPlaceholder text="poloidal phase fit — not yet wired to the backend" />}
+            : <PanelPlaceholder text="poloidal phase fit · no poloidal array in this shot" />}
         </div>
       </div>
     );
+  };
+
+  // The 2D modal pattern, rendered with a dedicated Plot (not the generic NodeView) so
+  // we can: fill the tile edge-to-edge with an explicit y-range, wrap the panned θ tick
+  // labels back to 0° past 360°, and stand the colorbar label up vertically to reclaim
+  // horizontal room. Mirrors NodeView's contour styling otherwise.
+  const renderModePattern = () => {
+    const node = processedPatternNode;
+    if (!node || node.kind !== "contour") return null;
+    const inkEdge = dark ? "#000" : "#ffffff";
+    const wrap = (v: number) => Math.round(((v % 360) + 360) % 360);
+    let zr = node.zrange;
+    if (!zr) {
+      let m = 0;
+      for (const row of node.z) for (const v of row) if (Number.isFinite(v)) m = Math.max(m, Math.abs(v));
+      zr = [-m, m];
+    }
+    const y0 = node.y[0];
+    const y1 = node.y[node.y.length - 1];
+    const tickvals: number[] = [];
+    for (let v = y0; v <= y1 + 1e-6; v += 45) tickvals.push(v);
+    const ticktext = tickvals.map((v) => `${wrap(v)}`);
+
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "contour", x: node.x, y: node.y, z: node.z,
+      colorscale: FIELD_DIVERGING, zmin: zr[0], zmax: zr[1],
+      contours: { coloring: "fill" },
+      // side:"right" stands the title up vertically alongside the bar (frees width).
+      colorbar: { title: { text: node.axes.z ?? "", side: "right" }, thickness: 12, outlinewidth: 0 },
+    } as Partial<Plotly.PlotData>];
+    if (node.overlay) {
+      const pts = node.overlay.points;
+      const hovertext = pts.map((p) => {
+        const c = `(${p.x.toFixed(0)}, ${wrap(p.y)})`;
+        return p.label ? `${p.label}<br>${c}` : c;
+      });
+      traces.push({
+        type: "scatter", mode: "markers",
+        x: pts.map((p) => p.x), y: pts.map((p) => p.y), text: hovertext,
+        marker: { symbol: node.overlay.symbol ?? "circle", size: 6, color: ink, line: { color: inkEdge, width: 0.5 } },
+        hovertemplate: "%{text}<extra></extra>",
+      } as Partial<Plotly.PlotData>);
+    }
+    const layout: Partial<Plotly.Layout> = {
+      xaxis: { title: { text: node.axes.x } },
+      // explicit range = data extent → no autorange padding, fills the tile while sliding
+      yaxis: { title: { text: node.axes.y }, range: [y0, y1], tickvals, ticktext },
+    };
+    return <Plot data={traces} layout={layout} height={260} />;
   };
 
   // Each analysis below renders in its OWN card panel (see the JSX), and only when
@@ -1392,9 +1463,36 @@ export default function RotatingTab({ machine }: { machine: string }) {
         {analysisCard("Poloidal Mode Shape", poloidalShapeNode, "line", 220,
           shapeMeta(poloidalShapeNode)?.f_kHz != null
             ? `GP fit ±2σ · markers = probes @ ${shapeMeta(poloidalShapeNode)!.f_kHz} kHz` : "GP fit ±2σ")}
-        {analysisCard("2D Modal Pattern (θ, φ)", modePatternNode, "contour", 260,
-          shapeMeta(modePatternNode)?.f_kHz != null
-            ? `Re{poloidal ⊗ toroidal}, eq 23 @ ${shapeMeta(modePatternNode)!.f_kHz} kHz` : "eigspec eq 23")}
+        {processedPatternNode && processedPatternNode.kind === "contour" && (
+          <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
+            <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+              2D Modal Pattern (θ, φ)
+              <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}>
+                {" · "}
+                {shapeMeta(modePatternNode)?.f_kHz != null
+                  ? `Re{poloidal ⊗ toroidal}, eq 23 @ ${shapeMeta(modePatternNode)!.f_kHz} kHz` : "eigspec eq 23"}
+              </span>
+            </h4>
+            <div style={{ display: "flex", flexDirection: "row", gap: "6px", flex: 1, minHeight: 0 }}>
+              {/* θ-origin slider on the LEFT, vertical so it tracks the y (θ) axis it pans */}
+              <div
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", padding: "2px 0" }}
+                title="Pans the periodic θ (poloidal) axis so this angle sits at the plot origin."
+              >
+                <span style={{ fontSize: "9px", color: "var(--text-dim)", whiteSpace: "nowrap" }}>θ orig</span>
+                <input
+                  type="range" min={0} max={360} step={2} value={patternCut}
+                  onChange={(e) => setPatternCut(Number(e.target.value))}
+                  style={{ writingMode: "vertical-lr", direction: "rtl", width: "18px", height: "210px" }}
+                />
+                <span style={{ fontSize: "9px", color: "var(--text)" }}>{patternCut}°</span>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                {renderModePattern()}
+              </div>
+            </div>
+          </div>
+        )}
         {analysisCard("Mode Persistence", modeTrackNode, "line", 200,
           shapeMeta(modeTrackNode)?.dominant_n != null
             ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`

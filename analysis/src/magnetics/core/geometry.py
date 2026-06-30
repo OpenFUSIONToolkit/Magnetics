@@ -23,6 +23,24 @@ def fourier_design_matrix(phi_deg, n_max: int) -> np.ndarray:
     return np.column_stack(cols)
 
 
+def elongation_theta_star(theta_deg, kappa: float):
+    """Map a geometric poloidal angle θ to the elongation-corrected angle θ*.
+
+    On a flux surface of elongation κ a point is (R−R0, Z) = (a cos θ*, κ a sin θ*),
+    so the measured geometric angle θ = atan2(Z, R−R0) satisfies tan θ = κ tan θ*.
+    Inverting gives θ* = atan2(sin θ, κ cos θ): the straightened angle in which an
+    `m` mode is a clean sinusoid. κ = 1 returns θ unchanged.
+
+    This is the first-order, *scalar-κ* correction — it assumes a constant
+    up-down-symmetric elongation with no triangularity, no Shafranov shift, and the
+    magnetic axis at Z = 0. It is the cheap stand-in for a full EFIT straight-field-
+    line angle (which would need the reconstructed flux surfaces, not just κ).
+    """
+    th = np.deg2rad(np.asarray(theta_deg, dtype=float))
+    star = np.arctan2(np.sin(th), float(kappa) * np.cos(th))
+    return np.rad2deg(star) % 360.0
+
+
 def condition_number(phi_deg, n_max: int = 3) -> float:
     """Condition number K = max(singular)/min(singular) of the design matrix.
 
