@@ -107,23 +107,24 @@ def _array_channels(shot, families: tuple[str, ...]):
     out = []
     for name in h5source.channel_names(shot):
         if diiid.family_of(name) in fam_set:
-            phi = diiid.phi_of(name)
+            phi = diiid.phi_of(name, shot)
             if phi is not None:
                 out.append((name, phi))
     out.sort(key=lambda np_: np_[1])
     return out
 
 
-@lru_cache(maxsize=1)
-def _real_theta() -> dict:
-    """name → real poloidal angle θ (deg) from the published DIII-D layout in
-    ``_real_geometry`` (the genuine static positions), unioned over machines. Lets
-    the poloidal arrays carry physical θ instead of ``diiid``'s cosmetic offset."""
-    from . import _real_geometry
+@lru_cache(maxsize=8)
+def _real_theta(shot) -> dict:
+    """name → real poloidal angle θ (deg), derived from the device file's
+    shot-correct (r, z) about the machine axis. Only channels with genuine table
+    geometry at this shot appear, so callers can still select 'probes that have a
+    physical θ' (vs ``diiid``'s cosmetic per-array offset)."""
     out: dict[str, float] = {}
-    for machine in _real_geometry.GEOMETRY.values():
-        for s in machine["sensors"]:
-            out[s["name"]] = float(s["theta"])
+    for name in h5source.channel_names(shot):
+        th = diiid.real_theta_of(name, shot)
+        if th is not None:
+            out[name] = th
     return out
 
 
@@ -152,7 +153,7 @@ def _stack(shot, names):
 def _geometry(shot, params=None) -> dict:
     points = []
     for name in h5source.channel_names(shot):
-        s = diiid.sensor(name)
+        s = diiid.sensor(name, shot)
         if s["phi"] is None:
             continue
         points.append({"x": s["phi"], "y": s["theta"],
@@ -162,7 +163,8 @@ def _geometry(shot, params=None) -> dict:
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "θ (deg)"},
         meta={"n_sensors": len(points), "shot": str(shot),
-              "note": "θ is approximate (no geometry table yet)"})
+              "note": "φ, θ from the device geometry table at this shot "
+                      "(θ derived from r, z)"})
 
 
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
@@ -481,7 +483,7 @@ def _toroidal_arr(shot):
     arr = _array_channels(shot, ("MPI_BDOT",))
     if len(arr) >= 4:
         return arr
-    theta = _real_theta()                          # integrated-Bp midplane fallback
+    theta = _real_theta(shot)                       # integrated-Bp midplane fallback
     arr = [(n, p) for n, p in _array_channels(shot, ("MPID",))
            if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)]
     if len(arr) < 4:
@@ -590,7 +592,7 @@ def _poloidal_shape(shot, params=None) -> dict:
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
-    theta = _real_theta()
+    theta = _real_theta(shot)
     arr = [(name, theta[name]) for name in h5source.channel_names(shot)
            if diiid.family_of(name) == "MPID" and name in theta]
     arr.sort(key=lambda nt: nt[1])
@@ -619,7 +621,7 @@ def _poloidal_mode(shot, params):
         f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _poloidal_arr(str(shot))
     thetas = np.array([th for _, th in arr], dtype=float)
-    pphis = np.array([diiid.phi_of(n) or 0.0 for n, _ in arr], dtype=float)
+    pphis = np.array([diiid.phi_of(n, shot) or 0.0 for n, _ in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
@@ -643,7 +645,7 @@ def _pattern_overlay(shot) -> dict:
     pts = []
     try:
         for nm, th in _poloidal_arr(str(shot)):
-            phi = diiid.phi_of(nm)
+            phi = diiid.phi_of(nm, shot)
             if phi is not None:
                 pts.append({"x": float(phi), "y": float(th), "label": nm})
     except ValueError:
@@ -680,10 +682,15 @@ def _mode_track(shot, params=None) -> dict:
     f_khz = _f(params, "f_khz", None)
     if f_khz is None:
         f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
+    n_slices = _i(params, "n_slices", 300)
     arr = _toroidal_arr(str(shot))
     phis = np.array([p for _, p in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
-    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
+    # Sample finely, but only over the active-signal window — the full record is mostly
+    # dead time, which both coarsens the trace and biases the dominant mode toward n=0.
+    t_lo, t_hi = mode_shape.active_time_window(spec)
+    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3,
+                                        n_slices=n_slices, t_range=(t_lo, t_hi))
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
     series = [{"name": "shape similarity to dominant mode",
                "x": tr.t_ms.tolist(), "y": tr.mac_to_ref.tolist()}]
@@ -691,33 +698,39 @@ def _mode_track(shot, params=None) -> dict:
         series, {"x": "time (ms)", "y": "shape similarity (0–1)"},
         meta={"f_kHz": f_khz, "ref_t_ms": round(float(tr.ref_t_ms), 1),
               "dominant_n": int(vals[int(counts.argmax())]), "shot": str(shot),
-              "n_probes": len(arr),
+              "n_probes": len(arr), "n_slices": int(tr.t_ms.size),
+              "t_window_ms": [round(t_lo * 1e3, 1), round(t_hi * 1e3, 1)],
               "note": "1 = same spatial mode persists; drops mark mode changes (fig 9)"})
 
 
 # ── mode_over_time: dominant toroidal mode number n(t) over the shot ─────────
 def _mode_over_time(shot, params=None) -> dict:
-    """Best-fit toroidal mode number n vs time — the n(t) trace. For each time slice
-    the full-array shape is fit for its toroidal n (``track_from_spectrum`` →
-    ``fit_toroidal_mode`` per slice), so you see the mode number evolve through the
-    shot (e.g. an n=1 that appears, persists, then locks). Cursor-independent:
-    evaluated at the global dominant frequency unless ``f_khz`` is given."""
-    f_khz = _f(params, "f_khz", None)
-    if f_khz is None:
-        f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
+    """Best-fit toroidal mode number n vs time — the n(t) trace. Each slice fits n at
+    *its own* dominant in-band frequency (``ridge_track_from_spectrum``), so the line
+    follows the strongest mode as it evolves and its frequency drifts, instead of locking
+    to one global bin while other simultaneous modes go unrepresented. Cursor-independent
+    and restricted to the active-signal window. The full (t,f) n-map (``mode_number``)
+    is the complete multi-mode view; this is its 1-D strongest-mode summary."""
+    n_slices = _i(params, "n_slices", 300)
     arr = _toroidal_arr(str(shot))
     phis = np.array([p for _, p in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
-    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
+    t_lo, t_hi = mode_shape.active_time_window(spec)
+    tr = mode_shape.ridge_track_from_spectrum(
+        spec, phis, n_slices=n_slices, t_range=(t_lo, t_hi))
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
-    series = [{"name": "toroidal n", "x": tr.t_ms.tolist(),
+    f_lo, f_hi = (float(np.min(tr.freq_khz)), float(np.max(tr.freq_khz))) if tr.freq_khz.size else (0.0, 0.0)
+    series = [{"name": "toroidal n (strongest mode)", "x": tr.t_ms.tolist(),
                "y": tr.n_by_time.astype(float).tolist()}]
     return contracts.line(
         series, {"x": "time (ms)", "y": "toroidal n"},
-        meta={"f_kHz": f_khz, "dominant_n": int(vals[int(counts.argmax())]),
-              "ref_t_ms": round(float(tr.ref_t_ms), 1), "n_probes": len(arr),
+        meta={"dominant_n": int(vals[int(counts.argmax())]),
+              "f_range_kHz": [round(f_lo, 1), round(f_hi, 1)],
+              "n_probes": len(arr), "n_slices": int(tr.t_ms.size),
+              "t_window_ms": [round(t_lo * 1e3, 1), round(t_hi * 1e3, 1)],
               "shot": str(shot),
-              "note": "best-fit toroidal n per time slice at the dominant frequency"})
+              "note": "best-fit toroidal n of the strongest in-band mode at each time "
+                      "(frequency follows the ridge); see the n-map for all modes"})
 
 
 # ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────

@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { fetchMachines, type MachineInfo } from "./lib/api";
 
-export type TabId = "sensors" | "qs" | "rotating" | "fits";
+export type TabId = "sensors" | "qs" | "rotating";
 export type Theme = "dark" | "light";
 
 // Theme is a single global switch: it drives the `data-theme` attribute on

@@ -42,8 +42,8 @@ from sshauth import askpass_env
 
 HERE = Path(__file__).resolve().parent          # repo data/ dir (the fetcher lives here)
 LOCAL_OUT = HERE / "datafile"                    # where pulled .h5 land locally
-SYNC_FILES = ["toksearch_fetch.py", "magnetics_signals.py", "inspect_h5.py",
-              "sshauth.py", "device"]   # "device" dir carries the per-device JSON
+SYNC_FILES = ["toksearch_fetch.py", "magnetics_signals.py", "devices.py",
+              "inspect_h5.py", "sshauth.py", "device"]   # "device" dir carries the per-device JSON
 
 # Cluster defaults (override via args / CLI flags).
 DEFAULT_HOST = "omega"          # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
