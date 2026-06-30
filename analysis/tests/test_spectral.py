@@ -449,6 +449,12 @@ class TestModeUncertaintyPropagation:
         noisy = fit_toroidal_mode(extract_mode_at_frequency(sigs, phis, t, frequency=3000.0))
         assert noisy.n_confidence <= clean.n_confidence + 1e-9
 
+    def test_empty_n_range_raises_clearly(self):
+        # inverted bounds → a clear ValueError, not an argmax-on-empty crash
+        mode, _ = self._modes()
+        with pytest.raises(ValueError, match="empty"):
+            fit_toroidal_mode(mode, n_range=(3, -3))
+
 
 # -----------------------------------------------------------------------
 # Batched full-array STFT (fast cursor path)

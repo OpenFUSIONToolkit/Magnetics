@@ -708,6 +708,8 @@ def fit_toroidal_mode(
     Returns:
         result (ToroidalFitResult): best-fit n, intercept, and clustering quality.
     """
+    if n_range[1] < n_range[0]:
+        raise ValueError(f"n_range {n_range} is empty: upper bound < lower bound")
     phi = np.asarray(mode_result.toroidal_angle, dtype=np.float64)
     phase = np.asarray(mode_result.phase, dtype=np.float64)
 
