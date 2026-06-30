@@ -200,6 +200,11 @@ def cross_spectrum(
 # Short-time FFT engine
 # ---------------------------------------------------------------------------
 
+# Frames processed per rfft call. Caps the transient frame matrix at
+# _STFT_CHUNK × n_fft instead of n_frames × n_fft, so peak RAM no longer grows
+# with the record length while the returned spectrum is unchanged.
+_STFT_CHUNK = 256
+
 
 def _stft(
     signal: NDArray[np.floating],
@@ -209,10 +214,14 @@ def _stft(
     *,
     detrend: bool = True,
 ) -> tuple[NDArray[np.complexfloating], NDArray[np.intp]]:
-    """Batched single-pass short-time FFT.
+    """Block-batched short-time FFT.
 
-    Frames the signal at the given hop, applies the window, and rffts every frame in
-    one vectorized call — no per-window Python loop, no per-window FFT planning.
+    Frames the signal at the given hop, applies the window, and rffts the frames in
+    blocks of at most ``_STFT_CHUNK`` rows — no per-window Python loop, no per-window
+    FFT planning. Only one block's frame matrix is alive at a time, so peak RAM is
+    O(_STFT_CHUNK · n_fft) instead of O(n_frames · n_fft); each block's rfft is
+    written straight into the preallocated output, leaving the result identical to a
+    single batched transform (rffts are independent per row).
 
     Inputs:
         signal (ndarray): 1-D real signal (single precision recommended).
@@ -234,12 +243,17 @@ def _stft(
         return rfft(frame * window, axis=1), np.array([0], dtype=np.intp)
 
     starts = np.arange(0, n - n_fft + 1, hop, dtype=np.intp)
-    idx = starts[:, None] + np.arange(n_fft)[None, :]
-    frames = signal[idx]
-    if detrend:
-        frames = frames - frames.mean(axis=1, keepdims=True)
-    frames = frames * window[None, :]
-    return rfft(frames, axis=1), starts
+    offsets = np.arange(n_fft)
+    out_dtype = np.result_type(signal.dtype, window.dtype, np.complex64)
+    spec = np.empty((starts.size, n_fft // 2 + 1), dtype=out_dtype)
+    for lo in range(0, starts.size, _STFT_CHUNK):
+        hi = min(lo + _STFT_CHUNK, starts.size)
+        frames = signal[starts[lo:hi, None] + offsets[None, :]]
+        if detrend:
+            frames = frames - frames.mean(axis=1, keepdims=True)
+        frames = frames * window[None, :]
+        spec[lo:hi] = rfft(frames, axis=1)
+    return spec, starts
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +342,9 @@ def compute_spectrogram(
     # spectrogram and the single-window 2-point analysis report the same *signed* n.
     cross = np.conj(spec2) * spec1
     power = np.abs(cross)
-    phase = np.rad2deg(np.angle(cross))
+    # Phase only feeds the integer mode map; fold it inline so a full-size phase
+    # array is not held alongside the coherence intermediates below.
+    mode = np.rint(np.rad2deg(np.angle(cross)) / delta_phi).astype(np.intp)
 
     # Coherence needs averaging; smooth the auto/cross spectra over frequency bins.
     if coherence_smooth > 1:
@@ -340,8 +356,6 @@ def compute_spectrogram(
         coh = (np.abs(sxy) ** 2) / (sxx * syy + 1e-30)
     else:
         coh = np.ones_like(power)
-
-    mode = np.rint(phase / delta_phi).astype(np.intp)
 
     frequency = rfftfreq(n_fft, d=dt)
     t_centers = time[starts] + (n_fft / 2.0) * dt

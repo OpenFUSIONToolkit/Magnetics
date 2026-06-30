@@ -43,9 +43,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import os
+import queue
 import socket
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -97,6 +100,31 @@ def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
     if stride > 1:
         t, y = t[::stride], y[::stride]
     return t, y
+
+
+def _usable_time(c: "Channel") -> np.ndarray | None:
+    """The channel's normalized time axis, or None if it has no usable one.
+
+    A channel can fetch data samples yet come back with a degenerate time axis
+    (dim_of/times empty or None -> an object-dtype array holding None, or a
+    non-finite axis). Such a channel has no time base, so the writer reclassifies
+    it as missing instead of crashing on float(c.time[0]).
+    """
+    if c.time is None:
+        return None
+    t = np.asarray(c.time)
+    if (t.size == 0 or not np.issubdtype(t.dtype, np.number)
+            or not np.all(np.isfinite(t))):
+        return None
+    return t
+
+
+def _timebase_key(t: np.ndarray) -> tuple:
+    """Content-address a time vector so identical vectors share storage, but two
+    distinct vectors that merely share (dtype, shape, endpoints, N) never collide
+    — a metadata-only key would silently hard-link them and corrupt timestamps.
+    """
+    return (t.dtype.str, t.shape, hashlib.sha1(np.ascontiguousarray(t)).digest())
 
 
 @contextlib.contextmanager
@@ -165,7 +193,7 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
 
 # --- mdsthin backend (laptop / remote, parallel across channels) --------------
 def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
-                   tmin, tmax, stride, workers, batch_size, progress,
+                   tmin, tmax, stride, workers, batch_size, progress, sink,
                    ssh_env=None):
     """Pull pointnames concurrently over a pool of mdsthin connections.
 
@@ -173,6 +201,12 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     to share) and pulls a slice of the channel list. PTDATA fetches are
     server-I/O bound, so N connections give a near-linear speedup over the
     sequential one-connection loop in pull_shot_h5.py.
+
+    Completed batches are emitted to `sink` (a bounded queue) as they finish,
+    instead of being accumulated into one big list, so the single writer thread
+    persists them write-as-you-go and peak RAM stays bounded to the in-flight
+    batches. The bounded queue backpressures the workers: once it is full they
+    block on `put`, so they cannot outrun the writer.
 
     Off-cluster (the default, not --tcp) all workers share ONE SSH tunnel so there
     is a single password/Duo prompt; on-network (--tcp) each worker connects to
@@ -229,7 +263,6 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                for i in range(0, n, batch_size)]
     workers = max(1, min(workers, len(batches)))
 
-    import threading
     lock = threading.Lock()
     state = {"done": 0}
 
@@ -294,11 +327,9 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     def run_worker(connect, my_batches):
         conn = connect()
         use_many = True
-        out: list[Channel] = []
         for batch in my_batches:
             got, use_many = fetch_batch(conn, batch, use_many)
-            out.extend(got)
-        return out
+            sink.put(got)  # emit a completed batch (bounded queue -> backpressure)
 
     def run_all(connect, label):
         progress(0.0, label)
@@ -306,28 +337,25 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
         assigned: list[list[list[str]]] = [[] for _ in range(workers)]
         for i, b in enumerate(batches):
             assigned[i % workers].append(b)
-        results: list[Channel] = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futures = [ex.submit(run_worker, connect, a)
                        for a in assigned if a]
             for fut in as_completed(futures):
-                results.extend(fut.result())
-        order = {pt: i for i, pt in enumerate(pointnames)}  # deterministic output
-        results.sort(key=lambda c: order[c.name])
-        return results
+                fut.result()  # surface worker exceptions loudly (writer ordering)
 
     if tcp:
         # On-network: each worker dials mdsip directly (no gateway, no auth race).
-        return run_all(lambda: Connection(f"{username}@{mds_host}:{mds_port}"),
-                       f"{len(batches)} batches x{batch_size} ({workers} conns)")
+        run_all(lambda: Connection(f"{username}@{mds_host}:{mds_port}"),
+                f"{len(batches)} batches x{batch_size} ({workers} conns)")
+        return
     # Off-network: one SSH tunnel, then a few TCP mdsip conns through it.
     with _ssh_tunnel(username, gateway, mds_host, mds_port, env=ssh_env) as lport:
-        return run_all(lambda: Connection(f"{username}@127.0.0.1:{lport}"),
-                       f"{len(batches)} batches x{batch_size} via tunnel")
+        run_all(lambda: Connection(f"{username}@127.0.0.1:{lport}"),
+                f"{len(batches)} batches x{batch_size} via tunnel")
 
 
 # --- toksearch backend (cluster, native local PTDATA) -------------------------
-def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress):
+def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, sink):
     """Pull pointnames for a shot via a toksearch Pipeline.
 
     This is the on-cluster fast path: `toksearch_d3d.PtDataSignal` reads PTDATA
@@ -343,6 +371,9 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress):
 
     Requires `toksearch` + the `toksearch_d3d` plugin (PtDataSignal lives in the
     plugin, not core toksearch -- core is device-agnostic and omits PTDATA).
+
+    Each extracted channel is emitted to `sink` (the bounded queue) as a one-item
+    batch so the single writer thread persists it write-as-you-go.
     """
     try:
         from toksearch import Pipeline
@@ -385,7 +416,6 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress):
     # those are the analogue of the mdsthin path's no-data channels.
     errors = rec["errors"] if "errors" in rec.keys() else {}
     n = len(pointnames)
-    results: list[Channel] = []
     for i, pt in enumerate(pointnames, 1):
         sig = None if pt in errors else rec[pt]
         # a toksearch signal is a dict {n_over, n_under, data, times, units}; a
@@ -395,21 +425,26 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress):
             if pt in errors:
                 err = str(errors[pt].get("type", "no data")) if hasattr(
                     errors[pt], "get") else "no data"
-            results.append(Channel(pt, ok=False, error=err))
+            ch = Channel(pt, ok=False, error=err)
         else:
             y = np.atleast_1d(np.asarray(sig["data"]))
             t = np.atleast_1d(np.asarray(sig["times"]))
             if y.size <= 1:  # degenerate -> treat as no data
-                results.append(Channel(pt, ok=False, error="no data"))
+                ch = Channel(pt, ok=False, error="no data")
             else:
                 t, y = _reduce(t, y, tmin, tmax, stride)
-                results.append(Channel(pt, t.astype(np.float64, copy=False),
-                                       y.astype(np.float32, copy=False), ok=True))
+                ch = Channel(pt, t.astype(np.float64, copy=False),
+                             y.astype(np.float32, copy=False), ok=True)
+        sink.put([ch])  # emit one completed channel (bounded queue -> backpressure)
         progress(i / n, pt)
-    return results
 
 
 # --- HDF5 writer (lzf + chunked + deduped time bases) -------------------------
+# `_write_h5` is the all-at-once reference writer: it materializes the whole
+# channel list before writing. `StreamingHDF5Writer` below produces a
+# dataset-equivalent file while consuming channels incrementally so peak RAM is
+# bounded by the in-flight batches, not the whole shot. Both share the same
+# reclassify (`_usable_time`) and content-address (`_timebase_key`) logic.
 def _write_h5(path, shot, analysis, backend, channels, *, compression,
               tmin, tmax, stride):
     import h5py
@@ -417,16 +452,11 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
     comp = None if compression in (None, "none") else compression
     missing = [c for c in channels if not c.ok]
 
-    # A channel can fetch data samples yet come back with a degenerate time axis
-    # (dim_of/times empty or None -> an object-dtype array holding None). Such a
-    # channel has no usable time base, so reclassify it as missing instead of
-    # crashing the writer on float(c.time[0]).
+    # Reclassify channels whose time axis is unusable as missing (see _usable_time).
     got = []
     for c in (ch for ch in channels if ch.ok):
-        t = None if c.time is None else np.asarray(c.time)
-        if (t is None or t.size == 0
-                or not np.issubdtype(t.dtype, np.number)
-                or not np.all(np.isfinite(t))):
+        t = _usable_time(c)
+        if t is None:
             c.ok = False
             c.error = "no usable time axis"
             missing.append(c)
@@ -451,12 +481,7 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
         tb_cache: dict[tuple, str] = {}
         tb_n = 0
         for c in got:
-            # Content-address the time vector: identical vectors share storage,
-            # but two distinct vectors that happen to share (shape, endpoints, N)
-            # must NOT collide — a metadata-only key silently hard-links them and
-            # corrupts the second channel's timestamps.
-            key = (c.time.dtype.str, c.time.shape,
-                   hashlib.sha1(np.ascontiguousarray(c.time)).digest())
+            key = _timebase_key(c.time)
             tb_name = tb_cache.get(key)
             if tb_name is None:
                 tb_name = f"tb{tb_n}"
@@ -477,6 +502,171 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
         h5.attrs["channels_missing"] = np.array([c.name for c in missing],
                                                 dtype="S")
     return got, missing
+
+
+# --- bounded streaming HDF5 writer --------------------------------------------
+class StreamingHDF5Writer:
+    """Write-as-you-go HDF5 writer that bounds peak RAM to the in-flight batches.
+
+    Consumes completed `Channel`s incrementally (one batch at a time), carries the
+    timebase content-address map across batches (only the hash->name dict lives on,
+    never the vectors), and writes each channel's `data` + a hard-linked `time` as
+    it arrives. Output is *dataset-equivalent* to `_write_h5` (same groups, data,
+    timebase dedup structure, and root attrs) though group creation order differs.
+
+    A single thread owns the one h5py handle (h5py is single-writer): the writer is
+    never touched from more than one thread. Writes go to a temp file in the
+    destination dir and are published with `os.replace` only on a clean `close()`,
+    so a failed fetch never exposes a partial `.h5` (see `abort`).
+    """
+
+    def __init__(self, path, shot, analysis, backend, *, compression,
+                 tmin, tmax, stride, order):
+        import h5py
+
+        self._final_path = Path(path)
+        # Hidden, pid-tagged temp sibling on the same filesystem -> atomic replace.
+        self._tmp_path = self._final_path.with_name(
+            f".{self._final_path.name}.{os.getpid()}.tmp")
+        self._comp = None if compression in (None, "none") else compression
+        self._order = order  # {pointname: index} -> deterministic close ordering
+        self._got: list[Channel] = []
+        self._missing: list[Channel] = []
+        self._tb_cache: dict[tuple, str] = {}  # carried across batches
+        self._tb_n = 0
+
+        self._h5 = h5py.File(self._tmp_path, "w")
+        self._h5.attrs["shot"] = shot
+        self._h5.attrs["device"] = "DIII-D"
+        self._h5.attrs["source"] = "PTDATA via ptdata2()"
+        self._h5.attrs["analysis"] = analysis
+        self._h5.attrs["backend"] = backend
+        self._h5.attrs["tmin"] = "*" if tmin is None else float(tmin)
+        self._h5.attrs["tmax"] = "*" if tmax is None else float(tmax)
+        self._h5.attrs["decimate"] = int(stride)
+        self._tb_grp = self._h5.create_group("_timebases")
+
+    def write_channel(self, c: Channel) -> None:
+        """Persist one completed channel (or record it missing)."""
+        if not c.ok:
+            self._missing.append(c)
+            return
+        t = _usable_time(c)
+        if t is None:
+            c.ok = False
+            c.error = "no usable time axis"
+            self._missing.append(c)
+            return
+        c.time = t
+
+        key = _timebase_key(t)
+        tb_name = self._tb_cache.get(key)
+        if tb_name is None:
+            tb_name = f"tb{self._tb_n}"
+            self._tb_n += 1
+            self._tb_grp.create_dataset(
+                tb_name, data=t, compression=self._comp,
+                chunks=True if self._comp else None)
+            self._tb_grp[tb_name].attrs["time_units"] = "ms"
+            self._tb_cache[key] = tb_name
+
+        g = self._h5.create_group(c.name)
+        g.create_dataset("data", data=c.data, compression=self._comp,
+                         chunks=True if self._comp else None)
+        g["time"] = self._tb_grp[tb_name]  # hard link -> shared time base
+        g.attrs["time_units"] = "ms"
+        self._got.append(c)
+
+    def write_batch(self, channels) -> None:
+        """Persist a completed batch of channels (the queue unit of work)."""
+        for c in channels:
+            self.write_channel(c)
+
+    def close(self) -> tuple[list[Channel], list[Channel]]:
+        """Finalize metadata, close the file, and atomically publish it.
+
+        Channels complete out of order, so `channels_fetched`/`channels_missing`
+        are sorted back into the requested pointname order here.
+        """
+        self._got.sort(key=lambda c: self._order[c.name])
+        self._missing.sort(key=lambda c: self._order[c.name])
+        self._h5.attrs["channels_fetched"] = np.array(
+            [c.name for c in self._got], dtype="S")
+        self._h5.attrs["channels_missing"] = np.array(
+            [c.name for c in self._missing], dtype="S")
+        self._h5.close()
+        os.replace(self._tmp_path, self._final_path)
+        return self._got, self._missing
+
+    def abort(self) -> None:
+        """Drop the partial temp file without publishing it (failure path)."""
+        self._h5.close()  # h5py: closing an already-closed file is a no-op
+        if self._tmp_path.exists():
+            self._tmp_path.unlink()
+
+
+_DONE = object()  # queue sentinel: no more batches will be emitted
+
+
+class _WriterThread(threading.Thread):
+    """The single HDF5 consumer: drains the bounded queue into the writer.
+
+    On a write error it records the exception and keeps draining (without writing)
+    so backpressured producers blocked on a full queue cannot deadlock; the
+    orchestrator re-raises the captured error after `join()`.
+    """
+
+    def __init__(self, sink: "queue.Queue", writer: StreamingHDF5Writer):
+        super().__init__(name="hdf5-writer")
+        self._sink = sink
+        self._writer = writer
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        while True:
+            batch = self._sink.get()
+            if batch is _DONE:
+                return
+            if self.error is None:
+                try:
+                    self._writer.write_batch(batch)
+                except Exception as exc:  # surfaced on the main thread after join
+                    self.error = exc
+
+
+def stream_channels_to_h5(path, shot, analysis, backend, *, compression,
+                          tmin, tmax, stride, order, produce, queue_max):
+    """Stream the fetch backend's channels into one HDF5 file, RAM-bounded.
+
+    `produce(sink)` runs the backend (mdsthin/toksearch) and emits completed
+    `Channel` batches (lists) to `sink`, a `queue.Queue(maxsize=queue_max)`. One
+    `_WriterThread` drains the queue into a `StreamingHDF5Writer`. The queue bound
+    is backpressure: producers block once it is full, so peak in-flight RAM is
+    ~queue_max + one batch, never the whole shot. Returns (got, missing).
+    """
+    sink: queue.Queue = queue.Queue(maxsize=queue_max)
+    writer = StreamingHDF5Writer(path, shot, analysis, backend,
+                                 compression=compression, tmin=tmin, tmax=tmax,
+                                 stride=stride, order=order)
+    consumer = _WriterThread(sink, writer)
+    consumer.start()
+    published = False
+    try:
+        produce(sink)
+        sink.put(_DONE)
+        consumer.join()
+        if consumer.error is not None:
+            raise consumer.error
+        result = writer.close()  # publishes via os.replace
+        published = True
+        return result
+    finally:
+        if not published:
+            # Producer/consumer error (or Ctrl-C): stop the writer thread and drop
+            # the partial temp file. The in-flight exception propagates unchanged.
+            sink.put(_DONE)
+            consumer.join()
+            writer.abort()
 
 
 # --- public API ---------------------------------------------------------------
@@ -532,38 +722,48 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         except ImportError:
             backend = "mdsthin"
 
-    t0 = time.perf_counter()
+    # Default output lives under data/datafile/; honor an explicit --out as given.
+    out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out = str(out_path)
+    order = {pt: i for i, pt in enumerate(pointnames)}  # deterministic close order
+    queue_max = max(2, workers)  # in-flight bound: ~queue_max + one batch per side
+
+    # Build the backend producer: it emits completed Channel batches to the queue
+    # the streaming writer drains. h5py is single-writer, so one writer thread owns
+    # the file while these workers fetch.
+    ssh_env, _ssh_cleanup = (None, lambda: None)
     if backend == "toksearch":
-        channels = _fetch_toksearch(shot, pointnames, tmin=tmin, tmax=tmax,
-                                    stride=stride, progress=progress)
+        def produce(sink):
+            _fetch_toksearch(shot, pointnames, tmin=tmin, tmax=tmax,
+                             stride=stride, progress=progress, sink=sink)
     elif backend == "mdsthin":
         # username is optional: with an ssh-config Host alias as the gateway (the
         # default), User/port/key come from ~/.ssh/config. --username overrides it.
         # GUI-supplied password → answer the SSH tunnel's auth via askpass (no
         # terminal prompt); without it ssh prompts on the tty as before.
-        ssh_env, _ssh_cleanup = (None, lambda: None)
         if password and not tcp:
             import sshauth
             ssh_env, _ssh_cleanup = sshauth.askpass_env(password, duo)
-        try:
-            channels = _fetch_mdsthin(
+
+        def produce(sink):
+            _fetch_mdsthin(
                 shot, pointnames, username=username, gateway=gateway,
                 server=server, tcp=tcp, tmin=tmin, tmax=tmax, stride=stride,
                 workers=workers, batch_size=batch_size, progress=progress,
-                ssh_env=ssh_env)
-        finally:
-            _ssh_cleanup()
+                sink=sink, ssh_env=ssh_env)
     else:
         raise ValueError(f"unknown backend {backend!r}")
-    elapsed = time.perf_counter() - t0
 
-    # Default output lives under data/datafile/; honor an explicit --out as given.
-    out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out = str(out_path)
-    got, missing = _write_h5(out, shot, analysis, backend, channels,
-                             compression=compression, tmin=tmin, tmax=tmax,
-                             stride=stride)
+    t0 = time.perf_counter()
+    try:
+        got, missing = stream_channels_to_h5(
+            out, shot, analysis, backend, compression=compression, tmin=tmin,
+            tmax=tmax, stride=stride, order=order, produce=produce,
+            queue_max=queue_max)
+    finally:
+        _ssh_cleanup()
+    elapsed = time.perf_counter() - t0
     sys.stderr.write(
         f"Saved {len(got)}/{len(pointnames)} channels to {out} "
         f"({len(missing)} missing, {backend}, {elapsed:.1f}s)\n")

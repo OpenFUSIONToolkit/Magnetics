@@ -64,17 +64,18 @@ def _array_channels(shot, families: tuple[str, ...]):
 
 
 def _stack(shot, names):
-    """Load channels, truncate to common length, return (t_ms, matrix[ch,time]).
+    """Load channels, truncate to common length, return (t_ms f64, mat[ch,time] f32).
 
-    A toroidal/poloidal array shares one digitizer clock, so only the first
-    channel's time axis is needed: read time once (the reference channel) and
-    data-only for the rest, instead of materializing every channel's time vector.
+    A toroidal/poloidal array shares one digitizer clock, so the file is opened
+    once and the time axis is read a single time (the reference channel) while the
+    rest contribute data only — never materializing every channel's time vector.
+    The matrix stays float32 (Mirnov data is 12–16-bit ADC, lossless in float32);
+    only the time axis needs float64.
     """
-    t0, d0 = h5source.load_channel(shot, names[0])
-    datas = [d0] + [h5source.load_data(shot, nm) for nm in names[1:]]
+    t0, datas = h5source.load_window_stack(shot, names)
     nmin = min(d.size for d in datas)
     t = t0[:nmin]
-    mat = np.array([d[:nmin] for d in datas], dtype=float)
+    mat = np.array([d[:nmin] for d in datas], dtype=np.float32)
     return t, mat
 
 

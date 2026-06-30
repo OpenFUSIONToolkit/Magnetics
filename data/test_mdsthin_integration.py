@@ -29,6 +29,7 @@ Override the gateway alias / server / shot via env:
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
 
 import numpy as np
@@ -87,12 +88,20 @@ def test_fetch_real_pointnames_through_gateway():
 
 
     pts = ["ip", "bt", "MPID66M067"]
-    channels = _fetch_mdsthin(
+    # _fetch_mdsthin now streams completed batches to a sink (a queue) and returns
+    # None; with no concurrent writer an unbounded queue just buffers them, so drain
+    # it after the fetch returns to collect the channels this smoke test asserts on.
+    sink: queue.Queue = queue.Queue()
+    _fetch_mdsthin(
         SHOT, pts,
         username=GA_USER, gateway=GATEWAY, server=SERVER, tcp=False,
         tmin=2000.0, tmax=3000.0, stride=8,
         workers=2, batch_size=10, progress=lambda frac, msg: None,
+        sink=sink,
     )
+    channels = []
+    while not sink.empty():
+        channels.extend(sink.get())
 
     by_name = {c.name: c for c in channels}
     fetched = [c for c in channels if c.ok]
