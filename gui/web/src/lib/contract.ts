@@ -52,15 +52,26 @@ export interface Scatter2DNode {
   kind: "scatter2d";
   points: { x: number; y: number; label?: string; group?: string; error_x?: number; error_y?: number }[];
   axes: Axes;
-  /** optional fitted line through the points (slope = n or m). */
-  fit?: { x: number[]; y: number[] };
+  /** optional fitted line through the points (slope = n or m); `null` entries are
+   *  gaps (e.g. where a wrapped phase ramp jumps across 0/360°). */
+  fit?: { x: (number | null)[]; y: (number | null)[] };
   meta?: Record<string, unknown>;
 }
 
-/** One or more time-series / 1-D traces — amplitude & phase vs time, etc. */
+/** One or more 1-D traces — amplitude & phase vs time, GP mode shapes, etc.
+ *  A series may carry a `lower`/`upper` envelope (same length as `y`), drawn as a
+ *  shaded ±band — e.g. the 2σ uncertainty of a Gaussian-process mode shape — and/or
+ *  `markers` (the discrete measured points the curve was fit to). */
 export interface LineNode {
   kind: "line";
-  series: { name: string; x: number[]; y: number[] }[];
+  series: {
+    name: string;
+    x: number[];
+    y: number[];
+    lower?: number[];
+    upper?: number[];
+    markers?: { x: number[]; y: number[] };
+  }[];
   axes: Axes;
   meta?: Record<string, unknown>;
 }

@@ -290,12 +290,21 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       x: p.x > 180 ? p.x - 360 : p.x,
       y: p.y > 180 ? p.y - 360 : p.y,
     }));
+    // Rebuild the fit as a straight ramp over [-180, 180]. Use the node's n_estimate
+    // for the slope (= −n) when present (robust to the wrapped, null-broken fit the
+    // rotating node now emits); fall back to the first/last non-null fit points.
     let fit = phaseFitNode.fit;
-    if (fit && fit.x.length >= 2) {
-      const x0 = fit.x[0], x1 = fit.x[fit.x.length - 1];
-      const slope = (fit.y[fit.y.length - 1] - fit.y[0]) / (x1 - x0);
-      const intercept = fit.y[0] - slope * x0;
-      fit = { x: [-180, 180], y: [slope * -180 + intercept, slope * 180 + intercept] };
+    if (fit) {
+      const meta = phaseFitNode.meta as Record<string, unknown> | undefined;
+      const xv = fit.x.filter((v): v is number => v != null);
+      const yv = fit.y.filter((v): v is number => v != null);
+      if (xv.length >= 2) {
+        const c = yv[0];                                   // phase at φ = 0 (intercept)
+        const slope = typeof meta?.n_estimate === "number"
+          ? -meta.n_estimate
+          : (yv[yv.length - 1] - yv[0]) / (xv[xv.length - 1] - xv[0]);
+        fit = { x: [-180, 180], y: [c + slope * -180, c + slope * 180] };
+      }
     }
     return { ...phaseFitNode, points: pts, fit };
   }, [phaseFitNode]);
