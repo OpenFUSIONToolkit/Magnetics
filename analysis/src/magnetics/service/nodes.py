@@ -20,7 +20,7 @@ from pathlib import Path as _Path
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import device_config, diiid, h5source
+from ..data import diiid, h5source
 
 # magnetics-code/ is not an installed package — add it to sys.path so run_steps and
 # the other scripts (lazy-imported inside _qs_run) are importable. This runs at
@@ -51,11 +51,6 @@ def _i(params, key, default=None):
 
 def _flag(params, key) -> bool:
     return bool(params) and str(params.get(key, "")).lower() in ("1", "true", "yes", "on")
-
-
-def _device_id(device: str) -> str:
-    """Display device name → device-file stem, e.g. 'DIII-D' → 'diiid'."""
-    return "".join(c for c in str(device).lower() if c.isalnum())
 
 
 def machines() -> list[dict]:
@@ -112,10 +107,24 @@ def _array_channels(shot, families: tuple[str, ...]):
     out = []
     for name in h5source.channel_names(shot):
         if diiid.family_of(name) in fam_set:
-            phi = diiid.phi_of(name)
+            phi = diiid.phi_of(name, shot)
             if phi is not None:
                 out.append((name, phi))
     out.sort(key=lambda np_: np_[1])
+    return out
+
+
+@lru_cache(maxsize=8)
+def _real_theta(shot) -> dict:
+    """name → real poloidal angle θ (deg), derived from the device file's
+    shot-correct (r, z) about the machine axis. Only channels with genuine table
+    geometry at this shot appear, so callers can still select 'probes that have a
+    physical θ' (vs ``diiid``'s cosmetic per-array offset)."""
+    out: dict[str, float] = {}
+    for name in h5source.channel_names(shot):
+        th = diiid.real_theta_of(name, shot)
+        if th is not None:
+            out[name] = th
     return out
 
 
@@ -166,7 +175,7 @@ def _stack(shot, names):
 def _geometry(shot, params=None) -> dict:
     points = []
     for name in h5source.channel_names(shot):
-        s = diiid.sensor(name)
+        s = diiid.sensor(name, shot)
         if s["phi"] is None:
             continue
         points.append({"x": s["phi"], "y": s["theta"],
@@ -176,7 +185,8 @@ def _geometry(shot, params=None) -> dict:
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "θ (deg)"},
         meta={"n_sensors": len(points), "shot": str(shot),
-              "note": "real sensor geometry from data/device (φ, θ = atan2(z, r−R0))"})
+              "note": "φ, θ from the device geometry table at this shot "
+                      "(θ derived from r, z)"})
 
 
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
@@ -581,9 +591,9 @@ def _toroidal_arr(shot):
     arr = _array_channels(shot, ("MPI_BDOT",))
     if len(arr) >= 4:
         return arr
-    # integrated-Bp midplane fallback: real θ from the device file picks the θ≈0 ring
+    theta = _real_theta(shot)                       # integrated-Bp midplane fallback
     arr = [(n, p) for n, p in _array_channels(shot, ("MPID",))
-           if diiid.has_geometry(n) and ((th := diiid.theta_of(n)) < 20.0 or th > 340.0)]
+           if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)]
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a mode fit")
     return arr
@@ -699,10 +709,9 @@ def _poloidal_shape(shot, params=None) -> dict:
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
-    """The integrated-Bp poloidal array, each probe at its real geometric θ from the
-    device file. Returns (name, θ_geo) sorted by θ; needs ≥4 distinct angles."""
-    arr = [(name, diiid.theta_of(name)) for name in h5source.channel_names(shot)
-           if diiid.family_of(name) == "MPID" and diiid.has_geometry(name)]
+    theta = _real_theta(shot)
+    arr = [(name, theta[name]) for name in h5source.channel_names(shot)
+           if diiid.family_of(name) == "MPID" and name in theta]
     arr.sort(key=lambda nt: nt[1])
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
         raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
@@ -740,7 +749,7 @@ def _poloidal_mode(shot, params):
     arr = _poloidal_arr(str(shot))
     kappa = _kappa_at(str(shot), t0_ms)
     thetas, _used = _theta_star([th for _, th in arr], kappa)
-    pphis = np.array([diiid.phi_of(n) or 0.0 for n, _ in arr], dtype=float)
+    pphis = np.array([diiid.phi_of(n, shot) or 0.0 for n, _ in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
@@ -795,7 +804,7 @@ def _pattern_overlay(shot, kappa=None) -> dict:
         arr = _poloidal_arr(str(shot))
         th_star, _ = _theta_star([th for _, th in arr], kappa)
         for (nm, _th), ths in zip(arr, th_star):
-            phi = diiid.phi_of(nm)
+            phi = diiid.phi_of(nm, shot)
             if phi is not None:
                 pts.append({"x": float(phi), "y": float(ths), "label": nm})
     except ValueError:
@@ -1007,18 +1016,8 @@ def _sensor_map_rz(shot, params=None) -> dict:
     channels = list(run.prepared["channel"].values)
     device = str(raw.attrs.get("device", "DIII-D"))
 
-    # Vessel wall from the device description (data/device/<id>.json) when present;
-    # fall back to the OMFIT-compat loader for devices without a committed wall.
-    r_wall = z_wall = None
-    try:
-        wall = device_config.load(_device_id(device)).wall()
-        if wall is not None:
-            r_wall, z_wall = wall
-    except (FileNotFoundError, OSError):
-        pass
-    if r_wall is None:
-        from omfit_compat import load_wall  # magnetics-code/ on sys.path
-        r_wall, z_wall = load_wall(device)
+    from omfit_compat import load_wall  # magnetics-code/ on sys.path
+    r_wall, z_wall = load_wall(device)
 
     series = []
     for c in channels:

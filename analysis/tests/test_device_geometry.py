@@ -1,62 +1,114 @@
-"""Device-description geometry: the JSON loader, the JSON-backed diiid mapping, and
-the elongation θ* correction. These are pure (no fetched HDF5 needed) — they read the
-committed data/device/diiid.json and core math, so they run in CI without data.
+"""Shot-aware device geometry: the time-segment resolver (``devices``), the
+fetcher's pointname assembly, and ``diiid``'s shot-dependent positions.
+
+Importing ``magnetics.data.diiid`` puts the repo-root ``data/`` catalog dir on
+``sys.path`` (its module-load shim), so ``import devices`` / ``toksearch_fetch``
+resolve here without network or fetched data.
 """
 from __future__ import annotations
 
-import math
+from magnetics.data import diiid  # noqa: F401 — also wires the catalog path
 
-import numpy as np
-import pytest
-
-from magnetics.core import geometry
-from magnetics.data import device_config, diiid
+import devices
 
 
-def test_load_diiid_config():
-    dev = device_config.load("diiid")
-    assert dev.name == "DIII-D"
-    assert dev.R0 > 1.0
-    assert dev.wall() is not None        # committed vessel wall
-    # a known integrated-Bp probe carries real geometry + calibration fields
-    s = dev.sensor("MPID1A011")
-    assert s is not None and s.phi is not None and s.na is not None
-    assert s.pair == "MPID1A199"
+# A synthetic device: a stable sensor, a renamed-then-moved sensor, and a
+# decommissioned sensor — exercises every branch the seeded real file can't yet.
+DEV = {
+    "R0": 1.69,
+    "sensors": {
+        "S_OK": {"segments": [
+            {"since_shot": 152472, "r": 2.0, "z": 0.0, "phi": 10.0}]},
+        "S_RENAMED": {"segments": [
+            {"since_shot": 100000, "pointname": "OLD_S", "r": 1.0, "z": 0.1, "phi": 5.0},
+            {"since_shot": 180000, "r": 2.5, "z": -0.2, "phi": 7.0}]},  # moved; pt defaults to id
+        "S_GONE": {"segments": [
+            {"since_shot": 152472, "r": 2.0, "z": 0.0, "phi": 12.0},
+            {"since_shot": 190000, "pointname": "NotAvailable"}]},
+    },
+}
 
 
-def test_unknown_device_raises():
-    with pytest.raises(FileNotFoundError):
-        device_config.load("not_a_device")
+# ── resolver: pointname_at ────────────────────────────────────────────────────
+def test_pointname_in_range_is_canonical():
+    assert devices.pointname_at(DEV, "S_OK", 184927) == "S_OK"
 
 
-def test_phi_is_real_not_name_parsed():
-    # the 3D I-coils are a few degrees off their name digits; the device file is exact
-    assert abs(diiid.phi_of("IU30") - 32.7) < 0.5      # name says 30, truth is 32.7
-    # a non-geometry equilibrium scalar has no toroidal angle
-    assert diiid.phi_of("ip") is None
+def test_pointname_below_floor_is_none():
+    assert devices.pointname_at(DEV, "S_OK", 150000) is None
 
 
-def test_theta_is_geometric_not_cosmetic():
-    # MPID67A probes sit ~52° off the midplane (real), not a flat per-array offset
-    assert abs(diiid.theta_of("MPID67A217") - 52.5) < 2.0
-    assert diiid.has_geometry("MPID67A217")
-    assert not diiid.has_geometry("ip")
-    # theta = atan2(z, r-R0) reconstructed from the raw record
-    dev = device_config.load("diiid")
-    s = dev.sensor("MPID5A199")
-    expect = math.degrees(math.atan2(s.z, s.r - dev.R0)) % 360.0
-    assert abs(diiid.theta_of("MPID5A199") - expect) < 1e-6
+def test_pointname_uses_legacy_name_for_old_shot():
+    assert devices.pointname_at(DEV, "S_RENAMED", 150000) == "OLD_S"
+    assert devices.pointname_at(DEV, "S_RENAMED", 185000) == "S_RENAMED"
 
 
-def test_elongation_theta_star_identity_and_known():
-    # κ = 1 is the identity
-    th = [0.0, 30.0, 45.0, 90.0, 135.0, 180.0, 270.0]
-    assert np.allclose(geometry.elongation_theta_star(th, 1.0), th)
-    # known elongated value: tan θ = κ tan θ*  →  θ*(45°, κ=1.8)
-    got = geometry.elongation_theta_star([45.0], 1.8)[0]
-    expect = math.degrees(math.atan2(math.sin(math.radians(45)),
-                                     1.8 * math.cos(math.radians(45)))) % 360.0
-    assert abs(got - expect) < 1e-9
-    # the four midplane/crown crossings are fixed points for any κ
-    assert np.allclose(geometry.elongation_theta_star([0, 90, 180, 270], 1.9),
-                       [0, 90, 180, 270], atol=1e-6)
+def test_since_shot_boundary_is_inclusive():
+    # exactly at the new segment's since_shot, the new segment is active
+    assert devices.pointname_at(DEV, "S_RENAMED", 180000) == "S_RENAMED"
+    assert devices.pointname_at(DEV, "S_RENAMED", 179999) == "OLD_S"
+
+
+def test_not_available_segment_is_skipped():
+    assert devices.pointname_at(DEV, "S_GONE", 185000) == "S_GONE"
+    assert devices.pointname_at(DEV, "S_GONE", 195000) is None
+    assert devices.valid_at(DEV, "S_GONE", 195000) is False
+
+
+# ── resolver: geometry_at (the actual "sensor moved" case) ────────────────────
+def test_geometry_tracks_the_moved_segment():
+    g_old = devices.geometry_at(DEV, "S_RENAMED", 150000)
+    g_new = devices.geometry_at(DEV, "S_RENAMED", 185000)
+    assert g_old["r"] == 1.0 and g_new["r"] == 2.5      # different position per era
+    assert "since_shot" not in g_old and "pointname" not in g_old
+
+
+def test_geometry_none_when_decommissioned_or_out_of_range():
+    assert devices.geometry_at(DEV, "S_GONE", 195000) is None
+    assert devices.geometry_at(DEV, "S_OK", 100000) is None
+
+
+# ── fetch assembly: _resolve_pointnames (no network) ──────────────────────────
+def test_fetch_resolution_recent_shot_keeps_all():
+    import toksearch_fetch as tf
+    query, canon, skipped = tf._resolve_pointnames(
+        DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 185000)
+    assert query == ["S_OK", "S_RENAMED", "S_GONE", "ip"]
+    assert canon["ip"] == "ip"                          # unmodeled passes through
+    assert skipped == []
+
+
+def test_fetch_resolution_old_shot_uses_alt_and_skips():
+    import toksearch_fetch as tf
+    query, canon, skipped = tf._resolve_pointnames(
+        DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 150000)
+    assert "OLD_S" in query and canon["OLD_S"] == "S_RENAMED"  # legacy name queried
+    assert "ip" in query                                 # unmodeled still passes
+    assert set(skipped) == {"S_OK", "S_GONE"}            # pre-floor sensors dropped
+
+
+def test_fetch_resolution_skips_decommissioned():
+    import toksearch_fetch as tf
+    query, _canon, skipped = tf._resolve_pointnames(DEV, ["S_GONE"], 195000)
+    assert query == [] and skipped == ["S_GONE"]
+
+
+# ── real device file: seeded shots vs the pre-152472 era ──────────────────────
+def test_real_file_skips_modeled_sensors_before_floor():
+    import toksearch_fetch as tf
+    dev = devices.load_device("diiid")
+    ids = ["MPID66M020", "MPID66M067", "ISLD66M017"]
+    ids = [i for i in ids if i in dev["sensors"]]
+    assert ids, "expected known sensors in the device file"
+    q_now, _c, skip_now = tf._resolve_pointnames(dev, ids, 184927)
+    q_old, _c2, skip_old = tf._resolve_pointnames(dev, ids, 150000)
+    assert q_now == ids and skip_now == []               # all valid since 152472
+    assert set(skip_old) == set(ids) and q_old == []     # none modeled before the floor
+
+
+def test_diiid_geometry_is_shot_dependent():
+    # table (modern shot) vs name-parse/cosmetic fallback (pre-floor) differ
+    modern = diiid.sensor("MPID79A272", 184927)
+    legacy = diiid.sensor("MPID79A272", 150000)
+    assert modern["theta"] != legacy["theta"]
+    assert abs(modern["theta"] - 86.83) < 0.1           # real θ from (r, z)

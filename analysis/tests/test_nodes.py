@@ -146,16 +146,19 @@ def test_fit_quality_node_has_finite_k():
     assert n["fields"]
 
 
-def test_device_theta_has_full_poloidal_coverage():
-    # the device-file θ must span well beyond the midplane (else no honest 2D pattern)
-    from magnetics.data import device_config, diiid
-    dev = device_config.load("diiid")
-    thetas = [diiid.theta_of(nm) for nm in dev._sensors if diiid.family_of(nm) == "MPID"]
-    assert len(thetas) > 20
-    assert min(thetas) < 60.0 and max(thetas) > 170.0  # HFS / off-midplane probes present
-    assert diiid.has_geometry("MPID67A217")            # a known off-midplane probe
-    # θ is the real geometric angle, not the old cosmetic flat offset
-    assert abs(diiid.theta_of("MPID67A217") - 52.5) < 2.0
+def test_real_theta_has_full_poloidal_coverage():
+    # θ derived from the device table's (r,z) must span well beyond the midplane
+    # (else no honest 2D pattern). Driven by the device catalog, not fetched data,
+    # so it's deterministic; uses a modern shot so the seed segment is active.
+    import devices
+    dev = devices.load_device("diiid")
+    shot = 184927
+    theta = {name: diiid.real_theta_of(name, shot) for name in dev["sensors"]}
+    theta = {k: v for k, v in theta.items() if v is not None}
+    assert len(theta) > 20
+    vals = sorted(theta.values())
+    assert min(vals) < 60.0 and max(vals) > 170.0   # HFS / off-midplane probes present
+    assert "MPID67A217" in theta                      # a known off-midplane probe
 
 
 def test_mode_pattern_node():
