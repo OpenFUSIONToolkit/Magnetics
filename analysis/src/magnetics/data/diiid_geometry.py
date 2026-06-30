@@ -1,44 +1,31 @@
-"""DIII-D static sensor geometry, loaded from the published layout table.
+"""DIII-D static sensor geometry, loaded from ``data/device/<name>.json``.
 
-`diiid_sensors.txt` is the genuine device geometry table (one row per channel):
+The device file (owned by the data layer) holds, per channel, r/z/phi/tilt/length/
+delta_phi, a ``{r, z}`` first-wall outline, and named ``sensor_sets`` (e.g.
+"Bp LFS midplane", "C-coils") used to classify sensors as Bp / Br / coil.
 
-    channel   r   z   phi   tilt   length   delta_phi   na   pair
-
-where (r, z) is the sensor position in the poloidal plane [m], `phi` its toroidal
-angle [deg], `length` its poloidal size [m], and `delta_phi` its toroidal extent
-[deg]. Point probes (Mirnov Bp) have delta_phi ~ 1 deg; saddle loops span tens of
-degrees toroidally — that extent is what lets the GUI draw them as real loops
-rather than dots.
-
-Device specifics (the family -> sensor-kind mapping, the schematic wall size) live
-HERE; the GUI only ever sees generic (r, z, phi, length, delta_phi) numbers, so the
-Sensors view stays device-agnostic. A different machine ships its own loader with
-the same output shape.
+Device specifics (the family/set -> sensor-kind mapping) live HERE; the GUI only
+ever sees generic (r, z, phi, length, delta_phi) numbers, so the Sensors view
+stays device-agnostic. A different machine ships its own ``<name>.json`` file.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
-
-from ..core import geometry
-
-_TABLE = Path(__file__).with_name("diiid_sensors.txt")
-_WALL_FILE = Path(__file__).with_name("diiid_wall.txt")
-
-# Fallback vessel cross-section (Miller D-shape) for devices with no wall file.
-_WALL = dict(r0=1.70, a=0.75, kappa=1.85, delta=0.45)
 
 # A loop is anything with real toroidal extent; everything else is a point probe.
 _LOOP_MIN_DPHI = 5.0
 
 
-def _kind(family: str) -> str:
-    """Map a DIII-D family prefix to the contract's Bp | Br | coil vocabulary."""
-    if family.startswith("MPI"):
-        return "Bp"          # Mirnov poloidal-field probes (point)
-    if family.startswith(("ISL", "ESL")):
-        return "Br"          # internal/external saddle loops
-    return "coil"            # I-coils, C-coils, control/error-field coils
+def _device_json(name: str = "diiid") -> Path:
+    """Locate ``data/device/<name>.json`` by walking up from this file."""
+    rel = Path("data") / "device" / f"{name}.json"
+    for parent in Path(__file__).resolve().parents:
+        cand = parent / rel
+        if cand.exists():
+            return cand
+    raise FileNotFoundError(f"device geometry file not found: {rel}")
 
 
 def _family(channel: str) -> str:
@@ -46,69 +33,75 @@ def _family(channel: str) -> str:
     return m.group(0) if m else channel
 
 
-def _parse_namelist_array(text: str) -> list[float]:
-    """Parse a Fortran-namelist numeric array, honouring ``N*value`` repeats."""
-    vals: list[float] = []
-    for tok in text.replace(",", " ").split():
-        if tok in ("/", "&end", "&END"):
-            break
-        try:
-            if "*" in tok:
-                n, v = tok.split("*")
-                vals += [float(v)] * int(n)
-            else:
-                vals.append(float(tok))
-        except ValueError:
-            break
-    return vals
+def _kind(family: str) -> str:
+    """Family-prefix fallback when a sensor isn't in a classifying set."""
+    if family.startswith("MPI"):
+        return "Bp"          # Mirnov poloidal-field probes (point)
+    if family.startswith(("ISL", "ESL")):
+        return "Br"          # internal/external saddle loops
+    return "coil"            # I-coils, C-coils, control/error-field coils
 
 
-def _real_wall() -> tuple[list[float], list[float]] | None:
-    """The measured DIII-D first-wall (r, z) outline from the ``&wall`` namelist,
-    or None if the file isn't present."""
-    if not _WALL_FILE.exists():
-        return None
-    raw = _WALL_FILE.read_text()
-    if "&wall" not in raw:
-        return None
-    body = raw.split("&wall", 1)[1]
-    try:
-        rpart = body.split("r =", 1)[1].split("z =", 1)[0]
-        zpart = body.split("z =", 1)[1]
-    except IndexError:
-        return None
-    r, z = _parse_namelist_array(rpart), _parse_namelist_array(zpart)
-    n = min(len(r), len(z))
-    return (r[:n], z[:n]) if n else None
+def _kind_from_set_name(set_name: str) -> str | None:
+    """Infer Bp/Br/coil from a sensor-set name (e.g. 'Bp LFS midplane',
+    'C-coils'); None if unknown so members fall back to the family-prefix rule."""
+    s = set_name.lower()
+    if "coil" in s:
+        return "coil"
+    if "bp" in s:
+        return "Bp"
+    if "br" in s:
+        return "Br"
+    return None
 
 
-def load_sensors() -> list[dict]:
-    """All DIII-D sensors as flat records: name, family, kind, shape, and the
-    raw geometry (phi, r, z, length, delta_phi, tilt)."""
-    sensors: list[dict] = []
-    for line in _TABLE.read_text().splitlines():
-        cols = line.split()
-        if len(cols) < 7 or cols[0].lower() == "channel":
+def _kind_map_from_sets(sets: dict) -> dict[str, str]:
+    """name -> kind, derived from the curated ``sensor_sets``."""
+    out: dict[str, str] = {}
+    for set_name, spec in (sets or {}).items():
+        kind = _kind_from_set_name(set_name)
+        if kind is None or not isinstance(spec, dict) or spec.get("type") != "list":
             continue
-        name = cols[0]
-        try:
-            r, z, phi, tilt, length, dphi = (float(cols[i]) for i in range(1, 7))
-        except ValueError:
-            continue  # header / malformed row
-        family = _family(name)
-        sensors.append({
-            "name": name,
-            "family": family,
-            "kind": _kind(family),
-            "shape": "loop" if dphi > _LOOP_MIN_DPHI else "point",
-            "phi": phi,
-            "r": r,
-            "z": z,
-            "length": length,
-            "delta_phi": dphi,
-            "tilt": tilt,
-        })
-    return sensors
+        for nm in spec.get("sensors", []):
+            out.setdefault(nm, kind)  # first naming set wins
+    return out
+
+
+def _record(name: str, r, z, phi, tilt, length, dphi, kind: str) -> dict:
+    """One flat sensor record in the shape the exporter/GUI consume."""
+    return {
+        "name": name,
+        "family": _family(name),
+        "kind": kind,
+        "shape": "loop" if float(dphi) > _LOOP_MIN_DPHI else "point",
+        "phi": float(phi), "r": float(r), "z": float(z),
+        "length": float(length), "delta_phi": float(dphi), "tilt": float(tilt),
+    }
+
+
+def _resolve_set(name: str, raw: dict, seen: set[str]) -> list[str]:
+    """Flatten a sensor-set to its member channel names, recursing into
+    ``composite`` sets and guarding against cycles."""
+    if name in seen:
+        return []
+    seen.add(name)
+    spec = raw.get(name) or {}
+    if spec.get("type") == "composite":
+        out: list[str] = []
+        for sub in spec.get("sets", []):
+            out += _resolve_set(sub, raw, seen)
+        return out
+    return list(spec.get("sensors", []))  # type == "list"
+
+
+def _build_sets(raw: dict) -> list[dict]:
+    """Each named set as {name, kind, count, sensors} with composites flattened."""
+    out = []
+    for name in raw:
+        names = list(dict.fromkeys(_resolve_set(name, raw, set())))  # dedup, ordered
+        out.append({"name": name, "kind": _kind_from_set_name(name) or "coil",
+                    "count": len(names), "sensors": names})
+    return out
 
 
 def _arrays(sensors: list[dict]) -> list[dict]:
@@ -122,20 +115,28 @@ def _arrays(sensors: list[dict]) -> list[dict]:
     return list(seen.values())
 
 
-def device_geometry() -> dict:
-    """The full static device geometry: sensors, the vessel outline, array summary."""
-    sensors = load_sensors()
-    wall = _real_wall()
-    if wall is not None:
-        rw, zw = wall
-        wall_node = {"r": rw, "z": zw, "label": "DIII-D first wall"}
-    else:  # synthetic / other device: fall back to the schematic D-shape
-        rs, zs = geometry.vessel_outline(**_WALL)
-        wall_node = {"r": rs.round(4).tolist(), "z": zs.round(4).tolist(),
-                     "label": "vessel outline (approx.)"}
+def device_geometry(name: str = "diiid") -> dict:
+    """The full static device geometry from ``data/device/<name>.json``:
+    sensors, the first-wall outline, an array summary, and the named sensor sets."""
+    doc = json.loads(_device_json(name).read_text())
+    sets_raw = doc.get("sensor_sets", {})
+    kind_by_name = _kind_map_from_sets(sets_raw)
+    sensors: list[dict] = []
+    for ch, v in doc.get("sensors", {}).items():
+        try:
+            sensors.append(_record(
+                ch, v["r"], v["z"], v["phi"], v.get("tilt", 0.0),
+                v.get("length", 0.0), v.get("delta_phi", 1.0),
+                kind=kind_by_name.get(ch) or _kind(_family(ch))))
+        except (KeyError, TypeError, ValueError):
+            continue  # skip malformed rows
+    wall = doc.get("wall") or {}
+    device = doc.get("name", name)
     return {
-        "device": "DIII-D",
+        "device": device,
         "sensors": sensors,
-        "wall": wall_node,
+        "wall": {"r": wall.get("r", []), "z": wall.get("z", []),
+                 "label": f"{device} first wall"},
         "arrays": _arrays(sensors),
+        "sensor_sets": _build_sets(sets_raw),
     }

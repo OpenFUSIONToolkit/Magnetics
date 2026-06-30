@@ -37,20 +37,3 @@ def condition_number(phi_deg, n_max: int = 3) -> float:
     if sv.size == 0 or sv[-1] <= 0:
         return float("inf")
     return float(sv[0] / sv[-1])
-
-
-def vessel_outline(r0: float, a: float, kappa: float = 1.0,
-                   delta: float = 0.0, n: int = 160) -> tuple[np.ndarray, np.ndarray]:
-    """A device-agnostic (R, Z) poloidal cross-section outline.
-
-    A Miller-style D-shape parametrised by major radius `r0`, minor radius `a`,
-    elongation `kappa`, and triangularity `delta` — enough to draw a recognisable
-    vessel wall behind the sensors. Returns a *closed* polygon (last point == first).
-
-    This is a schematic boundary, not a measured first-wall contour; a device that
-    has a real limiter polygon can ship that instead through the same (R, Z) arrays.
-    """
-    u = np.linspace(0.0, 2.0 * np.pi, n)
-    r = r0 + a * np.cos(u + delta * np.sin(u))
-    z = kappa * a * np.sin(u)
-    return r, z
