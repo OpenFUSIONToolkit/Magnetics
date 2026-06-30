@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
-import { MODE_PALETTE, POWER_SEQUENTIAL, modeColor } from "../../lib/colormaps";
+import { MODE_PALETTE, POWER_SEQUENTIAL, FIELD_DIVERGING, modeColor } from "../../lib/colormaps";
 import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
@@ -676,15 +676,18 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   // 2D modal pattern with the θ (poloidal) axis re-centred on `patternCut`. θ is
   // periodic, so we roll the rows so the cut angle sits at the origin and the axis
-  // runs continuously cut … cut+360; the probe-dot overlay is shifted to match. Pure
-  // view transform on the real node — no refetch, so the slider is instant.
+  // runs continuously cut … cut+360. We also append a closing row (the cut angle again
+  // at cut+360) so the contour fills a full, seamless 360° with no gap at the wrap as
+  // the slider moves; the probe-dot overlay is shifted to match. Pure view transform on
+  // the real node — no refetch, so the slider is instant.
   const processedPatternNode = useMemo(() => {
     if (!modePatternNode || modePatternNode.kind !== "contour") return modePatternNode;
     const { y, z, overlay } = modePatternNode;
-    const i = y.findIndex((v) => v >= patternCut);
-    if (i <= 0) return modePatternNode;  // already at/below the origin → no roll
+    const i = Math.max(0, y.findIndex((v) => v >= patternCut));
     const newY = [...y.slice(i), ...y.slice(0, i).map((v) => v + 360)];
     const newZ = [...z.slice(i), ...z.slice(0, i)];
+    newY.push(newY[0] + 360);   // close the loop so the fill wraps with no seam
+    newZ.push(newZ[0]);
     const newOverlay = overlay
       ? { ...overlay, points: overlay.points.map((p) => ({ ...p, y: p.y >= patternCut ? p.y : p.y + 360 })) }
       : overlay;
@@ -939,6 +942,55 @@ export default function RotatingTab({ machine }: { machine: string }) {
         </div>
       </div>
     );
+  };
+
+  // The 2D modal pattern, rendered with a dedicated Plot (not the generic NodeView) so
+  // we can: fill the tile edge-to-edge with an explicit y-range, wrap the panned θ tick
+  // labels back to 0° past 360°, and stand the colorbar label up vertically to reclaim
+  // horizontal room. Mirrors NodeView's contour styling otherwise.
+  const renderModePattern = () => {
+    const node = processedPatternNode;
+    if (!node || node.kind !== "contour") return null;
+    const inkEdge = dark ? "#000" : "#ffffff";
+    const wrap = (v: number) => Math.round(((v % 360) + 360) % 360);
+    let zr = node.zrange;
+    if (!zr) {
+      let m = 0;
+      for (const row of node.z) for (const v of row) if (Number.isFinite(v)) m = Math.max(m, Math.abs(v));
+      zr = [-m, m];
+    }
+    const y0 = node.y[0];
+    const y1 = node.y[node.y.length - 1];
+    const tickvals: number[] = [];
+    for (let v = y0; v <= y1 + 1e-6; v += 45) tickvals.push(v);
+    const ticktext = tickvals.map((v) => `${wrap(v)}`);
+
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "contour", x: node.x, y: node.y, z: node.z,
+      colorscale: FIELD_DIVERGING, zmin: zr[0], zmax: zr[1],
+      contours: { coloring: "fill" },
+      // side:"right" stands the title up vertically alongside the bar (frees width).
+      colorbar: { title: { text: node.axes.z ?? "", side: "right" }, thickness: 12, outlinewidth: 0 },
+    } as Partial<Plotly.PlotData>];
+    if (node.overlay) {
+      const pts = node.overlay.points;
+      const hovertext = pts.map((p) => {
+        const c = `(${p.x.toFixed(0)}, ${wrap(p.y)})`;
+        return p.label ? `${p.label}<br>${c}` : c;
+      });
+      traces.push({
+        type: "scatter", mode: "markers",
+        x: pts.map((p) => p.x), y: pts.map((p) => p.y), text: hovertext,
+        marker: { symbol: node.overlay.symbol ?? "circle", size: 6, color: ink, line: { color: inkEdge, width: 0.5 } },
+        hovertemplate: "%{text}<extra></extra>",
+      } as Partial<Plotly.PlotData>);
+    }
+    const layout: Partial<Plotly.Layout> = {
+      xaxis: { title: { text: node.axes.x } },
+      // explicit range = data extent → no autorange padding, fills the tile while sliding
+      yaxis: { title: { text: node.axes.y }, range: [y0, y1], tickvals, ticktext },
+    };
+    return <Plot data={traces} layout={layout} height={260} />;
   };
 
   // Each analysis below renders in its OWN card panel (see the JSX), and only when
@@ -1525,20 +1577,23 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   ? `Re{poloidal ⊗ toroidal}, eq 23 @ ${shapeMeta(modePatternNode)!.f_kHz} kHz` : "eigspec eq 23"}
               </span>
             </h4>
-            <div
-              style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "10px", color: "var(--text-dim)" }}
-              title="Pans the periodic θ (poloidal) axis so this angle sits at the plot origin."
-            >
-              <span style={{ whiteSpace: "nowrap" }}>θ origin</span>
-              <input
-                type="range" min={0} max={360} step={2} value={patternCut}
-                onChange={(e) => setPatternCut(Number(e.target.value))}
-                style={{ flex: 1 }}
-              />
-              <span style={{ width: "36px", textAlign: "right", color: "var(--text)" }}>{patternCut}°</span>
-            </div>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <NodeView node={processedPatternNode} height={260} />
+            <div style={{ display: "flex", flexDirection: "row", gap: "6px", flex: 1, minHeight: 0 }}>
+              {/* θ-origin slider on the LEFT, vertical so it tracks the y (θ) axis it pans */}
+              <div
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", padding: "2px 0" }}
+                title="Pans the periodic θ (poloidal) axis so this angle sits at the plot origin."
+              >
+                <span style={{ fontSize: "9px", color: "var(--text-dim)", whiteSpace: "nowrap" }}>θ orig</span>
+                <input
+                  type="range" min={0} max={360} step={2} value={patternCut}
+                  onChange={(e) => setPatternCut(Number(e.target.value))}
+                  style={{ writingMode: "vertical-lr", direction: "rtl", width: "18px", height: "210px" }}
+                />
+                <span style={{ fontSize: "9px", color: "var(--text)" }}>{patternCut}°</span>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                {renderModePattern()}
+              </div>
             </div>
           </div>
         )}
