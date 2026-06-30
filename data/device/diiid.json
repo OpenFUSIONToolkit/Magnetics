@@ -523,6 +523,11 @@
       0.0088898307303
     ]
   },
+  "plasma pointnames":{
+    "current": {"name": "ip"},
+    "toroidal field": {"name": "bt"},
+    "elongation": {"name": "kappa", "tree" : "efit01"}
+  },
   "sensors": {
     "MPI66M020D": {
       "r": 2.4099,
