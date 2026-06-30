@@ -6,8 +6,8 @@
 // /api/fetch/{job_id}/stream → a real per-channel progress bar fills → on done we
 // refresh the shot list and select the new shot. Set a window (tmin/tmax) +
 // decimation to make a pull seconds instead of minutes.
-import { useState } from "react";
-import { apiBase, startFetch, usingLiveBackend } from "../lib/api";
+import { useEffect, useState } from "react";
+import { apiBase, fetchDevices, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
 import { useStore } from "../store";
 
 export default function PullControl() {
@@ -15,7 +15,10 @@ export default function PullControl() {
   const setMachine = useStore((s) => s.setMachine);
   const [shot, setShot] = useState("184927");
   const [analysis, setAnalysis] = useState("rotating");
-  const [backend, setBackend] = useState("mdsthin");
+  // Default to the fast cluster path. `mdsthin` (laptop tunnel) streams raw float
+  // over the SSH tunnel — minutes; `remote` fetches on the cluster and ships back a
+  // compressed h5 — tens of seconds. Users without cluster access pick mdsthin.
+  const [backend, setBackend] = useState("remote");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [duo, setDuo] = useState("1");
@@ -26,9 +29,23 @@ export default function PullControl() {
   const [tmin, setTmin] = useState("1000");
   const [tmax, setTmax] = useState("5000");
   const [decimate, setDecimate] = useState("");
+  // Optional sensor-set override: "" = pull the analysis groups (default); a named
+  // set (from the device's sensor_sets) overrides analysis and pulls that array.
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState("");
+  const [sensorSet, setSensorSet] = useState("");
   const [busy, setBusy] = useState(false);
   const [frac, setFrac] = useState(0);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // load supported devices; default the picker to the first one
+  useEffect(() => {
+    void fetchDevices().then((ds) => {
+      setDevices(ds);
+      if (ds[0]) setDeviceId((cur) => cur || ds[0].id);
+    });
+  }, []);
+  const device = devices.find((d) => d.id === deviceId);
 
   if (!usingLiveBackend()) return null;
   const needsCreds = backend === "remote" || backend === "mdsthin";
@@ -49,6 +66,10 @@ export default function PullControl() {
         tmin: num(tmin),
         tmax: num(tmax),
         decimate: num(decimate),
+        // device drives the gateway/server + which sensor_sets exist; a chosen
+        // sensor-set overrides the analysis groups (backend semantics).
+        device: deviceId || undefined,
+        sensor_set: sensorSet || undefined,
       });
       const es = new EventSource(`${apiBase()}/api/fetch/${job_id}/stream`);
       es.onmessage = (e: MessageEvent) => {
@@ -81,18 +102,45 @@ export default function PullControl() {
   return (
     <div className="rail-section">
       <h3>Pull a shot (live)</h3>
+      {devices.length > 0 && (
+        <select className="pull-input" value={deviceId} aria-label="device"
+          onChange={(e) => { setDeviceId(e.target.value); setSensorSet(""); }}>
+          {devices.map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      )}
       <input className="pull-input" value={shot}
         onChange={(e) => setShot(e.target.value)} placeholder="shot number" />
-      <select className="pull-input" value={analysis}
+      <select className="pull-input" value={analysis} disabled={!!sensorSet}
         onChange={(e) => setAnalysis(e.target.value)}>
         <option value="rotating">rotating</option>
         <option value="quasi-stationary">quasi-stationary</option>
         <option value="both">both</option>
       </select>
+      {device && device.sensor_sets.length > 0 && (
+        <>
+          <select className="pull-input" value={sensorSet}
+            onChange={(e) => setSensorSet(e.target.value)}>
+            <option value="">— by analysis (above) —</option>
+            <optgroup label={`${device.name} sensor sets`}>
+              {device.sensor_sets.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </optgroup>
+          </select>
+          {sensorSet && (
+            <div className="note pull-hint">
+              pulling the “{sensorSet}” sensor set (+ plasma params) — analysis
+              selection is overridden
+            </div>
+          )}
+        </>
+      )}
       <select className="pull-input" value={backend}
         onChange={(e) => setBackend(e.target.value)}>
-        <option value="mdsthin">mdsthin (laptop → DIII-D)</option>
-        <option value="remote">remote (run on cluster · WIP)</option>
+        <option value="remote">remote (cluster · fast)</option>
+        <option value="mdsthin">mdsthin (laptop · slow, no cluster)</option>
         <option value="auto">auto</option>
       </select>
 
@@ -111,12 +159,16 @@ export default function PullControl() {
 
       {needsCreds && (
         <>
+          <div className="note pull-hint">
+            leave password/Duo blank if your SSH key (ssh-config alias) is set up
+          </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="GA username" autoComplete="username" />
           <input className="pull-input" type="password" value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="GA password" autoComplete="current-password" />
+            placeholder="GA password (blank if key auth)"
+            autoComplete="current-password" />
           <input className="pull-input" value={duo}
             onChange={(e) => setDuo(e.target.value)}
             placeholder="Duo: 1 = push, or passcode" />

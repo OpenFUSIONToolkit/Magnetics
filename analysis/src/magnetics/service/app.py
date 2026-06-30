@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 import uuid
@@ -28,6 +29,8 @@ from pydantic import BaseModel
 
 from ..data import h5source
 from . import mock, nodes
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="magnetics service", version="0.1.0",
               description="Real kind-nodes from fetched shot data, with a MOCK fallback.")
@@ -56,6 +59,30 @@ def machines():
     return real if real else mock.MACHINES
 
 
+@app.get("/api/devices")
+def devices():
+    """List device configs (data/device/*.json) + their sensor-set names, so the GUI
+    can offer device + sensor-set selection for a pull. `id` is the --device value;
+    `sensor_sets` are the names selectable as --sensor-set (composites included)."""
+    h5source._ensure_catalog_on_path()
+    try:
+        import toksearch_fetch  # repo-root data/ module (also exposes DEVICE_DIR)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for path in sorted(Path(toksearch_fetch.DEVICE_DIR).glob("*.json")):
+        try:
+            d = json.loads(path.read_text())
+        except Exception:  # noqa: BLE001 — skip an unparseable device file
+            continue
+        out.append({
+            "id": path.stem,                       # e.g. "diiid" → --device diiid
+            "name": d.get("name", path.stem),      # e.g. "DIII-D"
+            "sensor_sets": list(d.get("sensor_sets", {}).keys()),
+        })
+    return out
+
+
 @app.get("/api/node/{shot}/{node_id}")
 def node(shot: str, node_id: str, request: Request):
     """A single bare kind-node built from real fetched shot data — the REST shape
@@ -69,6 +96,18 @@ def node(shot: str, node_id: str, request: Request):
         raise HTTPException(422, str(e))
 
 
+@app.get("/api/channels/{shot}")
+def channels(shot: str):
+    """Per-shot channel diagnostic: which fetched pointnames each analysis consumes,
+    and which are idle (droppable from the pull). 404 if the shot isn't available."""
+    try:
+        return nodes.channel_usage(shot)
+    except KeyError:
+        # The underlying KeyError embeds the server's data_dir() path; don't leak it.
+        logger.warning("channel_usage: shot %s not available", shot, exc_info=True)
+        raise HTTPException(404, f"shot {shot} not found")
+
+
 class FetchRequest(BaseModel):
     shot: int
     analysis: str = "both"
@@ -79,11 +118,14 @@ class FetchRequest(BaseModel):
     username: str | None = None
     password: str | None = None  # fed to ssh via askpass; localhost only, not stored
     duo: str | None = None       # Duo passcode, or "1" for push (default)
-    # remote backend overrides (None → fetcher defaults: omega via cybele, conda)
+    # signal selection (None → fetcher defaults: device "diiid", analysis groups)
+    device: str | None = None        # data/device/<device>.json
+    sensor_set: str | None = None    # a set under the device's sensor_sets; overrides analysis
+    # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
     remote_host: str | None = None
     ssh_jump: str | None = None
     remote_dir: str | None = None
-    remote_setup: str | None = None
+    remote_python: str | None = None
 
 
 # ── background fetch jobs (so /api/fetch returns instantly and the GUI can show a
@@ -115,9 +157,12 @@ def post_fetch(req: FetchRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500,
                             detail=f"fetcher unavailable: {exc}") from exc
-    remote_kw = {k: v for k, v in {
+    # only pass overrides that are set, so the fetcher's own defaults apply
+    # otherwise (e.g. device "diiid", analysis-group selection).
+    fetch_kw = {k: v for k, v in {
+        "device": req.device, "sensor_set": req.sensor_set,
         "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
-        "remote_dir": req.remote_dir, "remote_setup": req.remote_setup,
+        "remote_dir": req.remote_dir, "remote_python": req.remote_python,
     }.items() if v is not None}
 
     jid = uuid.uuid4().hex[:12]
@@ -134,7 +179,7 @@ def post_fetch(req: FetchRequest) -> dict:
                 req.shot, req.analysis, backend=req.backend,
                 username=req.username, password=req.password, duo=req.duo,
                 tmin=req.tmin, tmax=req.tmax, decimate=req.decimate,
-                progress=on_progress, **remote_kw)
+                progress=on_progress, **fetch_kw)
             h5source.refresh()
             nodes.refresh()
             _job_set(jid, status="done", progress=1.0, msg="done",

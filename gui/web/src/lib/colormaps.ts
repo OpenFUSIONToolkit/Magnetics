@@ -63,14 +63,20 @@ export const POWER_SEQUENTIAL: [number, string][] = [
   [1.0, "#fff7b0"],
 ];
 
-// Discrete palette for toroidal mode number n = −6 … +6 (13 bins).
-// Index with (n + 6).
+// Discrete palette for toroidal mode-number magnitude |n| = 0 … 6 (7 bins).
+// Folding the sign to |n| halves the categories, so the hues stay well-separated
+// (rotation direction lives in the signed phase fit, not this map). Index with |n|.
 export const MODE_PALETTE = [
-  "#5e4fa2", "#3288bd", "#66c2a5", "#abdda4", "#e6f598", "#ffffbf",
-  "#fee08b", "#fdae61", "#f46d43", "#d53e4f", "#9e0142", "#7a0028", "#4d0019",
+  "#6b7785", // 0 — slate grey (no coherent mode)
+  "#4c9be8", // 1 — blue
+  "#3fb56b", // 2 — green
+  "#e8c84a", // 3 — gold
+  "#f08a3c", // 4 — orange
+  "#e0533d", // 5 — red
+  "#a86bd1", // 6 — purple
 ];
 
 export function modeColor(n: number): string {
-  const i = Math.max(0, Math.min(MODE_PALETTE.length - 1, Math.round(n) + 6));
+  const i = Math.max(0, Math.min(MODE_PALETTE.length - 1, Math.round(Math.abs(n))));
   return MODE_PALETTE[i];
 }

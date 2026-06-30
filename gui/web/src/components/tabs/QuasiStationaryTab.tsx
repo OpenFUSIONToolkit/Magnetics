@@ -142,8 +142,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Linked time-axis zoom (declared here so the trim-window effect below can reset it).
+  const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
+
   // When the trim window changes, clear any user zoom so the axis re-fits to the new data.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom to refit the axis on a new trim window
     setTimeRange(null);
   }, [tminMs, tmaxMs]);
 
@@ -179,6 +183,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     if (!signalNode) return;
     const pairs = signalNode.meta?.pairs as { channel: string }[] | undefined;
     if (pairs && enabledChannels.size === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init of the channel set when the node first loads
       setEnabledChannels(new Set(pairs.map(p => p.channel)));
     }
   // Only populate when channel list first loads.
@@ -219,9 +224,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     if (x != null) setCursorMs(Math.round(Number(x)));
   }, [setCursorMs]);
 
-  // ── Linked time-axis zoom ─────────────────────────────────────────
-  const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
-
+  // ── Linked time-axis zoom (state declared above) ──────────────────
   const handleTimeRelayout = useCallback((e: Record<string, unknown>) => {
     if (e["xaxis.autorange"] === true) {
       setTimeRange(null);
@@ -464,7 +467,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       } as Partial<Plotly.PlotData>);
     }
     return traces;
-  }, [phiTimePlot, phiPeak]);
+  }, [phiTimePlot, phiPeak, cmapProps]);
 
   const phiTimeLayout = useMemo(() =>
     phiTimePlot ? themedLayout(dark, {

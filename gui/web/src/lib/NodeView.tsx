@@ -47,12 +47,21 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         } as Partial<Plotly.PlotData>,
       ];
       if (node.overlay) {
+        const pts = node.overlay.points;
+        // Per-point hover text: a labelled point (sensor dot) shows its pointname above
+        // the coordinates; an unlabelled one shows coordinates alone. Building the text
+        // per point keeps mixed overlays correct (no empty line on the unlabelled ones).
+        const hovertext = pts.map((p) => {
+          const coords = `(${p.x.toFixed(0)}, ${p.y.toFixed(0)})`;
+          return p.label ? `${p.label}<br>${coords}` : coords;
+        });
         traces.push({
           type: "scatter", mode: "markers",
-          x: node.overlay.points.map((p) => p.x),
-          y: node.overlay.points.map((p) => p.y),
+          x: pts.map((p) => p.x),
+          y: pts.map((p) => p.y),
+          text: hovertext,
           marker: { symbol: node.overlay.symbol ?? "square", size: 6, color: ink, line: { color: inkEdge, width: 0.5 } },
-          hoverinfo: "x+y",
+          hovertemplate: "%{text}<extra></extra>",
         } as Partial<Plotly.PlotData>);
       }
       return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
@@ -71,7 +80,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         : POWER_SEQUENTIAL;
       const zr = node.zrange;
       
-      const isSpecDiscrete = node.discrete && zr && Math.abs(zr[0] - (-6.5)) < 0.1;
+      const isSpecDiscrete = node.discrete && zr && Math.abs(zr[0] - (-0.5)) < 0.1;
 
       return (
         <Plot
@@ -85,8 +94,8 @@ export default function NodeView({ node, height }: { node: Node; height?: number
                   title: { text: node.axes.z ?? "" },
                   thickness: 12,
                   outlinewidth: 0,
-                  tickvals: [-6, -4, -2, 0, 2, 4, 6],
-                  ticktext: ["-6", "-4", "-2", "0", "2", "4", "6"],
+                  tickvals: [0, 1, 2, 3, 4, 5, 6],
+                  ticktext: ["0", "1", "2", "3", "4", "5", "6"],
                   tickmode: "array" as const,
                 }
               : { title: { text: node.axes.z ?? "" }, thickness: 12, outlinewidth: 0 },
@@ -130,6 +139,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         traces.push({
           type: "scatter", mode: "lines", x: node.fit.x, y: node.fit.y,
           line: { color: "#54e08a", width: 1.5, dash: "dot" }, hoverinfo: "skip",
+          connectgaps: false,  // null entries = wrap breaks; don't bridge them
         } as Partial<Plotly.PlotData>);
       }
       return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
@@ -137,14 +147,39 @@ export default function NodeView({ node, height }: { node: Node; height?: number
 
     case "line": {
       const palette = ["#4aa3ff", "#ff5cad", "#ffb454", "#2ee6cf", "#9d7bff"];
+      const traces: Partial<Plotly.PlotData>[] = [];
+      node.series.forEach((s, i) => {
+        const color = palette[i % palette.length];
+        // shaded ±band (e.g. GP 2σ): upper edge then lower edge filled up to it.
+        if (s.lower && s.upper) {
+          traces.push({
+            type: "scatter", mode: "lines", x: s.x, y: s.upper,
+            line: { width: 0 }, showlegend: false, hoverinfo: "skip",
+          } as Partial<Plotly.PlotData>);
+          traces.push({
+            type: "scatter", mode: "lines", x: s.x, y: s.lower, fill: "tonexty",
+            fillcolor: withAlpha(color, 0.16), line: { width: 0 },
+            name: `${s.name} ±2σ`, showlegend: false, hoverinfo: "skip",
+          } as Partial<Plotly.PlotData>);
+        }
+        traces.push({
+          type: "scatter", mode: "lines", name: s.name, x: s.x, y: s.y,
+          line: { color, width: 1.6 },
+        } as Partial<Plotly.PlotData>);
+        // measured probe values the curve was fit to (Olofsson fig 10)
+        if (s.markers) {
+          traces.push({
+            type: "scatter", mode: "markers", x: s.markers.x, y: s.markers.y,
+            name: `${s.name} (probes)`, showlegend: false, hoverinfo: "x+y",
+            marker: { color, size: 6, line: { color: inkEdge, width: 0.5 } },
+          } as Partial<Plotly.PlotData>);
+        }
+      });
       return (
         <Plot
           height={height}
           layout={{ ...axisLayout(node.axes), showlegend: true, legend: { font: { size: 10 }, orientation: "h", y: 1.12 } }}
-          data={node.series.map((s, i) => ({
-            type: "scatter", mode: "lines", name: s.name, x: s.x, y: s.y,
-            line: { color: palette[i % palette.length], width: 1.4 },
-          } as Partial<Plotly.PlotData>))}
+          data={traces}
         />
       );
     }
@@ -159,6 +194,15 @@ function symRange(z: number[][]): [number, number] {
   let m = 0;
   for (const row of z) for (const v of row) if (Number.isFinite(v)) m = Math.max(m, Math.abs(v));
   return [-m, m];
+}
+
+/** hex (#rrggbb) → rgba string with the given alpha, for shaded uncertainty bands. */
+function withAlpha(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
 
 const GROUP_COLORS = ["#2ee6cf", "#4aa3ff", "#ff5cad", "#ffb454", "#9d7bff", "#54e08a"];
