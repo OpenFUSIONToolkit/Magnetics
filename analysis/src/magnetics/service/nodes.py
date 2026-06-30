@@ -128,6 +128,28 @@ def _real_theta(shot) -> dict:
     return out
 
 
+def _kappa_at(shot, t0_ms=None):
+    """Plasma elongation κ at the cursor time (or the shot median), from the fetched
+    ``kappa`` EFIT channel. None when the pull didn't include it — the poloidal map
+    then falls back to the geometric angle. κ outside a sane [1, 4] band is rejected
+    as a bad EFIT sample."""
+    try:
+        if "kappa" not in h5source.channel_names(shot):
+            return None
+        t, d = h5source.load_channel(shot, "kappa")
+    except (KeyError, OSError):
+        return None
+    d = np.asarray(d, dtype=float)
+    good = np.isfinite(d)
+    if not np.any(good):
+        return None
+    if t0_ms is None:
+        k = float(np.median(d[good]))
+    else:
+        k = float(np.interp(t0_ms, np.asarray(t, dtype=float)[good], d[good]))
+    return k if 1.0 <= k <= 4.0 else None
+
+
 @lru_cache(maxsize=16)
 def _stack_cached(shot, names):
     """Cached channel load for a fixed (shot, names) — HDF5 reads are the dominant
@@ -375,6 +397,92 @@ def _contour(shot, params=None) -> dict:
               "note": "raw toroidal δBp(φ,t) — SLCONTOUR φ–θ fit pending"})
 
 
+# ── array wave-stripes: raw δBp(angle, t) over a few mode periods at the cursor ─
+def _stripes(shot, arr, t0_ms, f_khz, *, n_cycles=8, n_time=320, n_angle=120):
+    """δBp interpolated onto a regular angle×time grid over a short window around the
+    cursor (≈``n_cycles`` mode periods), so a rotating mode reads as diagonal stripes.
+    ``arr`` is a list of (name, angle_deg); returns (t_ms, angle_grid, z[angle, time])."""
+    names = [n for n, _ in arr]
+    angles = np.array([a for _, a in arr], dtype=float)
+    t_ms, mat = _stack(str(shot), names)            # [ch, time], shared clock
+    t_ms = np.asarray(t_ms, dtype=float)
+    if t0_ms is None:
+        t0_ms = float(t_ms[t_ms.size // 2])
+    half = max(0.3, 0.5 * n_cycles / max(float(f_khz), 0.5))   # ms, ≈n_cycles wide
+    sel = np.flatnonzero((t_ms >= t0_ms - half) & (t_ms <= t0_ms + half))
+    if sel.size < 4:                                  # cursor off-record → centre window
+        c = t_ms.size // 2
+        sel = np.arange(max(0, c - 160), min(t_ms.size, c + 160))
+    ti = sel[np.linspace(0, sel.size - 1, min(sel.size, n_time)).astype(int)]
+    t_sub = t_ms[ti]
+    vals = mat[:, ti]                                 # [ch, n_time]
+    order = np.argsort(angles)
+    ang_grid = np.linspace(0.0, 360.0, n_angle)
+    ae = np.concatenate([angles[order], angles[order][:1] + 360.0])   # periodic wrap
+    z = np.empty((n_angle, t_sub.size))
+    for j in range(t_sub.size):
+        ve = np.concatenate([vals[order, j], vals[order, j][:1]])
+        z[:, j] = np.interp(ang_grid, ae, ve)
+    return t_sub, ang_grid, z
+
+
+def _toroidal_stripes(shot, params=None) -> dict:
+    """Toroidal array waves: raw δBp(φ, t) over a few mode periods at the cursor."""
+    t0_ms = _f(params, "time", None)
+    f_khz = _f(params, "f_khz", None) or _auto_freq_khz(shot, t0_ms)
+    arr = _toroidal_arr(str(shot))
+    t_sub, ang, z = _stripes(shot, arr, t0_ms, f_khz)
+    return contracts.heatmap(
+        t_sub.tolist(), ang.tolist(), z.tolist(),
+        {"x": "time (ms)", "y": "φ (deg)", "z": "δBp (a.u.)"}, discrete=False,
+        meta={"n_probes": len(arr), "f_kHz": round(float(f_khz), 1),
+              "t0_ms": t0_ms, "shot": str(shot),
+              "note": "raw toroidal δBp(φ,t) at the cursor; diagonal stripes = a "
+                      "rotating mode"})
+
+
+def _poloidal_stripes(shot, params=None) -> dict:
+    """Poloidal array waves: raw δBp(θ, t) over a few mode periods at the cursor. The
+    probes span φ as well as θ, so the toroidal phase is mixed in — this is the raw
+    array view, not the φ-detrended poloidal fit."""
+    t0_ms = _f(params, "time", None)
+    f_khz = _f(params, "f_khz", None) or _auto_freq_khz(shot, t0_ms)
+    arr = _poloidal_arr(str(shot))
+    t_sub, ang, z = _stripes(shot, arr, t0_ms, f_khz)
+    return contracts.heatmap(
+        t_sub.tolist(), ang.tolist(), z.tolist(),
+        {"x": "time (ms)", "y": "θ (deg)", "z": "δBp (a.u.)"}, discrete=False,
+        meta={"n_probes": len(arr), "f_kHz": round(float(f_khz), 1),
+              "t0_ms": t0_ms, "shot": str(shot),
+              "note": "raw poloidal δBp(θ,t) at the cursor (toroidal phase not removed)"})
+
+
+# ── raw_trace: one Mirnov probe's dB/dt time series at the cursor ─────────────
+def _raw_trace(shot, params=None) -> dict:
+    """One toroidal probe's raw dB/dt vs time over a short window around the cursor —
+    the rawest view of the signal the spectrogram is built from."""
+    t0_ms = _f(params, "time", None)
+    half_ms = _f(params, "half_ms", 2.0)
+    arr = _toroidal_arr(str(shot))
+    name = arr[0][0]
+    t_ms, d = h5source.load_channel(str(shot), name)
+    t_ms = np.asarray(t_ms, dtype=float)
+    d = np.asarray(d, dtype=float)
+    if t0_ms is None:
+        t0_ms = float(t_ms[t_ms.size // 2])
+    sel = np.flatnonzero((t_ms >= t0_ms - half_ms) & (t_ms <= t0_ms + half_ms))
+    if sel.size < 2:                                  # cursor off-record → centre window
+        c = t_ms.size // 2
+        sel = np.arange(max(0, c - 2000), min(t_ms.size, c + 2000))
+    if sel.size > 2000:                               # keep the line light
+        sel = sel[np.linspace(0, sel.size - 1, 2000).astype(int)]
+    series = [{"name": name, "x": t_ms[sel].tolist(), "y": d[sel].tolist()}]
+    return contracts.line(
+        series, {"x": "time (ms)", "y": "dB/dt (a.u.)"},
+        meta={"probe": name, "t0_ms": t0_ms, "window_ms": round(2 * half_ms, 1),
+              "shot": str(shot), "note": f"raw dB/dt of {name} around the cursor"})
+
+
 # ── phi_t: SLCONTOUR φ–t contour from fit reconstruction ─────────────────────
 def _phi_t(shot, params=None) -> dict:
     """Reconstructed δBp(φ, t) at fixed θ=0 — the SLCONTOUR waterfall plot.
@@ -507,6 +615,26 @@ def _toroidal_mode(shot, params):
 
 
 # ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
+def _wrapped_ramp(intercept_deg, slope_n) -> dict:
+    """Fitted line phase(a) = (c − n·a) mod 360 over a∈[0,360], WRAPPED so it traces
+    the same |n| sawteeth as the (wrapped) data instead of one line shooting off-axis.
+    A null break is inserted at each 0/360 wrap so the polyline doesn't draw a vertical
+    jump across the panel."""
+    a = np.linspace(0.0, 360.0, 361)
+    y = (intercept_deg - slope_n * a) % 360.0
+    fx: list = []
+    fy: list = []
+    prev = None
+    for x, yy in zip(a, y):
+        if prev is not None and abs(yy - prev) > 180.0:
+            fx.append(None)
+            fy.append(None)
+        fx.append(round(float(x), 1))
+        fy.append(round(float(yy), 1))
+        prev = yy
+    return {"x": fx, "y": fy}
+
+
 def _phase_fit(shot, params=None) -> dict:
     arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
     fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n + uncertainty
@@ -520,23 +648,7 @@ def _phase_fit(shot, params=None) -> dict:
         if e is not None and np.isfinite(e):
             pt["error_y"] = round(float(e), 3)
         points.append(pt)
-    # Fitted line phase(φ) = (c − n·φ) mod 360, sampled densely and WRAPPED so it
-    # traces the same |n| sawteeth as the (wrapped) data instead of one line shooting
-    # off-axis. Insert a null break at each 0/360 wrap so the polyline doesn't draw a
-    # vertical jump across the panel.
-    phi_dense = np.linspace(0.0, 360.0, 361)
-    y_dense = (fit.intercept_deg - fit.n * phi_dense) % 360.0
-    fx: list = []
-    fy: list = []
-    prev = None
-    for x, y in zip(phi_dense, y_dense):
-        if prev is not None and abs(y - prev) > 180.0:
-            fx.append(None)
-            fy.append(None)
-        fx.append(round(float(x), 1))
-        fy.append(round(float(y), 1))
-        prev = y
-    line = {"x": fx, "y": fy}
+    line = _wrapped_ramp(fit.intercept_deg, fit.n)
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
         meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
@@ -582,12 +694,17 @@ def _mode_shape(shot, params=None) -> dict:
 def _poloidal_shape(shot, params=None) -> dict:
     """Smooth *poloidal* mode shape (re/im vs θ) with a ±2σ band, on the real DIII-D
     poloidal array (cf. Olofsson fig 10(b)). Needs a shot with the MPID array."""
-    arr, mode, f_khz, t0_ms = _poloidal_mode(shot, params)
+    arr, mode, f_khz, t0_ms, kappa = _poloidal_mode(shot, params)
     ms = _gp_shape(mode)
-    return _shape_line(ms, "θ (deg)", {
+    x_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
+    note = ("GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"
+            + (f"; θ* straightened for κ={kappa:.2f}" if kappa is not None
+               else "; geometric θ (no κ in this pull)"))
+    return _shape_line(ms, x_label, {
         "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
         "length_scale_rad": round(float(ms.length_scale), 3),
-        "note": "GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
+        "kappa": round(float(kappa), 3) if kappa is not None else None,
+        "note": note})
 
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
@@ -599,6 +716,14 @@ def _poloidal_arr(shot):
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
         raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
     return arr
+
+
+def _theta_star(thetas_deg, kappa):
+    """Geometric θ → elongation-corrected θ* when κ is known, else θ unchanged.
+    Returns (angles_deg, used_star)."""
+    if kappa is None:
+        return np.asarray(thetas_deg, dtype=float), False
+    return geometry.elongation_theta_star(thetas_deg, kappa), True
 
 
 def _toroidal_n(shot, t0_s, f_khz):
@@ -614,20 +739,50 @@ def _toroidal_n(shot, t0_s, f_khz):
 def _poloidal_mode(shot, params):
     """Per-probe phase/amplitude across the poloidal array vs θ. The probes span φ, so
     the toroidal nφ ramp is removed (phase += n·φ → −m·θ + const) using the toroidal n
-    at the same (t0, f). Returns (arr, mode, f_khz, t0_ms)."""
+    at the same (t0, f). The probe angles are mapped to the elongation-corrected θ*
+    (using the EFIT κ at the cursor) when available, so an `m` mode is a clean sinusoid
+    rather than a κ-distorted one. Returns (arr, mode, f_khz, t0_ms, kappa)."""
     t0_ms = _f(params, "time", None)
     f_khz = _f(params, "f_khz", None)
     if f_khz is None:
         f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _poloidal_arr(str(shot))
-    thetas = np.array([th for _, th in arr], dtype=float)
+    kappa = _kappa_at(str(shot), t0_ms)
+    thetas, _used = _theta_star([th for _, th in arr], kappa)
     pphis = np.array([diiid.phi_of(n, shot) or 0.0 for n, _ in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
     detrended = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
     mode = dataclasses.replace(mode, phase=detrended)
-    return arr, mode, f_khz, t0_ms
+    return arr, mode, f_khz, t0_ms, kappa
+
+
+def _poloidal_phase_fit(shot, params=None) -> dict:
+    """Poloidal analogue of ``phase_fit``: per-probe phase vs θ across the poloidal
+    array (φ-detrended), with the best-fit poloidal mode number m and a wrapped fit
+    line. θ is the elongation-corrected θ* when the EFIT κ is in the pull."""
+    arr, mode, f_khz, t0_ms, kappa = _poloidal_mode(shot, params)
+    fit = spectral.fit_toroidal_mode(mode)        # same circular fit, here vs θ → m
+    perr = mode.phase_error if mode.phase_error is not None else [None] * len(arr)
+    th_used, _ = _theta_star([th for _, th in arr], kappa)
+    points = []
+    for ths, ph, e in zip(th_used, mode.phase, perr):
+        pt = {"x": float(ths), "y": float(ph), "group": "Bp"}
+        if e is not None and np.isfinite(e):
+            pt["error_y"] = round(float(e), 3)
+        points.append(pt)
+    line = _wrapped_ramp(fit.intercept_deg, fit.n)
+    x_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
+    return contracts.scatter2d(
+        points, {"x": x_label, "y": "phase (deg)"}, fit=line,
+        meta={"m_fit": fit.n, "resultant": round(float(fit.resultant), 3),
+              "n_confidence": round(float(fit.n_confidence), 3)
+              if fit.n_confidence is not None else None,
+              "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
+              "kappa": round(float(kappa), 3) if kappa is not None else None,
+              "note": "poloidal phase-at-frequency + circular m-fit (φ-detrended); "
+                      "error bars = 1σ cross-spectral phase uncertainty"})
 
 
 def _gp_shape(mode):
@@ -638,16 +793,20 @@ def _gp_shape(mode):
 
 
 # ── mode_pattern: 2D (θ, φ) modal pattern from toroidal × poloidal shapes ─────
-def _pattern_overlay(shot) -> dict:
+def _pattern_overlay(shot, kappa=None) -> dict:
     """The real sensors that built the pattern, as (φ, θ) dots labelled by pointname:
-    the poloidal array at its (φ, θ) and the toroidal array along θ≈0. Lets the GUI
-    show where the field is actually sampled (and name each probe on hover)."""
+    the poloidal array at its (φ, θ) and the toroidal array along θ≈0. The poloidal
+    dots use the same elongation-corrected θ* as the pattern axis (when κ is known) so
+    they land on the field they sampled. Lets the GUI show where the field is actually
+    sampled (and name each probe on hover)."""
     pts = []
     try:
-        for nm, th in _poloidal_arr(str(shot)):
+        arr = _poloidal_arr(str(shot))
+        th_star, _ = _theta_star([th for _, th in arr], kappa)
+        for (nm, _th), ths in zip(arr, th_star):
             phi = diiid.phi_of(nm, shot)
             if phi is not None:
-                pts.append({"x": float(phi), "y": float(th), "label": nm})
+                pts.append({"x": float(phi), "y": float(ths), "label": nm})
     except ValueError:
         pass
     try:
@@ -660,18 +819,24 @@ def _pattern_overlay(shot) -> dict:
 
 def _mode_pattern(shot, params=None) -> dict:
     """Rank-2 (θ, φ) modal pattern (eigspec eq 23) — the outer product of the GP
-    toroidal and poloidal mode shapes, on real DIII-D probe geometry."""
+    toroidal and poloidal mode shapes, on real DIII-D probe geometry. The poloidal
+    axis is the elongation-corrected θ* when the EFIT κ is available."""
     _, tmode, f_khz, t0_ms = _toroidal_mode(shot, params)
-    _, pmode, _, _ = _poloidal_mode(shot, params)
+    _, pmode, _, _, kappa = _poloidal_mode(shot, params)
     phi_g, th_g, pattern = mode_shape.mode_pattern_2d(_gp_shape(tmode), _gp_shape(pmode))
     zmax = float(np.nanmax(np.abs(pattern))) or 1.0
+    y_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
+    note = ("2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D geometry; "
+            "dots = probe locations"
+            + (f"; θ* straightened for κ={kappa:.2f}" if kappa is not None
+               else "; geometric θ (no κ in this pull)"))
     return contracts.contour(
         phi_g.tolist(), th_g.tolist(), pattern.tolist(),
-        {"x": "φ (deg)", "y": "θ (deg)", "z": "mode pattern (a.u.)"},
-        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot),
+        {"x": "φ (deg)", "y": y_label, "z": "mode pattern (a.u.)"},
+        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot, kappa),
         meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry; "
-                      "dots = probe locations"})
+              "kappa": round(float(kappa), 3) if kappa is not None else None,
+              "note": note})
 
 
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
@@ -940,6 +1105,11 @@ _BUILDERS = {
     "mode_pattern": _mode_pattern,
     "mode_track": _mode_track,
     "mode_over_time": _mode_over_time,
+    # rotating array views: raw wave-stripes + poloidal phase fit + raw trace
+    "toroidal_stripes": _toroidal_stripes,
+    "poloidal_stripes": _poloidal_stripes,
+    "poloidal_phase_fit": _poloidal_phase_fit,
+    "raw_trace": _raw_trace,
 }
 
 
