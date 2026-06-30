@@ -500,3 +500,53 @@ class TestArrayShapeSpectrum:
         d = ((fast.phase - slow.phase + 180) % 360) - 180
         assert np.sqrt(np.mean(d**2)) < 10.0             # phases agree within ~deg
         assert fast.phase_error[0] != fast.phase_error[0]  # ref probe NaN
+
+
+class TestArrayModeSpectrogram:
+    def _array(self, n_true, seed=0, noise=0.1):
+        rng = np.random.default_rng(seed)
+        fs = 200_000
+        t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
+        phi = np.linspace(0, 330, 16)
+        sigs = np.vstack([
+            np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(n_true * p))
+            + noise * rng.standard_normal(t.size)
+            for p in phi
+        ])
+        return sigs, phi, t
+
+    def test_shapes_and_quality_range(self):
+        from magnetics.core.spectral import array_mode_spectrogram, array_shape_spectrum
+        sigs, phi, t = self._array(n_true=2)
+        ms = array_mode_spectrogram(array_shape_spectrum(sigs, t), phi)
+        assert ms.mode_number.shape == ms.amplitude.shape == ms.quality.shape
+        assert ms.mode_number.shape == (ms.time.size, ms.freq_band.size)
+        assert np.all((ms.quality >= 0) & (ms.quality <= 1.0 + 1e-6))
+
+    @pytest.mark.parametrize("n_true", [1, 2, 3, 4])
+    def test_recovers_high_mode_number_at_peak(self, n_true):
+        # a wide 2-point pair aliases |n|>1 away; the array projection must not.
+        # Sign follows the same convention as fit_toroidal_mode/the phase fit.
+        from magnetics.core.spectral import (
+            array_mode_spectrogram, array_shape_spectrum, fit_toroidal_mode,
+            mode_from_spectrum,
+        )
+        sigs, phi, t = self._array(n_true=n_true)
+        spec = array_shape_spectrum(sigs, t)
+        ms = array_mode_spectrogram(spec, phi)
+        fi = int(np.argmin(np.abs(ms.freq_band - 8000.0)))   # the injected mode bin
+        it = ms.time.size // 2
+        n_fit = fit_toroidal_mode(mode_from_spectrum(spec, phi, t[it], 8000.0)).n
+        assert abs(ms.mode_number[it, fi]) == n_true         # right |n| (not aliased)
+        assert ms.mode_number[it, fi] == n_fit               # agrees with the phase fit
+        assert ms.quality[it, fi] > 0.9                      # clean single-n → high q
+
+    def test_quality_low_for_incoherent_noise(self):
+        from magnetics.core.spectral import array_mode_spectrogram, array_shape_spectrum
+        rng = np.random.default_rng(1)
+        fs = 200_000
+        t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
+        phi = np.linspace(0, 330, 16)
+        sigs = rng.standard_normal((phi.size, t.size))       # pure noise, no mode
+        ms = array_mode_spectrogram(array_shape_spectrum(sigs, t), phi)
+        assert np.median(ms.quality) < 0.6                   # resultant length stays low

@@ -71,7 +71,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         : POWER_SEQUENTIAL;
       const zr = node.zrange;
       
-      const isSpecDiscrete = node.discrete && zr && Math.abs(zr[0] - (-6.5)) < 0.1;
+      const isSpecDiscrete = node.discrete && zr && Math.abs(zr[0] - (-0.5)) < 0.1;
 
       return (
         <Plot
@@ -85,8 +85,8 @@ export default function NodeView({ node, height }: { node: Node; height?: number
                   title: { text: node.axes.z ?? "" },
                   thickness: 12,
                   outlinewidth: 0,
-                  tickvals: [-6, -4, -2, 0, 2, 4, 6],
-                  ticktext: ["-6", "-4", "-2", "0", "2", "4", "6"],
+                  tickvals: [0, 1, 2, 3, 4, 5, 6],
+                  ticktext: ["0", "1", "2", "3", "4", "5", "6"],
                   tickmode: "array" as const,
                 }
               : { title: { text: node.axes.z ?? "" }, thickness: 12, outlinewidth: 0 },

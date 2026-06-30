@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
-import { MODE_PALETTE, POWER_SEQUENTIAL } from "../../lib/colormaps";
+import { MODE_PALETTE, POWER_SEQUENTIAL, modeColor } from "../../lib/colormaps";
 import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
@@ -43,6 +43,9 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [btype, setBtype] = useState<number>(4);
   const [smoothing, setSmoothing] = useState<number>(5);
   const [coherenceThreshold, setCoherenceThreshold] = useState<number>(0.5);
+  // STFT window for the LIVE backend spectrogram (ms). Frequency resolution is
+  // 1/window, so 2 ms → 500 Hz bins (sharper than the 1 ms / 1 kHz default).
+  const [specSliceMs, setSpecSliceMs] = useState<number>(2);
 
   // Advanced Parameter states
   const [advancedExpanded, setAdvancedExpanded] = useState<boolean>(false);
@@ -57,7 +60,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   // Resizable layout dimensions
   const [sidebarWidth, setSidebarWidth] = useState(260);
-  const [specHeight, setSpecHeight] = useState(280);
+  const [specHeight, setSpecHeight] = useState(360);
   const [panel1Height, setPanel1Height] = useState(290);
   const [panel2Height, setPanel2Height] = useState(290);
   const [panel3Height, setPanel3Height] = useState(290);
@@ -92,12 +95,31 @@ export default function RotatingTab({ machine }: { machine: string }) {
   }, []);
 
   // --- 1. DATA INGESTION & FALLBACKS ---
-  // Fetch main spectrogram node (from static files if available)
+  // STFT-shaping params shared by every spectral node so they hit one backend
+  // compute (the cached `_spec_result`) and land on an identical (t, f) grid —
+  // which lets the real coherence map gate the power/mode maps cell-for-cell.
+  // fmin/fmax crop the band server-side (a cheap re-mask of the cached STFT, not a
+  // recompute) so we transport only the displayed 0–fmax kHz, not the full Nyquist
+  // band ×3 nodes. These don't depend on the time cursor, so scrubbing never refetches.
+  const specParams = { slice_duration: specSliceMs / 1000, max_columns: 1000, fmin, fmax };
+
+  // Fetch main spectrogram node (real log-power Ḃp(t,f) from the live backend)
   const {
     node: specNode,
     loading: specLoading,
     error: specError,
-  } = useNode(machine, "spectrogram");
+  } = useNode(machine, "spectrogram", specParams);
+
+  // Real toroidal mode-number map n(t,f) — a full-array fit per cell (resolves n=1,2,3,4…
+  // that the 2-point estimate aliases away). Backs the "Mode n" toggle, gated server-side.
+  // Honors the same resolution knob + band as the power view so the two stay consistent.
+  const { node: modeNumberNode } = useNode(machine, "mode_number", {
+    slice_duration: specSliceMs / 1000, fmin, fmax,
+  });
+
+  // Real 2-point coherence γ²(t,f) ∈ [0,1] — feeds the coherence gate honestly,
+  // instead of the previous power-derived stand-in.
+  const { node: coherenceNode } = useNode(machine, "coherence", specParams);
 
   // Fetch toroidal phase fit node (from static files if available)
   const {
@@ -210,7 +232,35 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   // Merge loaded specNode with controls/display settings
   const processedSpecNode = useMemo(() => {
-    const baseNode = hasStaticFiles ? specNode : syntheticSpecNode;
+    // ── LIVE BACKEND: render the real spectral nodes directly (no fabrication).
+    if (hasStaticFiles) {
+      // "n" → the array mode-number map: already band-cropped and quality-gated on the
+      // server (its own STFT grid), so render it as-is — no client-side coherence gate.
+      if (displayMode === "n") {
+        if (!modeNumberNode || modeNumberNode.kind !== "heatmap") return null;
+        // [-0.5,6.5] aligns the 7-colour |n| palette's bins to integers 0…6 (and modeColor()).
+        return { ...modeNumberNode, discrete: true, zrange: [-0.5, 6.5] as [number, number] };
+      }
+      // "power" → real log-power spectrogram, gated cell-for-cell by the real coherence
+      // map (same 2-point STFT grid) at γ² < threshold.
+      if (!specNode || specNode.kind !== "heatmap") return null;
+      const keep = specNode.y
+        .map((f, i) => ({ f, i }))
+        .filter((o) => o.f >= fmin && o.f <= fmax)
+        .map((o) => o.i);
+      const y = keep.map((i) => specNode.y[i]);
+      const cohZ = coherenceNode && coherenceNode.kind === "heatmap" ? coherenceNode.z : null;
+      const z = keep.map((fi) =>
+        specNode.z[fi].map((v, ti) => {
+          const c = cohZ && cohZ[fi] ? cohZ[fi][ti] : 1;
+          return c < coherenceThreshold ? null : v;
+        }),
+      );
+      return { ...specNode, y, z: z as unknown as number[][], discrete: false, zrange: undefined };
+    }
+
+    // ── NO BACKEND: synthetic generator + fabricated n/coherence (demo only).
+    const baseNode = syntheticSpecNode;
     if (!baseNode || baseNode.kind !== "heatmap") return null;
 
     // Filter by frequency limits
@@ -282,7 +332,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         y: filteredY,
         z: mappedZ as unknown as number[][],
         discrete: true,
-        zrange: [-6.5, 6.5] as [number, number],
+        zrange: [-0.5, 6.5] as [number, number],
       };
     } else {
       const mappedZ = filteredZ.map((row) =>
@@ -301,7 +351,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         zrange: [-3, 0] as [number, number],
       };
     }
-  }, [hasStaticFiles, specNode, syntheticSpecNode, displayMode, fmin, fmax, coherenceThreshold, shieldingCutoff]);
+  }, [hasStaticFiles, specNode, modeNumberNode, coherenceNode, syntheticSpecNode, displayMode, fmin, fmax, coherenceThreshold, shieldingCutoff]);
 
   // Determine active mode frequencies at the current time slice
   const currentModeFreqs = useMemo(() => {
@@ -337,27 +387,47 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
     const freqs = baseNode.y;
     const power = freqs.map((_, fIdx) => Math.pow(10, baseNode.z[fIdx][tIdx])); // Convert log power to linear power
-    
-    // Simulate coherence based on power peaks
-    const coh = power.map((p) => {
-      const rawCoh = p > 0.05 ? 0.9 - (0.1 / p) : 0.15 + p * 2.0;
-      return Math.max(0.0, Math.min(1.0, rawCoh));
-    });
 
-    // Simulate mode number
-    const nMode = coh.map((c, fIdx) => {
-      if (c < coherenceThreshold) return 0;
-      const f = freqs[fIdx];
-      if (currentModeFreqs.some(mf => Math.abs(f - mf) < 1.0)) {
-        if (Math.abs(f - currentModeFreqs[0]) < 1.0) return 2; // n=2
-        if (Math.abs(f - currentModeFreqs[1]) < 1.0) return 1; // n=1
-        if (currentModeFreqs[2] && Math.abs(f - currentModeFreqs[2]) < 1.0) return 3; // n=3
-      }
-      return 0;
-    });
+    // LIVE: real coherence + real mode number at the cursor column (same grid).
+    const liveCoh = hasStaticFiles && coherenceNode?.kind === "heatmap" ? coherenceNode : null;
+    const liveN = hasStaticFiles && modeNumberNode?.kind === "heatmap" ? modeNumberNode : null;
+
+    const coh = liveCoh
+      ? freqs.map((_, fIdx) => (liveCoh.z[fIdx] ? liveCoh.z[fIdx][tIdx] : 0))
+      // Fallback (no backend): synthesize coherence from power peaks.
+      : power.map((p) => {
+          const rawCoh = p > 0.05 ? 0.9 - (0.1 / p) : 0.15 + p * 2.0;
+          return Math.max(0.0, Math.min(1.0, rawCoh));
+        });
+
+    const nMode = liveN
+      ? (() => {
+          // The array mode-number node has its own (t,f) grid → resolve by nearest cell.
+          const nearest = (a: number[], v: number) => {
+            let bi = 0, bd = Infinity;
+            for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - v); if (d < bd) { bd = d; bi = i; } }
+            return bi;
+          };
+          const tiN = nearest(liveN.x, cursorMs);
+          return freqs.map((f) => {
+            const v = liveN.z[nearest(liveN.y, f)]?.[tiN];   // null where gated out
+            return v == null ? 0 : v;
+          });
+        })()
+      // Fallback (no backend): synthesize mode number from the active-mode bands.
+      : coh.map((c, fIdx) => {
+          if (c < coherenceThreshold) return 0;
+          const f = freqs[fIdx];
+          if (currentModeFreqs.some(mf => Math.abs(f - mf) < 1.0)) {
+            if (Math.abs(f - currentModeFreqs[0]) < 1.0) return 2; // n=2
+            if (Math.abs(f - currentModeFreqs[1]) < 1.0) return 1; // n=1
+            if (currentModeFreqs[2] && Math.abs(f - currentModeFreqs[2]) < 1.0) return 3; // n=3
+          }
+          return 0;
+        });
 
     return { freqs, power, coh, nMode };
-  }, [hasStaticFiles, specNode, syntheticSpecNode, cursorMs, coherenceThreshold, currentModeFreqs]);
+  }, [hasStaticFiles, specNode, modeNumberNode, coherenceNode, syntheticSpecNode, cursorMs, coherenceThreshold, currentModeFreqs]);
 
   // Toroidal & Poloidal wave stripes data (Array Tab)
   const arrayStripesData = useMemo(() => {
@@ -524,7 +594,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
           thickness: 12,
           outlinewidth: 0,
           ...(processedSpecNode.discrete
-            ? { tickvals: [-6, -4, -2, 0, 2, 4, 6], ticktext: ["-6", "-4", "-2", "0", "2", "4", "6"], tickmode: "array" as const }
+            ? {
+                // one tick per integer mode-number magnitude |n| = 0 … 6
+                tickvals: Array.from({ length: 7 }, (_, i) => i),
+                ticktext: Array.from({ length: 7 }, (_, i) => `${i}`),
+                tickmode: "array" as const,
+              }
             : {}),
         },
       },
@@ -532,7 +607,9 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
     const layout = {
       xaxis: { title: { text: processedSpecNode.axes.x } },
-      yaxis: { title: { text: processedSpecNode.axes.y } },
+      // Pin the band to the knobs so the n-map (mostly null above the modes) doesn't
+      // autorange-trim to ~30 kHz — both views show the full requested 0–fmax band.
+      yaxis: { title: { text: processedSpecNode.axes.y }, range: [fmin, fmax] as [number, number] },
       shapes: [
         {
           type: "line" as const,
@@ -560,7 +637,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
       }
     };
 
-    return <Plot data={data} layout={layout} height={260} onClick={handlePlotClick} />;
+    // Fill the card: subtract its 12px padding (×2), ~38px header and the 8px gap, so the
+    // plot — and its x-axis title — fit instead of overflowing and getting clipped.
+    const plotH = Math.max(220, specHeight - 78);
+    return <Plot data={data} layout={layout} height={plotH} onClick={handlePlotClick} />;
   };
 
   const renderSubInterval = () => {
@@ -596,7 +676,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         y: nMode,
         marker: {
           size: 5,
-          color: nMode.map((n) => (n === 2 ? "#f46d43" : n === 1 ? "#fdae61" : "rgba(0,0,0,0)")),
+          color: nMode.map((n) => (n === 0 ? "rgba(0,0,0,0)" : modeColor(n))),
           line: { width: 0.5, color: "#111" },
         },
         name: "Toroidal n",
@@ -726,7 +806,9 @@ export default function RotatingTab({ machine }: { machine: string }) {
   ) => {
     if (!node || node.kind !== kind) return null;
     return (
-      <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: 0, minHeight: 0 }}>
+      // marginTop 7px matches the height of the DraggableDividers between the top
+      // panels, so every card is spaced consistently down the column.
+      <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
         <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
           {title}
           {subtitle ? <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}> · {subtitle}</span> : null}
@@ -1151,6 +1233,21 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 Active cursor: <strong style={{ color: "var(--good)" }}>{cursorMs ? `${cursorMs.toFixed(1)} ms` : "none"}</strong>
               </span>
             </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {hasStaticFiles && (
+              <select
+                aria-label="Spectral resolution"
+                title="STFT window — frequency resolution = 1/window"
+                value={specSliceMs}
+                onChange={(e) => setSpecSliceMs(parseFloat(e.target.value))}
+                style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border-2)", padding: "3px 6px", borderRadius: "4px", fontSize: "11px", outline: "none" }}
+              >
+                <option value={1}>1 kHz · coarse</option>
+                <option value={2}>500 Hz · medium</option>
+                <option value={4}>250 Hz · fine</option>
+                <option value={8}>125 Hz · ultra</option>
+              </select>
+            )}
             <div className="toggle-group" style={{ display: "flex", background: "var(--border)", padding: "2px", borderRadius: "4px" }}>
               <button
                 onClick={() => setDisplayMode("n")}
@@ -1182,6 +1279,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
               >
                 Log Power
               </button>
+            </div>
             </div>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>{renderSpectrogram()}</div>
