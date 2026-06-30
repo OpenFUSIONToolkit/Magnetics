@@ -68,6 +68,15 @@ def test_mode_shape_node_has_band():
         assert all(lo <= y <= up for lo, y, up in zip(s["lower"], s["y"], s["upper"]))
 
 
+def test_mode_track_node():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "mode_track")
+    assert n["kind"] == "line"
+    s = n["series"][0]
+    assert len(s["x"]) == len(s["y"]) and all(0.0 <= y <= 1.0 for y in s["y"])
+    assert n["meta"].get("ref_t_ms") is not None
+
+
 def test_mode_similarity_node():
     shot = _first_shot()
     n = nodes.build_node(shot, "mode_similarity")
@@ -82,6 +91,25 @@ def test_fit_quality_node_has_finite_k():
     n = nodes.build_node(shot, "fit_quality")
     assert n["kind"] == "metrics"
     assert n["fields"]
+
+
+def test_real_theta_has_full_poloidal_coverage():
+    # the real-θ table must span well beyond the midplane (else no honest 2D pattern)
+    theta = nodes._real_theta()
+    assert len(theta) > 20
+    vals = sorted(theta.values())
+    assert min(vals) < 60.0 and max(vals) > 170.0   # HFS / off-midplane probes present
+    assert "MPID67A217" in theta                      # a known off-midplane probe
+
+
+def test_mode_pattern_node():
+    shot = _first_shot()
+    try:
+        n = nodes.build_node(shot, "mode_pattern")
+    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    assert n["kind"] == "contour"
+    assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])  # [θ][φ]
 
 
 def test_unknown_node_raises():

@@ -113,6 +113,18 @@ export default function RotatingTab({ machine }: { machine: string }) {
     node: modeSimilarityNode,
   } = useNode(machine, "mode_similarity", { time: cursorMs });
 
+  // Fetch the 2D (θ,φ) modal pattern on real DIII-D geometry (eigspec eq 23).
+  // 422s when the shot lacks the poloidal array — the panel simply hides then.
+  const {
+    node: modePatternNode,
+  } = useNode(machine, "mode_pattern", { time: cursorMs });
+
+  // Fetch the full-array shape-coherence-over-time track (eigspec fig 9).
+  // Cursor-independent (reference is the strongest-mode slice), so no time param.
+  const {
+    node: modeTrackNode,
+  } = useNode(machine, "mode_track");
+
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
     if (specNode && specNode.kind === "heatmap" && specNode.x.length > 0) {
@@ -725,6 +737,37 @@ export default function RotatingTab({ machine }: { machine: string }) {
     );
   };
 
+  // 2D (θ,φ) modal pattern on real geometry — hidden unless the shot has the
+  // poloidal array (the backend 422s otherwise; no fabricated stand-in).
+  const renderModePattern = () => {
+    if (!modePatternNode || modePatternNode.kind !== "contour") return null;
+    const m = modePatternNode.meta as Record<string, number | string> | undefined;
+    return (
+      <div style={{ overflow: "auto" }}>
+        <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          2D Modal Pattern (θ, φ){m?.f_kHz != null ? ` @ ${m.f_kHz} kHz` : ""}
+        </h4>
+        <NodeView node={modePatternNode} height={240} />
+      </div>
+    );
+  };
+
+  // Full-array shape-coherence-over-time track (eigspec fig 9) — sustained high
+  // MAC marks a persistent mode; drops mark mode changes.
+  const renderModeTrack = () => {
+    if (!modeTrackNode || modeTrackNode.kind !== "line") return null;
+    const m = modeTrackNode.meta as Record<string, number | string> | undefined;
+    return (
+      <div style={{ overflow: "auto" }}>
+        <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          Mode Tracking — shape coherence vs time
+          {m?.dominant_n != null ? ` (dominant n = ${m.dominant_n})` : ""}
+        </h4>
+        <NodeView node={modeTrackNode} height={200} />
+      </div>
+    );
+  };
+
   return (
     <div style={{ display: "flex", gap: sidebarExpanded ? "0px" : "16px", height: "100%", position: "relative" }}>
       
@@ -1206,6 +1249,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <div style={{ flex: 1, minHeight: 0 }}>
             {renderModeStructure()}
             {renderModeShape()}
+            {renderModeTrack()}
+            {renderModePattern()}
           </div>
         </div>
       </div>

@@ -63,6 +63,19 @@ def _array_channels(shot, families: tuple[str, ...]):
     return out
 
 
+@lru_cache(maxsize=1)
+def _real_theta() -> dict:
+    """name → real poloidal angle θ (deg) from the published DIII-D layout in
+    ``_real_geometry`` (the genuine static positions), unioned over machines. Lets
+    the poloidal arrays carry physical θ instead of ``diiid``'s cosmetic offset."""
+    from . import _real_geometry
+    out: dict[str, float] = {}
+    for machine in _real_geometry.GEOMETRY.values():
+        for s in machine["sensors"]:
+            out[s["name"]] = float(s["theta"])
+    return out
+
+
 def _stack(shot, names):
     """Load channels, truncate to common length, return (t_ms, matrix[ch,time]).
 
@@ -302,8 +315,8 @@ def _mode_shape(shot, params=None) -> dict:
     """Smooth toroidal mode shape (re/im of the complex shape vector) with a ±2σ
     uncertainty band, via the periodic-kernel GP (eigspec §2.2.2)."""
     arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
-    z = mode_shape.shape_vector(mode.phase, mode.amplitude)
-    ms = mode_shape.gp_mode_shape(mode.toroidal_angle, z)
+    # GP smooth with the band seeded from the Tier-1 per-probe σ (heteroscedastic).
+    ms = _gp_shape(mode)
     grid = ms.grid_deg.tolist()
     series = [
         {"name": "Re", "x": grid, "y": ms.re_mean.tolist(),
@@ -322,6 +335,54 @@ def _mode_shape(shot, params=None) -> dict:
               "note": "GP toroidal mode shape (eigspec §2.2.2); shaded = ±2σ"})
 
 
+# ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
+def _poloidal_mode(shot, params):
+    """Per-probe phase/amplitude across the poloidal array at one frequency, using
+    the real published θ. Returns (arr, mode, f_khz, t0_ms)."""
+    theta = _real_theta()
+    arr = [(name, theta[name]) for name in h5source.channel_names(shot)
+           if diiid.family_of(name) == "MPID" and name in theta]
+    arr.sort(key=lambda nt: nt[1])
+    if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
+        raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
+    names = [n for n, _ in arr]
+    thetas = np.array([th for _, th in arr], dtype=float)
+    t_ms, mat = _stack(shot, names)
+    f_khz = _f(params, "f_khz", 5.0)
+    t0_ms = _f(params, "time", None)
+    t_range = None
+    if t0_ms is not None:
+        w = _f(params, "window_ms", 2.0)
+        t_range = ((t0_ms - w) * 1e-3, (t0_ms + w) * 1e-3)
+    mode = spectral.extract_mode_at_frequency(
+        mat, thetas, np.asarray(t_ms, dtype=float) * 1e-3,
+        frequency=f_khz * 1e3, t_range=t_range)
+    return arr, mode, f_khz, t0_ms
+
+
+def _gp_shape(mode):
+    """GP-smoothed complex mode shape with Tier-1-seeded heteroscedastic noise."""
+    z = mode_shape.shape_vector(mode.phase, mode.amplitude)
+    noise = mode_shape.shape_noise(mode.amplitude, mode.phase_error, mode.amplitude_error)
+    return mode_shape.gp_mode_shape(mode.toroidal_angle, z, value_noise=noise)
+
+
+# ── mode_pattern: 2D (θ, φ) modal pattern from toroidal × poloidal shapes ─────
+def _mode_pattern(shot, params=None) -> dict:
+    """Rank-2 (θ, φ) modal pattern (eigspec eq 23) — the outer product of the GP
+    toroidal and poloidal mode shapes, on real DIII-D probe geometry."""
+    _, tmode, f_khz, t0_ms = _toroidal_mode(shot, params)
+    _, pmode, _, _ = _poloidal_mode(shot, params)
+    phi_g, th_g, pattern = mode_shape.mode_pattern_2d(_gp_shape(tmode), _gp_shape(pmode))
+    zmax = float(np.nanmax(np.abs(pattern))) or 1.0
+    return contracts.contour(
+        phi_g.tolist(), th_g.tolist(), pattern.tolist(),
+        {"x": "φ (deg)", "y": "θ (deg)", "z": "mode pattern (a.u.)"},
+        zrange=[-zmax, zmax],
+        meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
+              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry"})
+
+
 # ── mode_similarity: shape-based toroidal-n identification via MAC ────────────
 def _mode_similarity(shot, params=None) -> dict:
     """MAC of the measured array shape vs ideal pure-mode templates e^{−inφ} (eq 9):
@@ -338,6 +399,31 @@ def _mode_similarity(shot, params=None) -> dict:
               "note": "shape similarity (MAC, eigspec eq 9) vs pure-mode templates"})
 
 
+# ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
+def _mode_track(shot, params=None) -> dict:
+    """Track the full toroidal array's mode over time at a fixed frequency: MAC
+    similarity to the strongest-mode reference slice vs time (eigspec fig 9). A
+    sustained high MAC marks a persistent mode; drops mark mode changes."""
+    arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
+    if len(arr) < 4:
+        raise ValueError("not enough toroidal-array channels for mode tracking")
+    names = [n for n, _ in arr]
+    phis = np.array([p for _, p in arr], dtype=float)
+    t_ms, mat = _stack(shot, names)
+    f_khz = _f(params, "f_khz", 5.0)
+    tr = mode_shape.track_mode_shape(
+        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3, frequency=f_khz * 1e3)
+    vals, counts = np.unique(tr.n_by_time, return_counts=True)
+    series = [{"name": "shape MAC to ref", "x": tr.t_ms.tolist(),
+               "y": tr.mac_to_ref.tolist()}]
+    return contracts.line(
+        series, {"x": "time (ms)", "y": "shape MAC"},
+        meta={"f_kHz": f_khz, "ref_t_ms": round(float(tr.ref_t_ms), 1),
+              "dominant_n": int(vals[int(counts.argmax())]), "shot": str(shot),
+              "n_probes": len(arr),
+              "note": "shape coherence to reference over time (eigspec fig 9)"})
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -348,7 +434,9 @@ _BUILDERS = {
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
     "mode_shape": _mode_shape,
+    "mode_pattern": _mode_pattern,
     "mode_similarity": _mode_similarity,
+    "mode_track": _mode_track,
 }
 
 

@@ -178,3 +178,73 @@ class TestMacNSpectrum:
         fit = fit_toroidal_mode(mode)
         _, _, best = mac_n_spectrum(phi, shape_vector(mode.phase, mode.amplitude))
         assert best == fit.n
+
+
+class TestNoiseCalibration:
+    def test_shape_noise_combines_phase_and_amplitude(self):
+        from magnetics.core.mode_shape import shape_noise
+        amp = np.array([1.0, 2.0, 1.0])
+        # σ_z² = σ_A² + (A·σ_φ)²; here σ_A=0.1, σ_φ=0 → σ_z=0.1
+        s = shape_noise(amp, np.array([0.0, 0.0, 0.0]), np.array([0.1, 0.1, 0.1]))
+        np.testing.assert_allclose(s, 0.1, atol=1e-9)
+
+    def test_shape_noise_fills_reference_nan(self):
+        from magnetics.core.mode_shape import shape_noise
+        # reference probe (index 0) has NaN errors → filled, not propagated
+        s = shape_noise(np.ones(4),
+                        np.array([np.nan, 1.0, 2.0, 1.0]),
+                        np.array([np.nan, 0.1, 0.1, 0.1]))
+        assert np.all(np.isfinite(s)) and np.all(s > 0)
+
+    def test_shape_noise_none_without_errors(self):
+        from magnetics.core.mode_shape import shape_noise
+        assert shape_noise(np.ones(3), None, None) is None
+
+    def test_band_widens_at_noisy_probe(self):
+        # heteroscedastic: a noisy probe's neighborhood gets a wider band than a clean one
+        phi = np.array([0.0, 60.0, 120.0, 180.0, 240.0, 300.0])
+        z = np.exp(1j * np.deg2rad(2 * phi))
+        value_noise = np.array([0.02, 0.02, 0.02, 0.40, 0.02, 0.02])  # probe at 180° noisy
+        ms = gp_mode_shape(phi, z, value_noise=value_noise)
+
+        def band(a):
+            j = int(np.argmin(np.abs(ms.grid_deg - a)))
+            return float(np.hypot(ms.re_sigma[j], ms.im_sigma[j]))
+
+        assert band(180.0) > band(60.0)
+
+
+class TestModeTracking:
+    def _array(self, on_until=0.025, seed=0):
+        rng = np.random.default_rng(seed)
+        fs = 200_000
+        t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
+        phi = np.linspace(0, 330, 12)
+        env = (t < on_until).astype(float)  # n=2 mode on, then gone
+        sigs = np.vstack([
+            env * np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(2 * p)) + 0.3 * rng.standard_normal(t.size)
+            for p in phi
+        ])
+        return sigs, phi, t
+
+    def test_returns_track(self):
+        from magnetics.core.mode_shape import ModeTrackResult, track_mode_shape
+        sigs, phi, t = self._array()
+        tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=16)
+        assert isinstance(tr, ModeTrackResult)
+        assert tr.t_ms.shape == tr.mac_to_ref.shape == tr.n_by_time.shape == (16,)
+        assert np.all((tr.mac_to_ref >= 0.0) & (tr.mac_to_ref <= 1.0 + 1e-9))
+
+    def test_mac_high_while_mode_present_low_after(self):
+        from magnetics.core.mode_shape import track_mode_shape
+        sigs, phi, t = self._array()
+        tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=20)
+        on = tr.mac_to_ref[tr.t_ms < 25.0].mean()
+        off = tr.mac_to_ref[tr.t_ms > 25.0].mean()
+        assert on > 0.8 and off < 0.5 and on > off
+
+    def test_recovers_mode_number_during_mode(self):
+        from magnetics.core.mode_shape import track_mode_shape
+        sigs, phi, t = self._array()
+        tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=20)
+        assert abs(int(np.median(tr.n_by_time[tr.t_ms < 25.0]))) == 2

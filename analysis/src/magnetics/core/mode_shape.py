@@ -6,6 +6,11 @@ poloidal angle. A Gaussian process with a periodic kernel (Olofsson 2014, eqs 16
 interpolates that shape onto a fine grid and — crucially — returns a predictive
 variance, i.e. the 2σ error band drawn in the paper's figure 10.
 
+The observation noise may be supplied per probe (heteroscedastic), seeded from the
+cross-spectral phase/amplitude σ computed in ``spectral`` — so low-coherence probes
+widen the band instead of the marginal likelihood guessing a single global noise and
+running overconfident on sparse arrays.
+
 Pure numpy/scipy over arrays: no device specifics, no I/O, no GUI concerns.
 """
 
@@ -18,6 +23,8 @@ from numpy.typing import NDArray
 from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import minimize
 
+from magnetics.core.spectral import extract_mode_at_frequency, fit_toroidal_mode
+
 
 @dataclass(slots=True)
 class GPFitResult:
@@ -25,7 +32,7 @@ class GPFitResult:
     mean: NDArray[np.floating]       # posterior mean on the grid
     sigma: NDArray[np.floating]      # posterior 1σ on the grid
     length_scale: float              # fitted kernel length scale (rad)
-    noise: float                     # fitted observation noise (σ₁)
+    noise: float                     # representative observation noise (σ₁)
     log_marginal_likelihood: float
 
 
@@ -65,48 +72,64 @@ def periodic_kernel(
     return np.exp(-2.0 * np.sin((a - b) / 2.0) ** 2 / (length_scale**2))
 
 
-def _posterior(
-    angle_deg: NDArray[np.floating],
-    values: NDArray[np.floating],
-    grid_deg: NDArray[np.floating],
-    length_scale: float,
-    noise: float,
-) -> tuple[NDArray[np.floating], NDArray[np.floating], object]:
-    """GP posterior mean (eq 20) and variance (eq 21) on the grid, plus the
-    Cholesky factor of K₁₁ for reuse by the marginal likelihood."""
-    k11 = periodic_kernel(angle_deg, angle_deg, length_scale)
-    k11[np.diag_indices_from(k11)] += noise**2 + 1e-10
-    c = cho_factor(k11, lower=True)
-    k12 = periodic_kernel(angle_deg, grid_deg, length_scale)     # (m, g)
-    alpha = cho_solve(c, values)                                  # K₁₁⁻¹ f
-    mean = k12.T @ alpha                                          # eq 20
-    v = cho_solve(c, k12)                                         # K₁₁⁻¹ k₁₂
-    var = 1.0 - np.einsum("ij,ij->j", k12, v)                     # eq 21 (k₂₂ = 1)
-    sigma = np.sqrt(np.clip(var, 0.0, None))
-    return mean, sigma, c
+def _k11(angle_deg, length_scale, noise_var):
+    """Training covariance K₁₁ plus the observation-noise diagonal. ``noise_var`` is
+    a variance — a scalar (homoscedastic) or one value per probe (heteroscedastic)."""
+    k = periodic_kernel(angle_deg, angle_deg, length_scale)
+    k[np.diag_indices_from(k)] += np.asarray(noise_var) + 1e-10
+    return k
 
 
-def _neg_log_marginal(
-    log_params: NDArray[np.floating],
-    angle_deg: NDArray[np.floating],
-    columns: list[NDArray[np.floating]],
-) -> float:
-    """Negative log marginal likelihood (eq 22) summed over the supplied data
-    columns (real & imaginary share one set of hyper-parameters)."""
-    length_scale, noise = np.exp(log_params)
-    k11 = periodic_kernel(angle_deg, angle_deg, length_scale)
-    k11[np.diag_indices_from(k11)] += noise**2 + 1e-10
+def _posterior(angle_deg, values, grid_deg, length_scale, noise_var):
+    """GP posterior mean (eq 20) and 1σ (eq 21) on the grid. ``noise_var`` may be a
+    scalar or a per-probe array (seeded from the measured cross-spectral σ)."""
+    c = cho_factor(_k11(angle_deg, length_scale, noise_var), lower=True)
+    k12 = periodic_kernel(angle_deg, grid_deg, length_scale)        # (m, g)
+    mean = k12.T @ cho_solve(c, values)                             # eq 20
+    var = 1.0 - np.einsum("ij,ij->j", k12, cho_solve(c, k12))       # eq 21 (k₂₂ = 1)
+    return mean, np.sqrt(np.clip(var, 0.0, None))
+
+
+def _neg_log_marginal(log_params, angle_deg, columns, fixed_noise_var=None):
+    """Negative log marginal likelihood (eq 22) summed over the data columns (real &
+    imaginary share hyper-parameters). With ``fixed_noise_var`` set, only the length
+    scale (``log_params[0]``) is free — the noise diagonal is held to the measured
+    per-probe variances."""
+    length_scale = np.exp(log_params[0])
+    noise_var = fixed_noise_var if fixed_noise_var is not None else np.exp(log_params[1]) ** 2
     try:
-        c = cho_factor(k11, lower=True)
+        c = cho_factor(_k11(angle_deg, length_scale, noise_var), lower=True)
     except np.linalg.LinAlgError:
         return 1e12
     logdet = 2.0 * np.sum(np.log(np.diag(c[0])))
     m = angle_deg.size
     total = 0.0
     for f in columns:
-        alpha = cho_solve(c, f)
-        total += 0.5 * (f @ alpha) + 0.5 * logdet + 0.5 * m * np.log(2.0 * np.pi)
+        total += 0.5 * (f @ cho_solve(c, f)) + 0.5 * logdet + 0.5 * m * np.log(2.0 * np.pi)
     return float(total)
+
+
+def _optimize_hyperparams(angle_deg, columns, ls0, nz0):
+    """Maximize the (summed) marginal likelihood over (length_scale, noise)."""
+    scale = float(np.std(np.concatenate(columns))) or 1.0
+    res = minimize(
+        _neg_log_marginal, x0=np.log([ls0, max(nz0, 1e-4 * scale)]),
+        args=(angle_deg, columns), method="Nelder-Mead",
+        options={"xatol": 1e-3, "fatol": 1e-3, "maxiter": 400},
+    )
+    ls, nz = np.exp(res.x)
+    return float(np.clip(ls, 0.05, 6.0)), float(max(nz, 1e-8))
+
+
+def _optimize_length_scale(angle_deg, columns, noise_var, ls0=1.0):
+    """Maximize the marginal likelihood over the length scale alone, with the noise
+    diagonal fixed to the measured per-probe variances."""
+    res = minimize(
+        _neg_log_marginal, x0=np.log([ls0]),
+        args=(angle_deg, columns, noise_var), method="Nelder-Mead",
+        options={"xatol": 1e-3, "fatol": 1e-3, "maxiter": 300},
+    )
+    return float(np.clip(np.exp(res.x[0]), 0.05, 6.0))
 
 
 def gp_periodic_fit(
@@ -132,27 +155,35 @@ def gp_periodic_fit(
     if optimize and (length_scale is None or noise is None):
         ls, nz = _optimize_hyperparams(angle_deg, [values], ls, nz)
 
-    mean, sigma, c = _posterior(angle_deg, values, grid, ls, nz)
+    mean, sigma = _posterior(angle_deg, values, grid, ls, nz**2)
     nll = _neg_log_marginal(np.log([ls, nz]), angle_deg, [values])
     return GPFitResult(grid, mean, sigma, float(ls), float(nz), -nll)
-
-
-def _optimize_hyperparams(angle_deg, columns, ls0, nz0) -> tuple[float, float]:
-    """Maximize the (summed) marginal likelihood over (length_scale, noise)."""
-    scale = float(np.std(np.concatenate(columns))) or 1.0
-    res = minimize(
-        _neg_log_marginal, x0=np.log([ls0, max(nz0, 1e-4 * scale)]),
-        args=(angle_deg, columns), method="Nelder-Mead",
-        options={"xatol": 1e-3, "fatol": 1e-3, "maxiter": 400},
-    )
-    ls, nz = np.exp(res.x)
-    # keep the length scale sane for a 2π-periodic domain
-    return float(np.clip(ls, 0.05, 6.0)), float(max(nz, 1e-8))
 
 
 # ---------------------------------------------------------------------------
 # Complex mode shape (real + imaginary parts share hyper-parameters)
 # ---------------------------------------------------------------------------
+
+
+def shape_noise(
+    amplitude: NDArray[np.floating],
+    phase_error_deg: NDArray[np.floating] | None,
+    amplitude_error: NDArray[np.floating] | None,
+) -> NDArray[np.floating] | None:
+    """Per-probe 1σ of the complex shape value from the cross-spectral phase &
+    amplitude σ (Tier 1): σ_z² = σ_A² + (A·σ_φ)². Non-finite entries (the reference
+    probe) are filled with the median of the rest. Returns None if no errors given."""
+    if phase_error_deg is None and amplitude_error is None:
+        return None
+    a = np.asarray(amplitude, dtype=np.float64)
+    s_phi = np.deg2rad(np.nan_to_num(np.asarray(phase_error_deg, dtype=np.float64))) \
+        if phase_error_deg is not None else np.zeros_like(a)
+    s_amp = np.nan_to_num(np.asarray(amplitude_error, dtype=np.float64)) \
+        if amplitude_error is not None else np.zeros_like(a)
+    sigma = np.sqrt(s_amp**2 + (a * s_phi) ** 2)
+    ok = np.isfinite(sigma) & (sigma > 0)
+    fill = float(np.median(sigma[ok])) if np.any(ok) else float(np.mean(np.abs(a)) * 0.1 + 1e-6)
+    return np.where(ok, sigma, fill)
 
 
 def gp_mode_shape(
@@ -161,24 +192,35 @@ def gp_mode_shape(
     *,
     n_grid: int = 181,
     optimize: bool = True,
+    value_noise: NDArray[np.floating] | None = None,
 ) -> ModeShapeResult:
     """Smooth a complex per-probe shape vector into continuous re/im curves + 2σ.
 
     The real and imaginary parts are modeled as two GPs sharing one length scale and
     noise (jointly tuned via the marginal likelihood), matching eigspec's treatment of
     the shape vector (eq 15) as a discretized sample of one continuous periodic field.
+    Pass ``value_noise`` (per-probe 1σ, e.g. from :func:`shape_noise`) to fix the noise
+    diagonal from the measured uncertainty and tune only the length scale — this
+    calibrates the band instead of letting the marginal likelihood guess one noise.
     """
     angle_deg = np.asarray(angle_deg, dtype=np.float64)
     z = np.asarray(complex_shape, dtype=np.complex128)
     re, im = z.real.copy(), z.imag.copy()
-
-    ls, nz = 1.0, float(np.std(np.concatenate([re, im])) * 0.1 + 1e-6)
-    if optimize:
-        ls, nz = _optimize_hyperparams(angle_deg, [re, im], ls, nz)
-
     grid = np.linspace(0.0, 360.0, n_grid, endpoint=False)
-    re_mean, re_sigma, _ = _posterior(angle_deg, re, grid, ls, nz)
-    im_mean, im_sigma, _ = _posterior(angle_deg, im, grid, ls, nz)
+
+    if value_noise is not None:
+        noise_var = np.asarray(value_noise, dtype=np.float64) ** 2
+        ls = _optimize_length_scale(angle_deg, [re, im], noise_var) if optimize else 1.0
+        nz_report = float(np.sqrt(np.median(noise_var)))
+    else:
+        ls, nz = 1.0, float(np.std(np.concatenate([re, im])) * 0.1 + 1e-6)
+        if optimize:
+            ls, nz = _optimize_hyperparams(angle_deg, [re, im], ls, nz)
+        noise_var = nz**2
+        nz_report = nz
+
+    re_mean, re_sigma = _posterior(angle_deg, re, grid, ls, noise_var)
+    im_mean, im_sigma = _posterior(angle_deg, im, grid, ls, noise_var)
 
     return ModeShapeResult(
         kind="mode_shape",
@@ -187,7 +229,7 @@ def gp_mode_shape(
         im_mean=im_mean, im_sigma=im_sigma,
         amplitude=np.hypot(re_mean, im_mean),
         angle_deg=angle_deg, re_obs=re, im_obs=im,
-        length_scale=float(ls), noise=float(nz),
+        length_scale=float(ls), noise=nz_report,
     )
 
 
@@ -236,6 +278,66 @@ def mac_n_spectrum(
     ns = np.arange(n_range[0], n_range[1] + 1)
     macs = np.array([mac(z, np.exp(-1j * n * phi)) for n in ns])
     return ns, macs, int(ns[int(np.argmax(macs))])
+
+
+# ---------------------------------------------------------------------------
+# Time-resolved mode tracking (eigspec figure 9)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class ModeTrackResult:
+    kind: str                          # "mode_track"
+    t_ms: NDArray[np.floating]         # slice-center times (ms)
+    mac_to_ref: NDArray[np.floating]   # shape similarity to the reference slice (0–1)
+    n_by_time: NDArray[np.integer]     # toroidal n per slice
+    ref_t_ms: float                    # reference slice time (ms)
+    frequency: float                   # Hz the track was evaluated at
+
+
+def track_mode_shape(
+    signals: NDArray[np.floating],
+    angle_deg: NDArray[np.floating],
+    time: NDArray[np.floating],
+    *,
+    frequency: float,
+    n_slices: int = 40,
+    window_s: float = 0.002,
+    ref_time_s: float | None = None,
+    n_range: tuple[int, int] = (-6, 6),
+) -> ModeTrackResult:
+    """Track the full-array mode over time at a fixed frequency (eigspec fig 9).
+
+    For each of ``n_slices`` time windows, extract the complex array shape and its
+    toroidal n, then score each slice's MAC similarity to a reference slice (default:
+    the strongest-amplitude slice, so the track is cursor-independent and cacheable).
+    A sustained high MAC marks a coherent, persistent mode; drops mark mode changes.
+    """
+    time = np.asarray(time, dtype=np.float64)
+    half = window_s / 2.0
+    centers = np.linspace(time[0] + half, time[-1] - half, n_slices)
+
+    shapes, ns, strength = [], [], []
+    for tc in centers:
+        mode = extract_mode_at_frequency(
+            signals, angle_deg, time, frequency=frequency, t_range=(tc - half, tc + half))
+        shapes.append(shape_vector(mode.phase, mode.amplitude))
+        ns.append(fit_toroidal_mode(mode, n_range=n_range).n)
+        strength.append(float(np.sum(np.abs(mode.amplitude))))
+    shapes = np.array(shapes)
+
+    ref_idx = (int(np.argmin(np.abs(centers - ref_time_s))) if ref_time_s is not None
+               else int(np.argmax(strength)))
+    macs = np.array([mac(s, shapes[ref_idx]) for s in shapes])
+
+    return ModeTrackResult(
+        kind="mode_track",
+        t_ms=centers * 1e3,
+        mac_to_ref=macs,
+        n_by_time=np.array(ns, dtype=int),
+        ref_t_ms=float(centers[ref_idx] * 1e3),
+        frequency=float(frequency),
+    )
 
 
 # ---------------------------------------------------------------------------

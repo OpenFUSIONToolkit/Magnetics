@@ -3,13 +3,16 @@
 from magnetics.core.mode_shape import (
     GPFitResult,
     ModeShapeResult,
+    ModeTrackResult,
     gp_mode_shape,
     gp_periodic_fit,
     mac,
     mac_n_spectrum,
     mode_pattern_2d,
     periodic_kernel,
+    shape_noise,
     shape_vector,
+    track_mode_shape,
 )
 from magnetics.core.spectral import (
     CrossSpectrumResult,
@@ -31,6 +34,7 @@ __all__ = [
     "GPFitResult",
     "ModeAtFrequencyResult",
     "ModeShapeResult",
+    "ModeTrackResult",
     "SpectrogramResult",
     "ToroidalFitResult",
     "compute_spectrogram",
@@ -46,6 +50,8 @@ __all__ = [
     "mac_n_spectrum",
     "mode_pattern_2d",
     "periodic_kernel",
+    "shape_noise",
     "shape_vector",
     "stft_layout",
+    "track_mode_shape",
 ]
