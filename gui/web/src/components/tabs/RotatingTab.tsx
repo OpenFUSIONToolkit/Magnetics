@@ -1453,7 +1453,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
             : "shape similarity to the dominant mode vs time")}
         {analysisCard("Toroidal Mode vs Time", modeOverTimeNode, "line", 200,
           shapeMeta(modeOverTimeNode)?.dominant_n != null
-            ? `best-fit toroidal n(t) @ ${shapeMeta(modeOverTimeNode)?.f_kHz} kHz · dominant n≈${shapeMeta(modeOverTimeNode)!.dominant_n}`
+            ? `n of the strongest mode (freq follows the ridge${
+                Array.isArray(shapeMeta(modeOverTimeNode)?.f_range_kHz)
+                  ? `, ${(shapeMeta(modeOverTimeNode)!.f_range_kHz as unknown as number[]).join("–")} kHz`
+                  : ""}) · dominant n≈${shapeMeta(modeOverTimeNode)!.dominant_n}`
             : "best-fit toroidal n over time")}
       </div>
     </div>
