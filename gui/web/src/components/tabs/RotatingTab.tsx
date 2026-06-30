@@ -114,6 +114,9 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [pestLambda2, setPestLambda2] = useState<number>(0.05);
   const [btCompMode, setBtCompMode] = useState<"none" | "analog" | "digital">("digital");
   const [shieldingCutoff, setShieldingCutoff] = useState<number>(50); // 3dB shielding cutoff in kHz
+  // θ origin (deg) for the 2D modal pattern: pans the periodic poloidal axis so this
+  // angle sits at the plot's origin. Default 90° (top of the machine).
+  const [patternCut, setPatternCut] = useState<number>(90);
 
   // Resizable layout dimensions
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -670,6 +673,23 @@ export default function RotatingTab({ machine }: { machine: string }) {
       meta: { n_fit: n },
     };
   }, [live, hasStaticFiles, phaseNode, probePhi1, probePhi2, btCompMode, gateFrac]);
+
+  // 2D modal pattern with the θ (poloidal) axis re-centred on `patternCut`. θ is
+  // periodic, so we roll the rows so the cut angle sits at the origin and the axis
+  // runs continuously cut … cut+360; the probe-dot overlay is shifted to match. Pure
+  // view transform on the real node — no refetch, so the slider is instant.
+  const processedPatternNode = useMemo(() => {
+    if (!modePatternNode || modePatternNode.kind !== "contour") return modePatternNode;
+    const { y, z, overlay } = modePatternNode;
+    const i = y.findIndex((v) => v >= patternCut);
+    if (i <= 0) return modePatternNode;  // already at/below the origin → no roll
+    const newY = [...y.slice(i), ...y.slice(0, i).map((v) => v + 360)];
+    const newZ = [...z.slice(i), ...z.slice(0, i)];
+    const newOverlay = overlay
+      ? { ...overlay, points: overlay.points.map((p) => ({ ...p, y: p.y >= patternCut ? p.y : p.y + 360 })) }
+      : overlay;
+    return { ...modePatternNode, y: newY, z: newZ, overlay: newOverlay };
+  }, [modePatternNode, patternCut]);
 
   // --- 3. RENDER SUB-COMPONENTS ---
   const renderSpectrogram = () => {
@@ -1495,9 +1515,33 @@ export default function RotatingTab({ machine }: { machine: string }) {
         {analysisCard("Poloidal Mode Shape", poloidalShapeNode, "line", 220,
           shapeMeta(poloidalShapeNode)?.f_kHz != null
             ? `GP fit ±2σ · markers = probes @ ${shapeMeta(poloidalShapeNode)!.f_kHz} kHz` : "GP fit ±2σ")}
-        {analysisCard("2D Modal Pattern (θ, φ)", modePatternNode, "contour", 260,
-          shapeMeta(modePatternNode)?.f_kHz != null
-            ? `Re{poloidal ⊗ toroidal}, eq 23 @ ${shapeMeta(modePatternNode)!.f_kHz} kHz` : "eigspec eq 23")}
+        {processedPatternNode && processedPatternNode.kind === "contour" && (
+          <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
+            <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+              2D Modal Pattern (θ, φ)
+              <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}>
+                {" · "}
+                {shapeMeta(modePatternNode)?.f_kHz != null
+                  ? `Re{poloidal ⊗ toroidal}, eq 23 @ ${shapeMeta(modePatternNode)!.f_kHz} kHz` : "eigspec eq 23"}
+              </span>
+            </h4>
+            <div
+              style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "10px", color: "var(--text-dim)" }}
+              title="Pans the periodic θ (poloidal) axis so this angle sits at the plot origin."
+            >
+              <span style={{ whiteSpace: "nowrap" }}>θ origin</span>
+              <input
+                type="range" min={0} max={360} step={2} value={patternCut}
+                onChange={(e) => setPatternCut(Number(e.target.value))}
+                style={{ flex: 1 }}
+              />
+              <span style={{ width: "36px", textAlign: "right", color: "var(--text)" }}>{patternCut}°</span>
+            </div>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <NodeView node={processedPatternNode} height={260} />
+            </div>
+          </div>
+        )}
         {analysisCard("Mode Persistence", modeTrackNode, "line", 200,
           shapeMeta(modeTrackNode)?.dominant_n != null
             ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`
