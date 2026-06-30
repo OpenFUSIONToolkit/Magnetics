@@ -122,3 +122,16 @@ def load_channel(shot: str | int, name: str):
             raise KeyError(f"channel {name!r} not in shot {shot}")
         g = h5[name]
         return np.asarray(g["time"][:]), np.asarray(g["data"][:])
+
+
+def load_data(shot: str | int, name: str):
+    """Return the data array (float32) for one channel, without reading its time.
+
+    Callers that need only the signal (e.g. stacking many channels that share one
+    clock) avoid materializing every channel's time vector — the time axis is ~2x
+    the signal here, so reading it per channel is the dominant needless cost.
+    """
+    with h5py.File(shot_file(shot), "r") as h5:
+        if name not in h5:
+            raise KeyError(f"channel {name!r} not in shot {shot}")
+        return np.asarray(h5[name]["data"][:])
