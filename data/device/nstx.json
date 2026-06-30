@@ -1,0 +1,506 @@
+{
+ "name": "NSTX-U",
+ "R0": 0.934,
+ "gateway": "flux.pppl.gov",
+ "server": "skylark.pppl.gov:8501",
+ "access": "mdsplus_tree",
+ "tree": "fastmag",
+ "note": "NSTX-U (shot >= 200000) magnetics. Sensor toroidal (phi) and poloidal (theta) ANGLES and gain/na calibration are authoritative, parsed from the shot-indexed NSTX config files /u/eric/nstx/mm/ (here: 204a_hf.txt + 2015a_hn.mm, for shots ~204203-204770) via OMFIT get_bdot_info_NSTX.py. r,z are APPROXIMATE (placed at minor radius 0.62 m about R0 from the poloidal angle) for the cross-section view only. Geometry is shot-indexed: see config_hf.mm / config_hn.mm for other shot ranges (NSTX < 200000 uses a different hf row format with no time-delay column). Sensor keys are the MDSplus 'fastmag' tree node paths used directly as the fetch TDI; calibrated signal = raw * gain / na. Fetch is tree-based (openTree), NOT PTDATA.",
+ "wall": {
+  "r": [
+   0.3148,
+   0.3148,
+   0.415,
+   0.415,
+   0.5715,
+   0.617,
+   1.194,
+   1.0433,
+   1.3192,
+   1.3358,
+   1.4851,
+   1.4791,
+   1.5174,
+   1.5313,
+   1.5464,
+   1.5608,
+   1.567,
+   1.5657,
+   1.5543,
+   1.5341,
+   1.5181,
+   1.4818,
+   1.4851,
+   1.3358,
+   1.3192,
+   1.0433,
+   1.194,
+   0.617,
+   0.5715,
+   0.415,
+   0.415,
+   0.3148,
+   0.3148,
+   0.3148
+  ],
+  "z": [
+   0.0,
+   1.05,
+   1.27,
+   1.6234,
+   1.6234,
+   1.628,
+   1.401,
+   1.43,
+   1.0397,
+   0.9976,
+   0.545,
+   0.4995,
+   0.306,
+   0.2355,
+   0.1586,
+   0.0801,
+   0.0,
+   -0.0177,
+   -0.1123,
+   -0.221,
+   -0.3026,
+   -0.486,
+   -0.545,
+   -0.9976,
+   -1.0397,
+   -1.43,
+   -1.401,
+   -1.628,
+   -1.6234,
+   -1.6234,
+   -1.27,
+   -1.05,
+   0.0,
+   0.0
+  ]
+ },
+ "plasma pointnames": {
+  "current": {
+   "name": "ipmeas",
+   "tree": "efit01",
+   "node": "\\EFIT01::TOP.RESULTS.AEQDSK:IPMEAS"
+  },
+  "toroidal field": {
+   "name": "bt0",
+   "tree": "efit01",
+   "node": "\\EFIT01::TOP.RESULTS.AEQDSK:BT0"
+  },
+  "elongation": {
+   "name": "kappa",
+   "tree": "efit01",
+   "node": "\\EFIT01::TOP.RESULTS.AEQDSK:KAPPA"
+  }
+ },
+ "sensors": {
+  "\\top.mirnov.rawdata:fm_dt216_01:input_15": {
+   "r": 1.4898,
+   "z": 0.2747,
+   "phi": 351.4,
+   "theta": 26.3,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": 0.99,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_15"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_13": {
+   "r": 1.4883,
+   "z": 0.2778,
+   "phi": 338.6,
+   "theta": 26.62,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -0.9,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_13"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_12": {
+   "r": 1.4891,
+   "z": 0.2761,
+   "phi": 268.2,
+   "theta": 26.44,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": 1.0,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_12"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_11": {
+   "r": 1.4902,
+   "z": 0.274,
+   "phi": 260.7,
+   "theta": 26.23,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.02,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_11"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_09": {
+   "r": 1.4912,
+   "z": 0.2719,
+   "phi": 176.5,
+   "theta": 26.01,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -0.98,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_09"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_08": {
+   "r": 1.4898,
+   "z": 0.2748,
+   "phi": 171.4,
+   "theta": 26.31,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": 1.07,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_08"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_06": {
+   "r": 1.4897,
+   "z": 0.275,
+   "phi": 158.6,
+   "theta": 26.33,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.1,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_06"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_05": {
+   "r": 1.4902,
+   "z": 0.2739,
+   "phi": 153.0,
+   "theta": 26.22,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": 1.02,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_05"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_14": {
+   "r": 1.4879,
+   "z": 0.2786,
+   "phi": 345.0,
+   "theta": 26.7,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.11,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_14"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_10": {
+   "r": 1.4873,
+   "z": 0.2798,
+   "phi": 254.3,
+   "theta": 26.83,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.15,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_10"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_07": {
+   "r": 1.4906,
+   "z": 0.2732,
+   "phi": 165.0,
+   "theta": 26.14,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.13,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_07"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_04": {
+   "r": 1.536,
+   "z": 0.1483,
+   "phi": 153.0,
+   "theta": 13.84,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -0.98,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_04"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_03": {
+   "r": 1.554,
+   "z": 0.0004,
+   "phi": 153.0,
+   "theta": 0.04,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.03,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_03"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_02": {
+   "r": 1.5365,
+   "z": -0.1464,
+   "phi": 153.0,
+   "theta": -13.66,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -1.0,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_02"
+  },
+  "\\top.mirnov.rawdata:fm_dt216_01:input_01": {
+   "r": 1.4914,
+   "z": -0.2715,
+   "phi": 153.0,
+   "theta": -25.97,
+   "kind": "Bp",
+   "array": "hf",
+   "gain": -0.94,
+   "na": 0.00321,
+   "node": "\\top.mirnov.rawdata:fm_dt216_01:input_01"
+  },
+  "\\bdot_l1dmivvhn3_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 29.8,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn3_raw"
+  },
+  "\\bdot_l1dmivvhn2_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 49.9,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn2_raw"
+  },
+  "\\bdot_l1dmivvhn1_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 59.9,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn1_raw"
+  },
+  "\\bdot_l1dmivvhn16_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 160.0,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn16_raw"
+  },
+  "\\bdot_l1dmivvhn15_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 165.0,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn15_raw"
+  },
+  "\\bdot_l1dmivvhn14_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 170.0,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn14_raw"
+  },
+  "\\bdot_l1dmivvhn13_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 254.6,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn13_raw"
+  },
+  "\\bdot_l1dmivvhn12_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 258.1,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn12_raw"
+  },
+  "\\bdot_l1dmivvhn11_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 261.6,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn11_raw"
+  },
+  "\\bdot_l1dmivvhn10_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 292.5,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn10_raw"
+  },
+  "\\bdot_l1dmivvhn9_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 295.9,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": -1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn9_raw"
+  },
+  "\\bdot_l1dmivvhn8_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 299.4,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": -1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn8_raw"
+  },
+  "\\bdot_l1dmivvhn7_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 302.8,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn7_raw"
+  },
+  "\\bdot_l1dmivvhn6_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 339.5,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn6_raw"
+  },
+  "\\bdot_l1dmivvhn5_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 344.8,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn5_raw"
+  },
+  "\\bdot_l1dmivvhn4_raw": {
+   "r": 1.4512,
+   "z": -0.3419,
+   "phi": 349.9,
+   "theta": -33.47,
+   "kind": "Bp",
+   "array": "hn",
+   "gain": 1.0,
+   "na": 0.0052,
+   "node": "\\bdot_l1dmivvhn4_raw"
+  }
+ },
+ "sensor_sets": {
+  "HF toroidal array": {
+   "type": "list",
+   "sensors": [
+    "\\top.mirnov.rawdata:fm_dt216_01:input_15",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_13",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_12",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_11",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_09",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_08",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_06",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_05",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_14",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_10",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_07"
+   ]
+  },
+  "HF poloidal array": {
+   "type": "list",
+   "sensors": [
+    "\\top.mirnov.rawdata:fm_dt216_01:input_05",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_04",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_03",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_02",
+    "\\top.mirnov.rawdata:fm_dt216_01:input_01"
+   ]
+  },
+  "HF all": {
+   "type": "composite",
+   "sets": [
+    "HF toroidal array",
+    "HF poloidal array"
+   ]
+  },
+  "HN toroidal array": {
+   "type": "list",
+   "sensors": [
+    "\\bdot_l1dmivvhn3_raw",
+    "\\bdot_l1dmivvhn2_raw",
+    "\\bdot_l1dmivvhn1_raw",
+    "\\bdot_l1dmivvhn16_raw",
+    "\\bdot_l1dmivvhn15_raw",
+    "\\bdot_l1dmivvhn14_raw",
+    "\\bdot_l1dmivvhn13_raw",
+    "\\bdot_l1dmivvhn12_raw",
+    "\\bdot_l1dmivvhn11_raw",
+    "\\bdot_l1dmivvhn10_raw",
+    "\\bdot_l1dmivvhn9_raw",
+    "\\bdot_l1dmivvhn8_raw",
+    "\\bdot_l1dmivvhn7_raw",
+    "\\bdot_l1dmivvhn6_raw",
+    "\\bdot_l1dmivvhn5_raw",
+    "\\bdot_l1dmivvhn4_raw"
+   ]
+  },
+  "All Mirnov": {
+   "type": "composite",
+   "sets": [
+    "HF all",
+    "HN toroidal array"
+   ]
+  }
+ }
+}
