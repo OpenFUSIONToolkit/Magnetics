@@ -267,16 +267,39 @@ def _fit_quality(shot, params=None) -> dict:
                                            "χ² pending the full fit"})
 
 
+# ── auto analysis frequency: the dominant mode at the cursor (so shapes track it) ─
+def _auto_freq_khz(shot, t0_ms=None, fmin=1.0, fmax=25.0):
+    """Peak-power frequency (kHz, rounded to 1 kHz for cache stability) at the cursor
+    time from the cached 2-probe spectrogram — so the phase fit / mode shape follow the
+    mode as the user scrubs, instead of sitting at a fixed frequency that misses it.
+    Global peak when no cursor. Falls back to 5 kHz if the spectrogram is unavailable."""
+    try:
+        res, _probes, _dphi = _spec_result(str(shot), 0.001, 5)
+    except Exception:  # noqa: BLE001
+        return 5.0
+    f_khz = np.asarray(res.frequency) / 1e3
+    band = (f_khz >= fmin) & (f_khz <= fmax)
+    if not np.any(band):
+        return 5.0
+    power = np.asarray(res.power, dtype=float)
+    if t0_ms is None:
+        col = power[:, band].mean(axis=0)
+    else:
+        ti = int(np.argmin(np.abs(np.asarray(res.time) * 1e3 - t0_ms)))
+        col = power[ti, band]
+    return round(float(f_khz[band][int(np.argmax(col))]))
+
+
 # ── batched full-array STFT, computed once per (shot, array, f) and cached ─────
-@lru_cache(maxsize=12)
-def _array_spectrum(shot, names, f_khz):
-    """One full-array STFT for a fixed (shot, probe set, frequency) — the expensive
-    step. Every cursor position then reads the complex array pattern out of this by
-    indexing (``mode_from_spectrum``), so scrubbing is array-fast, not 40 cross-spectra
-    per move. ``names`` is a tuple so the call is hashable; cleared by ``refresh``."""
+@lru_cache(maxsize=4)
+def _array_spectrum(shot, names):
+    """One full-array STFT over the 1–25 kHz band for a fixed (shot, probe set) — the
+    expensive step. Every cursor position AND frequency then reads the complex array
+    pattern out of this by indexing (``mode_from_spectrum``), so both scrubbing and
+    mode-frequency changes are array-fast with no rebuild. ``names`` is a tuple so the
+    call is hashable; cleared by ``refresh``."""
     t_ms, mat = _stack(shot, names)
-    return spectral.array_shape_spectrum(
-        mat, np.asarray(t_ms, dtype=float) * 1e-3, f_khz * 1e3)
+    return spectral.array_shape_spectrum(mat, np.asarray(t_ms, dtype=float) * 1e-3)
 
 
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
@@ -290,13 +313,15 @@ def _toroidal_arr(shot):
 def _toroidal_mode(shot, params):
     """Per-probe phase/amplitude (+1σ) across the toroidal array at one frequency,
     honoring the GUI time cursor. Returns (arr, mode, f_khz, t0_ms)."""
-    f_khz = _f(params, "f_khz", 5.0)
     t0_ms = _f(params, "time", None)              # GUI cursor (ms)
+    f_khz = _f(params, "f_khz", None)             # explicit, else track the mode
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _toroidal_arr(str(shot))
     phis = np.array([p for _, p in arr], dtype=float)
-    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr), f_khz)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
-    mode = spectral.mode_from_spectrum(spec, phis, t0_s)
+    mode = spectral.mode_from_spectrum(spec, phis, t0_s, f_khz * 1e3)
     return arr, mode, f_khz, t0_ms
 
 
@@ -367,13 +392,15 @@ def _poloidal_arr(shot):
 def _poloidal_mode(shot, params):
     """Per-probe phase/amplitude across the poloidal array at one frequency, using
     the real published θ. Returns (arr, mode, f_khz, t0_ms)."""
-    f_khz = _f(params, "f_khz", 5.0)
     t0_ms = _f(params, "time", None)
+    f_khz = _f(params, "f_khz", None)
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _poloidal_arr(str(shot))
     thetas = np.array([th for _, th in arr], dtype=float)
-    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr), f_khz)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
-    mode = spectral.mode_from_spectrum(spec, thetas, t0_s)
+    mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
     return arr, mode, f_khz, t0_ms
 
 
@@ -422,11 +449,13 @@ def _mode_track(shot, params=None) -> dict:
     similarity to the strongest-mode reference slice vs time (eigspec fig 9). A
     sustained high MAC marks a persistent mode; drops mark mode changes. Reads the
     cached full-array STFT, so it's cheap once the spectrum exists."""
-    f_khz = _f(params, "f_khz", 5.0)
+    f_khz = _f(params, "f_khz", None)
+    if f_khz is None:
+        f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
     arr = _toroidal_arr(str(shot))
     phis = np.array([p for _, p in arr], dtype=float)
-    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr), f_khz)
-    tr = mode_shape.track_from_spectrum(spec, phis)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3)
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
     series = [{"name": "shape MAC to ref", "x": tr.t_ms.tolist(),
                "y": tr.mac_to_ref.tolist()}]

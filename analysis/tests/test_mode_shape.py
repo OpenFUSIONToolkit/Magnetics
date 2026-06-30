@@ -248,3 +248,27 @@ class TestModeTracking:
         sigs, phi, t = self._array()
         tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=20)
         assert abs(int(np.median(tr.n_by_time[tr.t_ms < 25.0]))) == 2
+
+
+class TestGPScaleInvariance:
+    def test_large_magnitude_shape_not_flattened(self):
+        # real probe shapes are ~1e5, not ~1; the GP must normalize internally or the
+        # unit-variance kernel reads the signal as noise and collapses the mean to 0
+        rng = np.random.default_rng(0)
+        phi = np.sort(rng.uniform(0, 360, 14))
+        scale = 3.0e5
+        z = scale * np.exp(1j * np.deg2rad(1 * phi))      # n=1 mode, huge magnitude
+        ms = gp_mode_shape(phi, z)
+        assert np.ptp(ms.re_mean) > 0.5 * np.ptp(z.real)  # shape recovered, not flat
+        # band should be small relative to the signal for a clean mode
+        assert np.median(2 * ms.re_sigma) < np.ptp(ms.re_mean)
+
+    def test_scale_invariant_recovery(self):
+        # the recovered shape (normalized) is the same whether data is O(1) or O(1e6)
+        phi = np.linspace(0, 330, 12)
+        base = np.exp(1j * np.deg2rad(2 * phi))
+        a = gp_mode_shape(phi, base)
+        b = gp_mode_shape(phi, 1e6 * base)
+        ra = a.re_mean / (np.ptp(a.re_mean) + 1e-12)
+        rb = b.re_mean / (np.ptp(b.re_mean) + 1e-12)
+        np.testing.assert_allclose(ra, rb, atol=0.05)

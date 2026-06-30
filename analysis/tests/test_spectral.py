@@ -470,11 +470,11 @@ class TestArrayShapeSpectrum:
     def test_spectrum_shape(self):
         from magnetics.core.spectral import array_shape_spectrum
         sigs, phi, t = self._array()
-        spec = array_shape_spectrum(sigs, t, 8000.0, n_band=5)
+        spec = array_shape_spectrum(sigs, t, fmin=2000, fmax=12000)
         assert spec.spec.shape[0] == phi.size            # one row per probe
-        assert spec.spec.shape[2] == 5                   # kept band width
         assert spec.spec.shape[1] == spec.time.size
-        assert abs(spec.frequency - 8000.0) < 500.0
+        assert spec.spec.shape[2] == spec.freq_band.size  # kept [fmin,fmax] band
+        assert spec.freq_band.min() >= 1000 and spec.freq_band.max() <= 13000
 
     def test_matches_extract_mode_at_frequency(self):
         # the fast path must agree with the slow per-cursor extraction on n and phase
@@ -488,8 +488,8 @@ class TestArrayShapeSpectrum:
         t0 = 0.025
         slow = extract_mode_at_frequency(sigs, phi, t, frequency=8000.0,
                                          t_range=(t0 - 0.001, t0 + 0.001))
-        spec = array_shape_spectrum(sigs, t, 8000.0)
-        fast = mode_from_spectrum(spec, phi, t0)
+        spec = array_shape_spectrum(sigs, t)             # default 1–25 kHz band
+        fast = mode_from_spectrum(spec, phi, t0, 8000.0)
         assert fit_toroidal_mode(fast).n == fit_toroidal_mode(slow).n
         d = ((fast.phase - slow.phase + 180) % 360) - 180
         assert np.sqrt(np.mean(d**2)) < 10.0             # phases agree within ~deg

@@ -206,14 +206,22 @@ def gp_mode_shape(
     Pass ``value_noise`` (per-probe 1σ, e.g. from :func:`shape_noise`) to fix the noise
     diagonal from the measured uncertainty and tune only the length scale — this
     calibrates the band instead of letting the marginal likelihood guess one noise.
+
+    The shape is normalized to unit RMS before the GP (Olofsson 2014 regularizes the
+    *unit* shape vector) — the periodic kernel has unit variance, so without this a
+    physical-magnitude shape (~10^5 on real probes) reads as all-noise and collapses
+    to zero. Outputs are rescaled back to the input units.
     """
     angle_deg = np.asarray(angle_deg, dtype=np.float64)
     z = np.asarray(complex_shape, dtype=np.complex128)
-    re, im = z.real.copy(), z.imag.copy()
+    scale = float(np.sqrt(np.mean(np.abs(z) ** 2)))
+    if scale <= 0.0:
+        scale = 1.0
+    re, im = (z.real / scale).copy(), (z.imag / scale).copy()
     grid = np.linspace(0.0, 360.0, n_grid, endpoint=False)
 
     if value_noise is not None:
-        noise_var = np.asarray(value_noise, dtype=np.float64) ** 2
+        noise_var = (np.asarray(value_noise, dtype=np.float64) / scale) ** 2
         ls = _optimize_length_scale(angle_deg, [re, im], noise_var) if optimize else 1.0
         nz_report = float(np.sqrt(np.median(noise_var)))
     else:
@@ -229,11 +237,11 @@ def gp_mode_shape(
     return ModeShapeResult(
         kind="mode_shape",
         grid_deg=grid,
-        re_mean=re_mean, re_sigma=re_sigma,
-        im_mean=im_mean, im_sigma=im_sigma,
-        amplitude=np.hypot(re_mean, im_mean),
-        angle_deg=angle_deg, re_obs=re, im_obs=im,
-        length_scale=float(ls), noise=nz_report,
+        re_mean=re_mean * scale, re_sigma=re_sigma * scale,
+        im_mean=im_mean * scale, im_sigma=im_sigma * scale,
+        amplitude=np.hypot(re_mean, im_mean) * scale,
+        angle_deg=angle_deg, re_obs=re * scale, im_obs=im * scale,
+        length_scale=float(ls), noise=nz_report * scale,
     )
 
 
@@ -347,6 +355,7 @@ def track_mode_shape(
 def track_from_spectrum(
     spectrum,
     angle_deg: NDArray[np.floating],
+    frequency: float,
     *,
     n_slices: int = 60,
     ref_time_s: float | None = None,
@@ -362,7 +371,7 @@ def track_from_spectrum(
 
     shapes, ns, strength = [], [], []
     for ti in idx:
-        mode = mode_from_spectrum(spectrum, angle_deg, float(times[ti]))
+        mode = mode_from_spectrum(spectrum, angle_deg, float(times[ti]), frequency)
         shapes.append(shape_vector(mode.phase, mode.amplitude))
         ns.append(fit_toroidal_mode(mode, n_range=n_range).n)
         strength.append(float(np.sum(np.abs(mode.amplitude))))
@@ -379,7 +388,7 @@ def track_from_spectrum(
         mac_to_ref=macs,
         n_by_time=np.array(ns, dtype=int),
         ref_t_ms=float(centers[ref_idx] * 1e3),
-        frequency=float(spectrum.frequency),
+        frequency=float(frequency),
     )
 
 
