@@ -104,29 +104,6 @@ def _build_sets(raw: dict) -> list[dict]:
     return out
 
 
-def _synth_sets(sensors: list[dict]) -> list[dict]:
-    """Stand-in sensor_sets for the bundled fallback (no curated sets): one
-    'All <kind>' roll-up per kind, then one set per family/array."""
-    by_kind: dict[str, list[str]] = {}
-    by_family: dict[str, list[str]] = {}
-    for s in sensors:
-        by_kind.setdefault(s["kind"], []).append(s["name"])
-        by_family.setdefault(s["family"], []).append(s["name"])
-    out = [{"name": f"All {k}", "kind": k, "count": len(v), "sensors": v}
-           for k, v in by_kind.items()]
-    out += [{"name": fam, "kind": _kind(fam), "count": len(v), "sensors": v}
-            for fam, v in by_family.items()]
-    return out
-
-
-def _from_bundled() -> dict:
-    sensors = load_sensors()
-    return {"device": "DIII-D", "sensors": sensors,
-            "wall": _fallback_wall(), "arrays": _arrays(sensors),
-            "sensor_sets": _synth_sets(sensors)}
-
-
-# ── shared ───────────────────────────────────────────────────────────────────
 def _arrays(sensors: list[dict]) -> list[dict]:
     """One summary row per family, in first-seen order."""
     seen: dict[str, dict] = {}
