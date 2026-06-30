@@ -21,7 +21,10 @@ export default function PullControl() {
   const [backend, setBackend] = useState("remote");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [duo, setDuo] = useState("1");
+  // Duo two-factor: a push (sends "1") or a typed passcode. A dropdown makes the
+  // choice explicit; the passcode box only appears when "passcode" is selected.
+  const [duoMode, setDuoMode] = useState<"push" | "passcode">("push");
+  const [duoPasscode, setDuoPasscode] = useState("");
   // Prefill a sensible DIII-D flat-top window (ms): transfer time is linear in the
   // samples pulled, so cropping the default ~5 s shot to its active window roughly
   // halves the wire payload. Visible + editable (not a silent backend crop, which
@@ -69,7 +72,7 @@ export default function PullControl() {
         backend,
         username: username || undefined,
         password: password || undefined,
-        duo: duo || undefined,
+        duo: duoMode === "push" ? "1" : duoPasscode || undefined,
         tmin: num(tmin),
         tmax: num(tmax),
         decimate: num(decimate),
@@ -170,7 +173,7 @@ export default function PullControl() {
       {needsCreds && (
         <>
           <div className="note pull-hint">
-            leave password/Duo blank if your SSH key (ssh-config alias) is set up
+            leave password blank if your SSH key (ssh-config alias) is set up
           </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -179,9 +182,17 @@ export default function PullControl() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="GA password (blank if key auth)"
             autoComplete="current-password" />
-          <input className="pull-input" value={duo}
-            onChange={(e) => setDuo(e.target.value)}
-            placeholder="Duo: 1 = push, or passcode" />
+          <div className="note pull-hint">Duo two-factor</div>
+          <select className="pull-input" value={duoMode} aria-label="Duo authentication"
+            onChange={(e) => setDuoMode(e.target.value as "push" | "passcode")}>
+            <option value="push">Push notification</option>
+            <option value="passcode">Enter passcode…</option>
+          </select>
+          {duoMode === "passcode" && (
+            <input className="pull-input" value={duoPasscode}
+              onChange={(e) => setDuoPasscode(e.target.value)}
+              placeholder="Duo passcode" inputMode="numeric" autoComplete="one-time-code" />
+          )}
         </>
       )}
       <button className="pull-btn" disabled={busy} onClick={pull}>

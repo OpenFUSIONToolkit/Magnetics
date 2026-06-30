@@ -2,33 +2,34 @@
 #
 # One command to run the GUI.
 #
-# The working GUI runs on STATIC mock data (gui/web/public/mock/) — no backend
-# needed. Live streaming from the FastAPI service is a stub for now, behind --live.
+# DEFAULT is LIVE: the GUI talks to the real FastAPI service, and NO mock data is
+# served or renderable in this mode. The rotating-mode (MODESPEC) path serves real
+# analysis from fetched shots; the quasi-stationary fit stream is still a stub. Use
+# `static` only for offline frontend work against the demo fixtures.
 #
-#   ./run.sh           static  — GUI on :5173, reads static mock data (default)
-#   ./run.sh --live    stub    — also start the FastAPI service and point the GUI
-#                                 at it (live streaming; currently a stub)
+#   ./run.sh           live    — FastAPI service (:8000) + GUI (:5173) against it (default)
+#   ./run.sh static    demo    — GUI on :5173 only, STATIC mock fixtures (no backend)
 #   ./run.sh --prod    deploy  — build the GUI and serve it on one port (:8000)
 #
-# Press Ctrl-C to stop. Prereqs: Node.js 22 (and uv, for --live/--prod).
+# Press Ctrl-C to stop. Prereqs: Node.js 22 + uv (uv only needed for live/--prod).
 
 set -euo pipefail
 cd "$(dirname "$0")"
-MODE="${1:-static}"
+MODE="${1:-live}"
 
 echo "▶ ensuring GUI deps (npm)…"
 [ -d gui/web/node_modules ] || ( cd gui/web && npm install )
 
 case "$MODE" in
-  static|dev|"")
+  static|--static|dev)
     echo ""
-    echo "  ✓ open  http://localhost:5173   (GUI, hot-reload; STATIC mock data)"
+    echo "  ✓ open  http://localhost:5173   (GUI, hot-reload; STATIC mock fixtures — demo only)"
     echo ""
     cd gui/web
     exec npm run dev
     ;;
 
-  --live|live)
+  --live|live|"")
     echo "▶ syncing Python deps (uv)…"
     ( cd analysis && uv sync --extra service --quiet )
     echo "▶ starting service (:8000) + GUI dev server (:5173)…"
@@ -38,7 +39,7 @@ case "$MODE" in
     GUI_PID=$!
     trap 'echo; echo "▶ stopping…"; kill "$SERVICE_PID" "$GUI_PID" 2>/dev/null || true' EXIT INT TERM
     echo ""
-    echo "  ✓ open  http://localhost:5173   (GUI live against :8000 — live streaming is a stub)"
+    echo "  ✓ open  http://localhost:5173   (GUI LIVE against :8000 — no mock data)"
     echo ""
     wait
     ;;
@@ -56,7 +57,7 @@ case "$MODE" in
     ;;
 
   *)
-    echo "usage: ./run.sh [--live | --prod]" >&2
+    echo "usage: ./run.sh [live | static | --prod]" >&2
     exit 2
     ;;
 esac
