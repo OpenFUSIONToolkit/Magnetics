@@ -142,166 +142,24 @@ def uband(x, y, yerr, ax=None, label=None, color=None, **kwargs):
 
 
 # --------------------------------------------------------------------------- #
-# Device reference data (sensor geometry tables / wall / channel filters)
+# Device reference data (sensor geometry / wall / named subsets)
 # --------------------------------------------------------------------------- #
-# These reference tables are bundled with this package under ./DATA/<device>/,
-# so nothing here depends on any sibling directory at runtime.
+# All device metadata now comes from the project-canonical ``data/device/<slug>.json``
+# (e.g. ``diiid.json``), replacing the old bundled ``DATA/<device>/*.txt`` tables.
+# That single JSON carries ``R0``, the first-wall outline, the per-sensor base
+# geometry and the named ``sensor_sets`` used to resolve a ``channel_filter``.
+
+import json
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-#: Root of the bundled device reference tables (see DATA/README.md for provenance).
-DATA_DIR = os.path.join(_THIS_DIR, "DATA")
+#: Root of the canonical device files (repo ``data/device/``; this file lives in
+#: ``analysis/magnetics-code/``, so it is two levels up).
+DEVICE_DIR = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", "data", "device"))
 
+#: Explicit device-name -> json-filename overrides; otherwise slugified.
+_DEVICE_FILE = {"DIII-D": "diiid.json"}
 
-def device_data_dir(device):
-    """Directory holding the reference tables for ``device`` (e.g. 'DIII-D')."""
-    return os.path.join(DATA_DIR, str(device))
-
-
-def _extract_quoted(s):
-    """All single-quoted tokens on a line, in order."""
-    return re.findall(r"'([^']*)'", s)
-
-
-def _load_named_filters(path):
-    """Parse a ``name = 'regex' ['regex' ...]`` table into ``{name: [regex, ...]}``.
-
-    Handles the line-continuation used for multi-array filters (a wrapped line
-    with no ``=`` continues the previous entry).
-    """
-    out = {}
-    last = None
-    with open(path) as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            if "=" in line:
-                name, rhs = line.split("=", 1)
-                last = name.strip()
-                out[last] = _extract_quoted(rhs)
-            elif last is not None:
-                out[last] += _extract_quoted(line)
-    return out
-
-
-def load_channel_filters(device="DIII-D"):
-    """Named **sensor** subsets from ``channel_filters.txt`` -> ``{name: [regex, ...]}``."""
-    return _load_named_filters(os.path.join(device_data_dir(device), "channel_filters.txt"))
-
-
-def load_coil_filters(device="DIII-D"):
-    """Named **3D-coil** subsets from ``coil_filters.txt`` -> ``{name: [regex, ...]}``."""
-    return _load_named_filters(os.path.join(device_data_dir(device), "coil_filters.txt"))
-
-
-def list_sensor_subsets(device="DIII-D"):
-    """All named sensor + coil subsets, merged -> ``{name: [regex, ...]}``.
-
-    This is the discoverability entry point: every key here is a valid
-    ``channel_filter`` argument.
-    """
-    subsets = load_channel_filters(device)
-    subsets.update(load_coil_filters(device))
-    return subsets
-
-
-def resolve_channel_filter(channel_filter, device="DIII-D"):
-    """Map a friendly subset name (e.g. ``'Bp_LFS_midplane'``, ``'3D_coils'``) to its regex list.
-
-    Consults both the sensor and coil subset tables.  If ``channel_filter`` is
-    already a regex (or list of regexes), it is returned unchanged as a list.
-    """
-    filters = list_sensor_subsets(device)
-    if isinstance(channel_filter, str):
-        if channel_filter in filters:
-            return list(filters[channel_filter])
-        return [channel_filter]
-    # a list/tuple: expand any known names, pass through the rest
-    out = []
-    for cf in channel_filter:
-        out += filters.get(cf, [cf])
-    return out
-
-
-def load_channel_alternates(device="DIII-D"):
-    """new -> old PTDATA channel-name map from ``channel_alternates.txt``.
-
-    Used in OMFIT as an MDSplus name fallback; unused locally but kept for
-    posterity / reference.
-    """
-    path = os.path.join(device_data_dir(device), "channel_alternates.txt")
-    out = {}
-    with open(path) as fh:
-        for line in fh:
-            if "=" not in line:
-                continue
-            name, rhs = line.split("=", 1)
-            quoted = _extract_quoted(rhs)
-            if quoted:
-                out[name.strip()] = quoted[0]
-    return out
-
-
-def load_sensor_table(device="DIII-D"):
-    """Master sensor geometry table (``diiid_sensors.txt``) as an ``xarray.Dataset``.
-
-    Columns: ``r, z, phi, tilt, length, delta_phi, na, pair`` indexed by
-    ``channel``.  This mirrors what ``init_magnetics.py`` starts from (minus the
-    derived ``*_end1/2`` coordinates).
-
-    Reference loader only — the local pipeline reads geometry from the RAW
-    netCDF, not this table.  Deriving the ``*_end`` coordinates from this table
-    (the ``init`` step) is future work, useful only if a shot file ever lacks
-    geometry.
-    """
-    import numpy as np
-    import xarray as xr
-
-    path = os.path.join(device_data_dir(device), "diiid_sensors.txt")
-    numeric = ["r", "z", "phi", "tilt", "length", "delta_phi", "na"]
-    channels, rows, pairs = [], [], []
-    with open(path) as fh:
-        header = fh.readline().split()  # channel r z phi tilt length delta_phi na pair
-        cols = header[1:]
-        for line in fh:
-            tok = line.split()
-            if len(tok) < len(header):
-                continue
-            channels.append(tok[0])
-            vals = dict(zip(cols, tok[1:]))
-            rows.append([_to_float(vals[c]) for c in numeric])
-            pairs.append(vals.get("pair", "None"))
-    arr = np.array(rows, dtype=float)
-    ds = xr.Dataset(
-        {name: ("channel", arr[:, i]) for i, name in enumerate(numeric)},
-        coords={"channel": channels},
-    )
-    ds["pair"] = ("channel", np.array(pairs, dtype=object))
-    ds.attrs["device"] = device
-    return ds
-
-
-def load_bdot_table(device="DIII-D"):
-    """Bdot sensor positions/sizes (``diiid_bdots.txt``) as a list of dicts.
-
-    Tolerant best-effort parse: skips the 2 header lines, ignores the irregular
-    ``id``/``d`` flag column, and returns one record per sensor with its name and
-    the numeric ``R, Z, tor, tilt, L, W, NA`` it could read.  Reference only.
-    """
-    path = os.path.join(device_data_dir(device), "diiid_bdots.txt")
-    fields = ["R", "Z", "tor", "tilt", "L", "W", "NA"]
-    out = []
-    with open(path) as fh:
-        lines = fh.readlines()[2:]  # drop the 2 header rows
-    for line in lines:
-        tok = line.split()
-        if not tok:
-            continue
-        name = tok[0]
-        nums = [t for t in tok[1:] if _to_float(t) == _to_float(t) and _is_number(t)]
-        rec = {"name": name}
-        rec.update({f: _to_float(v) for f, v in zip(fields, nums)})
-        out.append(rec)
-    return out
+_device_cache = {}
 
 
 def _to_float(s):
@@ -311,50 +169,170 @@ def _to_float(s):
         return float("nan")
 
 
-def _is_number(s):
-    try:
-        float(s)
-        return True
-    except (TypeError, ValueError):
-        return False
+def _device_slug(device):
+    """JSON filename for ``device`` (e.g. ``'DIII-D'`` -> ``'diiid.json'``)."""
+    if device in _DEVICE_FILE:
+        return _DEVICE_FILE[device]
+    return re.sub(r"[^a-z0-9]", "", str(device).lower()) + ".json"
 
 
-def _parse_namelist_array(text):
-    """Parse a Fortran-namelist numeric array, honouring ``N*value`` repeats."""
-    vals = []
-    for tok in text.replace(",", " ").split():
-        if tok in ("/", "&end", "&END"):
-            break
-        if "*" in tok:
-            n, v = tok.split("*")
-            try:
-                vals += [float(v)] * int(n)
-            except ValueError:
-                break
-        else:
-            try:
-                vals.append(float(tok))
-            except ValueError:
-                break
-    return np.array(vals)
+def device_file(device="DIII-D"):
+    """Path to the canonical device JSON for ``device``."""
+    return os.path.join(DEVICE_DIR, _device_slug(device))
+
+
+def load_device(device="DIII-D"):
+    """Load (and cache) the device description JSON for ``device``.
+
+    Returns the parsed dict: ``name, R0, wall{r,z}, sensors{...}, sensor_sets{...}``.
+    """
+    path = device_file(device)
+    if path not in _device_cache:
+        with open(path) as fh:
+            _device_cache[path] = json.load(fh)
+    return _device_cache[path]
+
+
+def _norm_name(name):
+    """Normalise a subset name so ``'Bp_LFS_midplane'`` == ``'Bp LFS midplane'``."""
+    return str(name).strip().replace("_", " ")
+
+
+def resolve_sensor_set(name, sets, _seen=None):
+    """Flatten one ``sensor_sets`` entry to an ordered, de-duplicated name list.
+
+    ``list`` sets return their ``sensors``; ``composite`` sets recurse into their
+    member ``sets``.  Cycles are guarded against.
+    """
+    if _seen is None:
+        _seen = set()
+    if name in _seen or name not in sets:
+        return []
+    _seen.add(name)
+    spec = sets[name]
+    if spec.get("type") == "list":
+        members = list(spec.get("sensors", []))
+    else:  # composite
+        members = []
+        for sub in spec.get("sets", []):
+            members += resolve_sensor_set(sub, sets, _seen)
+    out, seen = [], set()
+    for m in members:
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
+def list_sensor_subsets(device="DIII-D"):
+    """All named sensor subsets -> ``{name: [sensor, ...]}`` (composites flattened).
+
+    This is the discoverability entry point: every key here is a valid
+    ``channel_filter`` argument (with or without underscores).
+    """
+    sets = load_device(device).get("sensor_sets", {})
+    return {name: resolve_sensor_set(name, sets) for name in sets}
+
+
+def resolve_channel_filter(channel_filter, device="DIII-D"):
+    """Map a friendly subset name (e.g. ``'Bp_LFS_midplane'``, ``'All_3D_Coils'``) to a pattern list.
+
+    A known subset name resolves to the explicit (anchored) sensor names from the
+    device ``sensor_sets``; an unknown string is treated as a raw regex and passed
+    through.  Lists/tuples expand each element the same way.  Patterns are matched
+    downstream with :func:`re.match`, so resolved names are anchored with ``$`` to
+    avoid accidental prefix matches (e.g. ``C19`` vs ``C190``).
+    """
+    sets = load_device(device).get("sensor_sets", {})
+    lookup = {_norm_name(k): k for k in sets}
+
+    def resolve_one(cf):
+        if isinstance(cf, str):
+            key = lookup.get(_norm_name(cf))
+            if key is not None:
+                return [re.escape(s) + "$" for s in resolve_sensor_set(key, sets)]
+            return [cf]  # raw regex
+        return [cf]
+
+    if isinstance(channel_filter, str):
+        return resolve_one(channel_filter)
+    out = []
+    for cf in channel_filter:
+        out += resolve_one(cf)
+    return out
+
+
+def sensor_geometry(device="DIII-D"):
+    """Per-sensor geometry as an ``xarray.Dataset`` indexed by ``channel``.
+
+    Carries the base fields from the device JSON (``r, z, phi, tilt, length,
+    delta_phi, na``, plus ``pair``) **and** the derived poloidal angle ``theta``
+    and sensor-end coordinates ``{r,z,phi,theta}_end1/2`` — the port of OMFIT's
+    ``init_magnetics.py`` step.  A sensor is modelled as a straight segment of
+    physical ``length`` centred at ``(r, z)`` and tilted by ``tilt`` (degrees) in
+    the poloidal plane, spanning ``delta_phi`` (degrees) toroidally; angles are
+    measured about the magnetic axis at ``(R0, 0)``.
+    """
+    import numpy as np
+    import xarray as xr
+
+    dev = load_device(device)
+    R0 = float(dev["R0"])
+    sensors = dev["sensors"]
+    channels = list(sensors)
+
+    base = ["r", "z", "phi", "tilt", "length", "delta_phi", "na"]
+    cols = {k: np.array([_to_float(sensors[c].get(k, np.nan)) for c in channels]) for k in base}
+    pairs = np.array([sensors[c].get("pair", "None") for c in channels], dtype=object)
+
+    r, z, phi = cols["r"], cols["z"], cols["phi"]
+    tilt, length, delta_phi = cols["tilt"], cols["length"], cols["delta_phi"]
+    half = length / 2.0
+    tr = np.radians(tilt)
+
+    theta = np.degrees(np.arctan2(z, r - R0))
+    r_end1, r_end2 = r - half * np.cos(tr), r + half * np.cos(tr)
+    z_end1, z_end2 = z - half * np.sin(tr), z + half * np.sin(tr)
+    phi_end1, phi_end2 = phi - delta_phi / 2.0, phi + delta_phi / 2.0
+    theta_end1 = np.degrees(np.arctan2(z_end1, r_end1 - R0))
+    theta_end2 = np.degrees(np.arctan2(z_end2, r_end2 - R0))
+
+    ds = xr.Dataset(
+        {
+            **{k: ("channel", cols[k]) for k in base},
+            "theta": ("channel", theta),
+            "r_end1": ("channel", r_end1),
+            "r_end2": ("channel", r_end2),
+            "z_end1": ("channel", z_end1),
+            "z_end2": ("channel", z_end2),
+            "phi_end1": ("channel", phi_end1),
+            "phi_end2": ("channel", phi_end2),
+            "theta_end1": ("channel", theta_end1),
+            "theta_end2": ("channel", theta_end2),
+        },
+        coords={"channel": channels},
+    )
+    ds["pair"] = ("channel", pairs)
+    ds.attrs["device"] = device
+    ds.attrs["R0"] = R0
+    return ds
+
+
+def load_sensor_table(device="DIII-D"):
+    """Master sensor geometry (base + derived) — alias of :func:`sensor_geometry`."""
+    return sensor_geometry(device)
 
 
 def load_wall(device="DIII-D"):
-    """Return the (r, z) first-wall outline arrays from ``<device_lower>.txt``.
+    """Return the ``(r, z)`` first-wall outline arrays from the device JSON.
 
-    Returns ``(None, None)`` if no wall file/namelist is found.
+    Returns ``(None, None)`` if no device file or wall section is found.
     """
-    fname = {"DIII-D": "diiid.txt"}.get(device, str(device).lower().replace("-", "") + ".txt")
-    path = os.path.join(device_data_dir(device), fname)
-    if not os.path.exists(path):
-        return None, None
-    raw = open(path).read()
-    if "&wall" not in raw:
-        return None, None
-    body = raw.split("&wall", 1)[1]
     try:
-        rpart = body.split("r =", 1)[1].split("z =", 1)[0]
-        zpart = body.split("z =", 1)[1]
-    except IndexError:
+        dev = load_device(device)
+    except (FileNotFoundError, OSError):
         return None, None
-    return _parse_namelist_array(rpart), _parse_namelist_array(zpart)
+    wall = dev.get("wall")
+    if not wall or "r" not in wall or "z" not in wall:
+        return None, None
+    return np.array(wall["r"], dtype=float), np.array(wall["z"], dtype=float)

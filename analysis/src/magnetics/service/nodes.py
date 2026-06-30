@@ -12,12 +12,22 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import sys as _sys
+import threading
 from functools import lru_cache
+from pathlib import Path as _Path
 
 import numpy as np
 
-from ..core import contracts, geometry, mode_shape, spectral
+from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
 from ..data import diiid, h5source
+
+# magnetics-code/ is not an installed package — add it to sys.path so run_steps and
+# the other scripts (lazy-imported inside _qs_run) are importable. This runs at
+# module load, before any _qs_run call. parents[3] = analysis/ from service/nodes.py
+_MAGNETICS_CODE = str(_Path(__file__).parents[3] / "magnetics-code")
+if _MAGNETICS_CODE not in _sys.path:
+    _sys.path.insert(0, _MAGNETICS_CODE)
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +57,46 @@ def machines() -> list[dict]:
     return h5source.list_shots()
 
 
+def channel_usage(shot: str) -> dict:
+    """Which fetched pointnames each analysis actually consumes, and which sit idle.
+
+    A diagnostic for trimming the data pull: any ``unused`` pointname can be dropped
+    from the fetch to speed it up without changing a single plot. Roles are derived
+    from the *same* selectors the nodes use (``_pick_pair`` / ``_toroidal_arr`` /
+    ``_poloidal_arr``), so this can't drift from what's really wired."""
+    h5source.shot_file(shot)  # KeyError if the shot isn't available
+    all_names = list(h5source.channel_names(shot))
+    roles: dict[str, list[str]] = {}
+
+    def tag(names, role):
+        for nm in names:
+            roles.setdefault(nm, []).append(role)
+
+    try:
+        (n1, _), (n2, _) = _pick_pair(shot)
+        tag([n1, n2], "2-point spectrogram")
+    except ValueError:
+        pass
+    try:
+        tag([n for n, _ in _toroidal_arr(str(shot))], "toroidal n-fit array")
+    except ValueError:
+        pass
+    try:
+        tag([n for n, _ in _poloidal_arr(str(shot))], "poloidal array")
+    except ValueError:
+        pass
+
+    used = [{"name": nm, "roles": roles[nm]} for nm in all_names if nm in roles]
+    unused = [nm for nm in all_names if nm not in roles]
+    return {"shot": str(shot), "n_total": len(all_names), "n_used": len(used),
+            "used": used, "unused": unused}
+
+
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec):
+    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec,
+               _qs_run):
         fn.cache_clear()
 
 
@@ -183,7 +229,7 @@ def _spectrogram(shot, params=None) -> dict:
     z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(), f.tolist(), z.tolist(),
-        {"x": "time (ms)", "y": "f (kHz)", "z": "log₁₀ power"},
+        {"x": "time (ms)", "y": "f (kHz)", "z": "log<sub>10</sub> power"},
         discrete=False,
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
 
@@ -283,20 +329,26 @@ def _n_spectrum(shot, params=None) -> dict:
         meta={"probes": list(probes), "shot": str(shot)})
 
 
-# ── contour: raw δBp(φ, t) over the toroidal array (fit pending) ──────────────
-def _contour(shot, params=None) -> dict:
-    arr = _array_channels(shot, ("MPID",))
+# ── shared grid builder for contour and phi_t ────────────────────────────────
+def _toroidal_grid(shot):
+    """Interpolate toroidal MPID channels onto a regular φ×t grid.
+
+    Returns (t_sub_ms, phi_grid_deg, z, raw_phis, n_channels) where
+    z has shape (n_time, n_phi) — i.e. z[time_idx, phi_idx].
+    """
+    for families in (("MPID",), ("MPI_BDOT",)):
+        arr = _array_channels(shot, families)
+        if len(arr) >= 4:
+            break
     if len(arr) < 4:
-        raise ValueError("not enough MPID toroidal-array channels for a map")
+        raise ValueError("not enough toroidal-array channels for a map (need ≥ 4)")
     names = [n for n, _ in arr]
     phis = np.array([p for _, p in arr])
-    t_ms, mat = _stack(shot, names)            # mat[ch, time], Tesla-ish
-    # subsample time for transport
+    t_ms, mat = _stack(shot, names)
     nt = min(160, t_ms.size)
     ti = np.linspace(0, t_ms.size - 1, nt).astype(int)
     t_sub = t_ms[ti]
-    vals = mat[:, ti] * T_TO_GAUSS             # [ch, time] in Gauss
-    # interpolate over phi onto a regular grid at each time (periodic)
+    vals = mat[:, ti] * T_TO_GAUSS
     phi_grid = np.linspace(0, 360, 73)
     z = np.empty((nt, phi_grid.size))
     order = np.argsort(phis)
@@ -304,6 +356,12 @@ def _contour(shot, params=None) -> dict:
     for j in range(nt):
         ve = np.concatenate([vals[order, j], vals[order, j][:1]])
         z[j] = np.interp(phi_grid, pe, ve)
+    return t_sub, phi_grid, z, phis, len(names)
+
+
+# ── contour: raw δBp(φ, t) — x=φ, y=time (QS contour hero plot) ──────────────
+def _contour(shot, params=None) -> dict:
+    t_sub, phi_grid, z, phis, n_ch = _toroidal_grid(shot)
     zmax = float(np.nanmax(np.abs(z))) or 1.0
     overlay = {"points": [{"x": float(p), "y": float(t_sub[0])} for p in phis],
                "symbol": "square"}
@@ -311,16 +369,33 @@ def _contour(shot, params=None) -> dict:
         phi_grid.tolist(), t_sub.tolist(), z.tolist(),
         {"x": "φ (deg)", "y": "time (ms)", "z": "δBp (G)"},
         zrange=[-zmax, zmax], overlay=overlay,
-        meta={"channels": len(names), "shot": str(shot),
+        meta={"channels": n_ch, "shot": str(shot),
               "note": "raw toroidal δBp(φ,t) — SLCONTOUR φ–θ fit pending"})
 
 
-# ── fit_quality: real condition number K of the toroidal array ───────────────
+# ── phi_t: SLCONTOUR φ–t contour from fit reconstruction ─────────────────────
+def _phi_t(shot, params=None) -> dict:
+    """Reconstructed δBp(φ, t) at fixed θ=0 — the SLCONTOUR waterfall plot.
+
+    Mirrors plots.plot_slice(r.fit, fix_coord='theta', fix_value=0.0).
+    Rotating modes appear as diagonal stripes; locked modes as vertical bands.
+    """
+    return qs_bridge.fit_to_phi_t_node(_prep_qs_ds(shot, params).fit)
+
+
+# ── fit_quality: condition number K + χ² from the SLCONTOUR fit ──────────────
 def _fit_quality(shot, params=None) -> dict:
+    """Fit quality metrics — uses the full run_steps fit when available."""
+    try:
+        return qs_bridge.fit_to_fit_quality_node(_prep_qs_ds(shot, params).fit)
+    except Exception:
+        pass
+    # Fallback: geometry-only K (no fit available yet)
     arr = _array_channels(shot, ("MPID",))
+    if len(arr) < 4:
+        arr = _array_channels(shot, ("MPI_BDOT",))
     m = h5source.meta(shot)
     fields = [{"label": "shot", "value": str(m["shot"])},
-              {"label": "analysis", "value": m["analysis"]},
               {"label": "channels fetched", "value": m["n_channels"]}]
     if len(arr) >= 7:
         phis = [p for _, p in arr]
@@ -333,8 +408,7 @@ def _fit_quality(shot, params=None) -> dict:
         fields.append({"label": "condition number K",
                        "value": "n/a (no toroidal array in this pull)"})
     return contracts.metrics("Fit quality", fields,
-                             meta={"note": "K from the Fourier design matrix; "
-                                           "χ² pending the full fit"})
+                             meta={"note": "geometry-only K; full fit unavailable"})
 
 
 # ── auto analysis frequency: the dominant mode at the cursor (so shapes track it) ─
@@ -562,6 +636,26 @@ def _gp_shape(mode):
 
 
 # ── mode_pattern: 2D (θ, φ) modal pattern from toroidal × poloidal shapes ─────
+def _pattern_overlay(shot) -> dict:
+    """The real sensors that built the pattern, as (φ, θ) dots labelled by pointname:
+    the poloidal array at its (φ, θ) and the toroidal array along θ≈0. Lets the GUI
+    show where the field is actually sampled (and name each probe on hover)."""
+    pts = []
+    try:
+        for nm, th in _poloidal_arr(str(shot)):
+            phi = diiid.phi_of(nm)
+            if phi is not None:
+                pts.append({"x": float(phi), "y": float(th), "label": nm})
+    except ValueError:
+        pass
+    try:
+        for nm, phi in _toroidal_arr(str(shot)):
+            pts.append({"x": float(phi), "y": 0.0, "label": nm})
+    except ValueError:
+        pass
+    return {"points": pts, "symbol": "circle"}
+
+
 def _mode_pattern(shot, params=None) -> dict:
     """Rank-2 (θ, φ) modal pattern (eigspec eq 23) — the outer product of the GP
     toroidal and poloidal mode shapes, on real DIII-D probe geometry."""
@@ -572,9 +666,10 @@ def _mode_pattern(shot, params=None) -> dict:
     return contracts.contour(
         phi_g.tolist(), th_g.tolist(), pattern.tolist(),
         {"x": "φ (deg)", "y": "θ (deg)", "z": "mode pattern (a.u.)"},
-        zrange=[-zmax, zmax],
+        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot),
         meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry"})
+              "note": "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D θ geometry; "
+                      "dots = probe locations"})
 
 
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
@@ -625,6 +720,187 @@ def _mode_over_time(shot, params=None) -> dict:
               "note": "best-fit toroidal n per time slice at the dominant frequency"})
 
 
+# ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────
+
+_QS_RUN_LOCK = threading.Lock()
+
+
+@lru_cache(maxsize=8)
+def _qs_run(shot: str, ns: tuple, ms: tuple, channel_filter: str,
+            detrend_type: str, detrend_band: tuple,
+            cutoff_lo: float, cutoff_hi: float, energy: float,
+            tmin_s: float, tmax_s: float):
+    """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
+
+    Delegates to magnetics-code/run.run_steps. All tuning parameters are
+    explicit cache-key arguments so the result is reused across node requests
+    that share the same settings. tmin_s/tmax_s are in seconds and come from
+    _prep_qs_ds (which reads HDF5 defaults and applies any user override).
+    """
+    from run import run_steps  # magnetics-code/run.py on sys.path
+
+    # detrend_band is in ms from the GUI; (0, 0) = auto → first 10ms of shot window
+    if detrend_band == (0.0, 0.0):
+        db_lo_s, db_hi_s = tmin_s, tmin_s + 0.01
+    else:
+        db_lo_s = max(detrend_band[0] / 1e3, tmin_s)
+        db_hi_s = min(detrend_band[1] / 1e3, tmax_s)
+
+    r = run_steps(
+        shot,
+        channel_filter=channel_filter,
+        ns=ns,
+        ms=ms,
+        time_trim=(tmin_s, tmax_s),
+        prep_kwargs=dict(
+            cutoff_hz=(cutoff_lo, cutoff_hi),
+            energy=energy,
+            detrend_type=detrend_type,
+            detrend_band=(db_lo_s, db_hi_s),
+        ),
+        verbose=False,
+    )
+    return r
+
+
+def _prep_qs_ds(shot, params):
+    """Parse GUI query params and return the full MagneticsRun object."""
+    import h5py
+
+    ns_raw = params.get("ns", "1,2,3") if params else "1,2,3"
+    ms_raw = params.get("ms", "0") if params else "0"
+    ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())
+    ms = tuple(int(x.strip()) for x in str(ms_raw).split(",") if x.strip())
+    channel_filter = (params.get("channel_filter", "Bp_LFS_midplane") if params
+                      else "Bp_LFS_midplane")
+    detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
+    # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
+    # so _qs_run defaults to the first 10ms of the shot window.
+    db_lo_str = params.get("detrend_lo") if params else None
+    db_hi_str = params.get("detrend_hi") if params else None
+    if db_lo_str is None or db_hi_str is None:
+        db_lo, db_hi = 0.0, 0.0  # sentinel: auto
+    else:
+        db_lo, db_hi = float(db_lo_str), float(db_hi_str)
+    cutoff_lo = float(params.get("cutoff_lo", 5.0)) if params else 5.0
+    cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
+    energy = float(params.get("energy", 0.98)) if params else 0.98
+
+    # Time trim: read shot-window defaults from HDF5, then apply any user override.
+    path = h5source.shot_file(str(shot))
+    with h5py.File(str(path), "r") as f:
+        tmin_s_auto = float(f.attrs.get("tmin", 0)) / 1e3
+        tmax_s_auto = float(f.attrs.get("tmax", 0)) / 1e3
+    tmin_ms_str = params.get("tmin_ms") if params else None
+    tmax_ms_str = params.get("tmax_ms") if params else None
+    tmin_s = float(tmin_ms_str) / 1e3 if tmin_ms_str else tmin_s_auto
+    tmax_s = float(tmax_ms_str) / 1e3 if tmax_ms_str else tmax_s_auto
+
+    # Serialize concurrent calls with the same args: only one thread runs
+    # run_steps; the others wait and then read the cached result instantly.
+    with _QS_RUN_LOCK:
+        return _qs_run(str(shot), ns, ms, channel_filter, detrend_type,
+                       (db_lo, db_hi), cutoff_lo, cutoff_hi, energy,
+                       tmin_s, tmax_s)
+
+
+def _qs_fit(shot, params=None) -> dict:
+    """Reconstructed δBp(φ, θ) spatial map at the GUI time cursor → ContourNode."""
+    run = _prep_qs_ds(shot, params)
+    t0 = _f(params, "time", None)
+    return qs_bridge.fit_to_qs_fit_node(run.fit, t0_ms=t0)
+
+
+def _amplitude(shot, params=None) -> dict:
+    """Mode amplitude ± 1σ vs time → LineNode."""
+    return qs_bridge.fit_to_amplitude_node(_prep_qs_ds(shot, params).fit)
+
+
+def _phase_t(shot, params=None) -> dict:
+    """Mode phase ± 1σ vs time → LineNode."""
+    return qs_bridge.fit_to_phase_t_node(_prep_qs_ds(shot, params).fit)
+
+
+# ── sensor maps ──────────────────────────────────────────────────────────────
+
+def _no_wrap(a):
+    """Avoid mis-plotting sensors that straddle an angle wrap (>240° span)."""
+    x = np.array(a, dtype=float)
+    if np.ptp(x) > 240:
+        x[x == x.min()] += 360
+    return x.tolist()
+
+
+def _sensor_map_rz(shot, params=None) -> dict:
+    """Sensor locations in device cross-section (R-Z) for selected channels."""
+    run = _prep_qs_ds(shot, params)
+    raw = run.raw
+    channels = list(run.prepared["channel"].values)
+    device = str(raw.attrs.get("device", "DIII-D"))
+
+    from omfit_compat import load_wall  # magnetics-code/ on sys.path
+    r_wall, z_wall = load_wall(device)
+
+    series = []
+    for c in channels:
+        s = raw.sel(channel=c)
+        r1, r2 = float(s["r_end1"]), float(s["r_end2"])
+        z1, z2 = float(s["z_end1"]), float(s["z_end2"])
+        series.append({"name": c, "x": [r1, r2], "y": [z1, z2]})
+
+    wall = None
+    if r_wall is not None:
+        wall = {"x": r_wall.tolist(), "y": z_wall.tolist()}
+
+    return contracts.line(series, {"x": "R (m)", "y": "z (m)"},
+                          meta={"wall": wall, "shot": str(shot), "channels": channels,
+                                "note": "sensor extent segments from device geometry"})
+
+
+def _sensor_map_cylindrical(shot, params=None) -> dict:
+    """Sensor locations in unrolled φ-θ space for selected channels."""
+    run = _prep_qs_ds(shot, params)
+    raw = run.raw
+    channels = list(run.prepared["channel"].values)
+
+    series = []
+    for c in channels:
+        s = raw.sel(channel=c)
+        p1, p2 = float(s["phi_end1"]), float(s["phi_end2"])
+        t1, t2 = float(s["theta_end1"]), float(s["theta_end2"])
+        x = _no_wrap([p1, p2, p2, p1, p1])
+        y = _no_wrap([t1, t1, t2, t2, t1])
+        series.append({"name": c, "x": x, "y": y})
+
+    return contracts.line(series, {"x": "φ (deg)", "y": "θ (deg)"},
+                          meta={"shot": str(shot), "channels": channels})
+
+
+# ── signal conditioning ───────────────────────────────────────────────────────
+
+def _signal_conditioning(shot, params=None) -> dict:
+    """Raw vs prepared signals for the selected channel subset."""
+    run = _prep_qs_ds(shot, params)
+    return qs_bridge.prepared_to_signal_node(run.raw, run.prepared)
+
+
+# ── fit quality time series (chi-squared, fitted signals, residuals) ──────────
+
+def _chi_sq_t(shot, params=None) -> dict:
+    """Reduced χ² vs time → LineNode (log scale, reference at 1)."""
+    return qs_bridge.fit_to_chi_sq_node(_prep_qs_ds(shot, params).fit)
+
+
+def _fit_signals(shot, params=None) -> dict:
+    """Fitted signal per channel vs time → LineNode (Section 6 middle panel)."""
+    return qs_bridge.fit_to_fit_signals_node(_prep_qs_ds(shot, params).fit)
+
+
+def _fit_residuals(shot, params=None) -> dict:
+    """Fit residuals per channel vs time → LineNode (Section 6 bottom panel)."""
+    return qs_bridge.fit_to_fit_residuals_node(_prep_qs_ds(shot, params).fit)
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -632,8 +908,20 @@ _BUILDERS = {
     "coherence": _coherence,
     "n_spectrum": _n_spectrum,
     "contour": _contour,
+    "phi_t": _phi_t,
+    "qs_fit": _qs_fit,
+    "amplitude": _amplitude,
+    "phase_t": _phase_t,
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
+    # QS (#24): sensor map + conditioning + fit-quality time series
+    "sensor_map_rz": _sensor_map_rz,
+    "sensor_map_cylindrical": _sensor_map_cylindrical,
+    "signal_conditioning": _signal_conditioning,
+    "chi_sq_t": _chi_sq_t,
+    "fit_signals": _fit_signals,
+    "fit_residuals": _fit_residuals,
+    # rotating eigspec (develop): GP mode shapes + patterns + tracks
     "mode_shape": _mode_shape,
     "poloidal_shape": _poloidal_shape,
     "mode_pattern": _mode_pattern,
