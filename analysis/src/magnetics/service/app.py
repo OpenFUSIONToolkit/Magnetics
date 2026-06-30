@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 import uuid
@@ -28,6 +29,8 @@ from pydantic import BaseModel
 
 from ..data import h5source
 from . import mock, nodes
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="magnetics service", version="0.1.0",
               description="Real kind-nodes from fetched shot data, with a MOCK fallback.")
@@ -75,8 +78,10 @@ def channels(shot: str):
     and which are idle (droppable from the pull). 404 if the shot isn't available."""
     try:
         return nodes.channel_usage(shot)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
+    except KeyError:
+        # The underlying KeyError embeds the server's data_dir() path; don't leak it.
+        logger.warning("channel_usage: shot %s not available", shot, exc_info=True)
+        raise HTTPException(404, f"shot {shot} not found")
 
 
 class FetchRequest(BaseModel):

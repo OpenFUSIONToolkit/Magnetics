@@ -9,11 +9,13 @@ import DraggableDivider from "../../lib/DraggableDivider";
 import { usingLiveBackend, fetchChannelUsage, type ChannelUsage } from "../../lib/api";
 import type { Node } from "../../lib/contract";
 
-// p-th percentile of an unsorted numeric array (linear interpolation). Used by the
-// power gate to pick a noise-floor threshold from the visible cells.
+// p-th percentile of a numeric array (linear interpolation). Used by the power gate
+// to pick a noise-floor threshold from the visible cells. NOTE: sorts `values` in
+// place — callers pass freshly-built throwaway arrays, so we skip the copy to keep
+// slider scrubbing allocation-free.
 function percentile(values: number[], p: number): number {
   if (values.length === 0) return -Infinity;
-  const s = [...values].sort((a, b) => a - b);
+  const s = values.sort((a, b) => a - b);
   if (p <= 0) return s[0];
   if (p >= 100) return s[s.length - 1];
   const idx = (p / 100) * (s.length - 1);

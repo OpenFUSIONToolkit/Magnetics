@@ -47,19 +47,21 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         } as Partial<Plotly.PlotData>,
       ];
       if (node.overlay) {
-        const labels = node.overlay.points.map((p) => p.label ?? "");
-        const named = labels.some((l) => l !== "");
+        const pts = node.overlay.points;
+        // Per-point hover text: a labelled point (sensor dot) shows its pointname above
+        // the coordinates; an unlabelled one shows coordinates alone. Building the text
+        // per point keeps mixed overlays correct (no empty line on the unlabelled ones).
+        const hovertext = pts.map((p) => {
+          const coords = `(${p.x.toFixed(0)}, ${p.y.toFixed(0)})`;
+          return p.label ? `${p.label}<br>${coords}` : coords;
+        });
         traces.push({
           type: "scatter", mode: "markers",
-          x: node.overlay.points.map((p) => p.x),
-          y: node.overlay.points.map((p) => p.y),
-          text: labels,
+          x: pts.map((p) => p.x),
+          y: pts.map((p) => p.y),
+          text: hovertext,
           marker: { symbol: node.overlay.symbol ?? "square", size: 6, color: ink, line: { color: inkEdge, width: 0.5 } },
-          // named overlays (sensor dots) show the pointname + position on hover;
-          // unlabelled ones fall back to bare coordinates.
-          ...(named
-            ? { hovertemplate: "%{text}<br>(%{x:.0f}, %{y:.0f})<extra></extra>" }
-            : { hoverinfo: "x+y" as const }),
+          hovertemplate: "%{text}<extra></extra>",
         } as Partial<Plotly.PlotData>);
       }
       return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
