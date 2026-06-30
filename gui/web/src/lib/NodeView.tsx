@@ -145,6 +145,28 @@ export default function NodeView({ node, height }: { node: Node; height?: number
       return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
     }
 
+    case "equilibrium": {
+      const levels = node.levels ?? [0.2, 0.4, 0.6, 0.8, 1.0];
+      const flux = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
+      const base = axisLayout(node.axes);
+      const traces: Partial<Plotly.PlotData>[] = [
+        {
+          type: "contour", x: node.r, y: node.z, z: node.psi_n, autocontour: false,
+          contours: { coloring: "lines", start: Math.min(...levels), end: 1.0, size: levels.length > 1 ? levels[1] - levels[0] : 0.2 },
+          colorscale: [[0, flux], [1, flux]], showscale: false, hoverinfo: "skip",
+        } as Partial<Plotly.PlotData>,
+        {
+          type: "scatter", mode: "lines", name: "LCFS", x: node.boundary.r, y: node.boundary.z,
+          line: { color: "#2ee6cf", width: 2 }, hoverinfo: "skip",
+        } as Partial<Plotly.PlotData>,
+        {
+          type: "scatter", mode: "markers", x: [node.axis.r], y: [node.axis.z],
+          marker: { symbol: "cross", size: 8, color: "#2ee6cf" }, hoverinfo: "skip", showlegend: false,
+        } as Partial<Plotly.PlotData>,
+      ];
+      return <Plot data={traces} height={height} layout={{ ...base, yaxis: { ...base.yaxis, scaleanchor: "x", scaleratio: 1 } } as Partial<Plotly.Layout>} />;
+    }
+
     case "line": {
       const palette = ["#4aa3ff", "#ff5cad", "#ffb454", "#2ee6cf", "#9d7bff"];
       const traces: Partial<Plotly.PlotData>[] = [];

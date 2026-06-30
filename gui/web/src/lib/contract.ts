@@ -76,6 +76,22 @@ export interface LineNode {
   meta?: Record<string, unknown>;
 }
 
+/** A plasma equilibrium slice — normalized poloidal flux ψ_N(R,Z) + boundary.
+ * Mirrors an EFIT gEQDSK slice: `psi_n` is row-major [z][r], 0 at the magnetic
+ * axis and 1 at the last closed flux surface. Time-parametrized (one slice). */
+export interface EquilibriumNode {
+  kind: "equilibrium";
+  r: number[]; // R grid (m)
+  z: number[]; // Z grid (m)
+  psi_n: number[][]; // normalized flux, [z][r]
+  boundary: { r: number[]; z: number[] }; // last closed flux surface
+  axis: { r: number; z: number }; // magnetic axis
+  levels?: number[]; // ψ_N contour levels to draw (default 0.2…1.0)
+  time_ms: number; // the actual slice time served
+  axes: Axes;
+  meta?: Record<string, unknown>;
+}
+
 /** A scalar quality panel — condition number K, χ², channel counts. */
 export interface MetricsNode {
   kind: "metrics";
@@ -91,6 +107,7 @@ export type Node =
   | HeatmapNode
   | Scatter2DNode
   | LineNode
+  | EquilibriumNode
   | MetricsNode;
 
 /** SLCONTOUR condition-number thresholds (warn > 10, error > 20). */

@@ -17,6 +17,8 @@ export interface PlotProps {
   height?: number;
   onClick?: (e: Plotly.PlotMouseEvent) => void;
   onRelayout?: (e: Record<string, unknown>) => void;
+  /** Per-plot Plotly config overrides (e.g. scrollZoom, displayModeBar). */
+  config?: Partial<Plotly.Config>;
 }
 
 function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
@@ -39,7 +41,7 @@ function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
   };
 }
 
-export default function Plot({ data, layout, height = 320, onClick, onRelayout }: PlotProps) {
+export default function Plot({ data, layout, height = 320, onClick, onRelayout, config }: PlotProps) {
   const ref = useRef<HTMLDivElement>(null);
   const theme = useStore((s) => s.theme);
 
@@ -55,7 +57,7 @@ export default function Plot({ data, layout, height = 320, onClick, onRelayout }
       yaxis: { ...base.yaxis, ...(layout?.yaxis as object) },
     };
     try {
-      Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true });
+      Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true, ...config });
       const clickHandler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
       const relayoutHandler = (e: Record<string, unknown>) => onRelayout?.(e);
       // @ts-expect-error plotly event typing is loose on the dist build
@@ -75,7 +77,7 @@ export default function Plot({ data, layout, height = 320, onClick, onRelayout }
         /* noop */
       }
     };
-  }, [data, layout, height, onClick, onRelayout, theme]);
+  }, [data, layout, height, onClick, onRelayout, theme, config]);
 
   useEffect(() => {
     const el = ref.current;

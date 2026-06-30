@@ -44,6 +44,21 @@ def line(series, axes, *, meta=None) -> dict:
     return _clean({"kind": "line", "series": series, "axes": axes, "meta": meta})
 
 
+def equilibrium(r, z, psi_n, boundary, axis, *, levels=None, time_ms=0.0,
+                axes=None, meta=None) -> dict:
+    """A plasma equilibrium slice — ψ_N(R,Z) + LCFS, like an EFIT gEQDSK slice.
+
+    `psi_n` is row-major [z][r], 0 at the magnetic axis and 1 at the boundary.
+    `boundary` is {"r": [...], "z": [...]}; `axis` is {"r": .., "z": ..}.
+    """
+    return _clean({
+        "kind": "equilibrium", "r": r, "z": z, "psi_n": psi_n,
+        "boundary": boundary, "axis": axis, "levels": levels,
+        "time_ms": time_ms, "axes": axes or {"x": "R (m)", "y": "Z (m)"},
+        "meta": meta,
+    })
+
+
 def metrics(title, fields, *, meta=None) -> dict:
     """A scalar quality panel — condition number K, χ², channel counts."""
     return _clean({"kind": "metrics", "title": title, "fields": fields,
