@@ -487,16 +487,19 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                tmin: float | None = None, tmax: float | None = None,
                decimate: int = 1, workers: int = 4, batch_size: int = 40,
                out: str | None = None, compression: str = "lzf",
-               remote_host: str = "omega", ssh_jump: str = "cybele.gat.com:2039",
-               remote_dir: str = "~/magnetics_fetch", remote_setup: str | None = None,
+               remote_host: str = "omega", ssh_jump: str | None = None,
+               remote_dir: str = "~/magnetics_fetch", remote_python: str | None = None,
                progress: Progress | None = None) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
 
     Returns the output path. `backend` defaults to "mdsthin" (laptop → DIII-D, the
-    proven path). Other backends: "toksearch" (cluster, **work in progress**),
-    "remote" (auto-sync the fetcher to the GA cluster, run the toksearch pull
-    there, copy the .h5 back — no manual copying; also WIP since it relies on
-    toksearch), or "auto" (toksearch if importable, else mdsthin).
+    proven off-network path). Other backends: "toksearch" (run ON the cluster, where
+    toksearch_d3d reads PTDATA natively), "remote" (orchestrate the toksearch pull on
+    the cluster from here and copy the compact .h5 back — no manual copying), or
+    "auto" (toksearch if importable, else mdsthin).
+    `remote_host`/`ssh_jump` are normally ~/.ssh/config aliases (default host "omega"
+    carries its own ProxyJump, so ssh_jump stays None). `remote_python` overrides the
+    cluster env interpreter run_remote invokes directly.
     GUI callers pass `username` and a `progress` callback instead of relying on the
     CLI prompt/stderr bar.
     """
@@ -509,7 +512,7 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         # Orchestrate a pull on the cluster from here; remote side runs this same
         # script with --backend toksearch and writes the file we copy back.
         import remote_run
-        kw = {} if remote_setup is None else {"setup": remote_setup}
+        kw = {} if remote_python is None else {"python": remote_python}
         return remote_run.run_remote(
             shot, analysis, host=remote_host, jump=ssh_jump, username=username,
             password=password, duo=duo, remote_dir=remote_dir, tmin=tmin,
@@ -616,14 +619,16 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument("--remote-host", default="omega",
-                    help="remote: cluster host to run toksearch on")
-    ap.add_argument("--ssh-jump", default="cybele.gat.com:2039",
-                    help="remote: SSH jump/gateway host[:port] (empty to disable)")
+                    help="remote: cluster host — normally an ssh-config alias whose "
+                         "ProxyJump handles the gateway (default 'omega')")
+    ap.add_argument("--ssh-jump", default=None,
+                    help="remote: explicit SSH jump host[:port] for a RAW host; leave "
+                         "unset when --remote-host is an alias (its ProxyJump applies)")
     ap.add_argument("--remote-dir", default="~/magnetics_fetch",
                     help="remote: dir on the cluster to sync the fetcher into")
-    ap.add_argument("--remote-setup", default=None,
-                    help="remote: shell to load toksearch (default: module purge "
-                         "&& module load conda && conda activate toksearch_env)")
+    ap.add_argument("--remote-python", default=None,
+                    help="remote: cluster env interpreter to run directly (default: "
+                         "toksearch_env's python; no module load / conda activate)")
     args = ap.parse_args(argv)
 
     fetch_shot(args.shot, args.analysis, backend=args.backend,
@@ -633,7 +638,7 @@ def main(argv=None) -> int:
                batch_size=args.batch_size, out=args.out,
                compression=args.compression, remote_host=args.remote_host,
                ssh_jump=args.ssh_jump, remote_dir=args.remote_dir,
-               remote_setup=args.remote_setup)
+               remote_python=args.remote_python)
     return 0
 
 

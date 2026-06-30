@@ -52,8 +52,10 @@ cluster)`, or from the CLI:
 uv run python data/toksearch_fetch.py --backend remote --shot 184927 --analysis rotating
 ```
 
-Defaults: run on `omega` via the `cybele.gat.com` jump host, loading toksearch
-with `module purge && module load conda && conda activate toksearch_env`. Override
-with `--remote-host / --ssh-jump / --remote-dir / --remote-setup` (or the matching
-`/api/fetch` body fields). Auth (password + Duo) is interactive in the terminal
-running the fetch — for the GUI that's the **uvicorn** terminal.
+Defaults: run on the `omega` ssh-config alias (its `ProxyJump` handles the cybele
+gateway), invoking the cluster's `toksearch_env` interpreter **directly** — no
+`module load` / `conda activate` (those set nothing the fetch needs and cost ~4-5s).
+Override with `--remote-host / --ssh-jump / --remote-dir / --remote-python` (or the
+matching `/api/fetch` body fields). Auth (password + Duo) is interactive in the
+terminal running the fetch — for the GUI that's the **uvicorn** terminal; with a
+key-based ssh-config alias no password is needed.
