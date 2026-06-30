@@ -39,6 +39,14 @@ function gatePosToPct(pos: number): number {
 // Slider position that yields ≈70% by default (a sensible noise floor to start).
 const GATE_POS_DEFAULT = 227;
 
+// Offline synthetic-demo constants. These were formerly user-facing knobs (PEST λ and
+// sensor-shielding cutoff) that only ever affected the no-backend demo — they have no
+// effect on real data — so they're fixed at their old defaults. (Bt-compensation mode is
+// likewise fixed to its old "digital" default, inlined where the demo noise is computed.)
+const DEMO_PEST_L1 = 0.35; // PEST θ* toroidicity coefficient
+const DEMO_PEST_L2 = 0.05; // PEST θ* elongation coefficient
+const DEMO_SHIELD_CUTOFF_KHZ = 50; // 3 dB sensor-shielding cutoff
+
 // Deterministic mock generator helper (keeps React render pure)
 function generateDeterministicTimeTrace(timeSlice: number, freqPeaks: number[]) {
   const times: number[] = [];
@@ -76,7 +84,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [fmin, setFmin] = useState<number>(0);
   const [fmax, setFmax] = useState<number>(50);
   const [fittype, setFittype] = useState<number>(2); // 0 = circular, 1 = toroidicity, 2 = PEST theta*
-  const [btype, setBtype] = useState<number>(4);
   const [smoothing, setSmoothing] = useState<number>(5);
   // Power gate: a percentile floor on cell power; hides low-power noise in BOTH the
   // power spectrogram (client-side) and the n-map (server n_amp_pct). The slider stores
@@ -95,10 +102,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [fftOverlap, setFftOverlap] = useState<number>(75);
   const [probePhi1, setProbePhi1] = useState<number>(307);
   const [probePhi2, setProbePhi2] = useState<number>(340);
-  const [pestLambda1, setPestLambda1] = useState<number>(0.35);
-  const [pestLambda2, setPestLambda2] = useState<number>(0.05);
-  const [btCompMode, setBtCompMode] = useState<"none" | "analog" | "digital">("digital");
-  const [shieldingCutoff, setShieldingCutoff] = useState<number>(50); // 3dB shielding cutoff in kHz
 
   // Resizable layout dimensions
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -338,7 +341,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const filteredZ = fIndices.map((fIdx) => {
       const f = baseNode.y[fIdx];
       // first-order low-pass power attenuation: -5 * log10(1 + (f / fc)^2)
-      const cutoffAttenDb = -5 * Math.log10(1 + Math.pow(f / shieldingCutoff, 2));
+      const cutoffAttenDb = -5 * Math.log10(1 + Math.pow(f / DEMO_SHIELD_CUTOFF_KHZ, 2));
       return baseNode.z[fIdx].map((val) => val + cutoffAttenDb);
     });
 
@@ -416,7 +419,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         zrange: [-3, 0] as [number, number],
       };
     }
-  }, [hasStaticFiles, specNode, modeNumberNode, syntheticSpecNode, displayMode, fmin, fmax, powerGate, gateFrac, shieldingCutoff]);
+  }, [hasStaticFiles, specNode, modeNumberNode, syntheticSpecNode, displayMode, fmin, fmax, powerGate, gateFrac]);
 
   // Determine active mode frequencies at the current time slice
   const currentModeFreqs = useMemo(() => {
@@ -525,7 +528,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const poloidalZ = thetaAngles.map((theta) => {
       const thetaRad = (theta * Math.PI) / 180;
       // PEST correction warping based on dynamic advanced inputs
-      const thetaStar = thetaRad - pestLambda1 * Math.sin(thetaRad) - pestLambda2 * Math.sin(2 * thetaRad);
+      const thetaStar = thetaRad - DEMO_PEST_L1 * Math.sin(thetaRad) - DEMO_PEST_L2 * Math.sin(2 * thetaRad);
       return times.map((t, tIdx) => {
         if (targetFreq === 0) return Math.sin(tIdx * 0.4 + theta * 0.1) * 2;
         // m=3, m=2, and m=4 rotating waves superposition
@@ -536,7 +539,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     });
 
     return { times, phiAngles, thetaAngles, toroidalZ, poloidalZ };
-  }, [cursorMs, currentModeFreqs, pestLambda1, pestLambda2]);
+  }, [cursorMs, currentModeFreqs]);
 
   // Mode structure poloidal node (computed dynamically from fittype option)
   const processedPoloidalNode = useMemo(() => {
@@ -548,18 +551,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
       
       // Calculate straight-field-line theta* depending on fittype
       let thetaStar = rad;
-      if (fittype === 1) thetaStar = rad - pestLambda1 * Math.sin(rad); // weak toroidicity
-      if (fittype === 2) thetaStar = rad - pestLambda1 * Math.sin(rad) - pestLambda2 * Math.sin(2 * rad); // elongation
-      
+      if (fittype === 1) thetaStar = rad - DEMO_PEST_L1 * Math.sin(rad); // weak toroidicity
+      if (fittype === 2) thetaStar = rad - DEMO_PEST_L1 * Math.sin(rad) - DEMO_PEST_L2 * Math.sin(2 * rad); // elongation
+
       const basePhase = (m * thetaStar) % (2 * Math.PI);
       const noise = Math.sin(i * 4.31) * 0.15; // deterministic pure noise
-      
-      // Bt misalignment compensation noise (Slide 39)
-      const btNoise = btCompMode === "none"
-        ? Math.sin(theta * 2.3 + 1.2) * 22
-        : btCompMode === "analog"
-          ? Math.sin(theta * 2.3 + 1.2) * 5
-          : Math.sin(theta * 2.3 + 1.2) * 1.5;
+
+      // Bt misalignment compensation noise (Slide 39), digital compensation
+      const btNoise = Math.sin(theta * 2.3 + 1.2) * 1.5;
 
       return {
         x: theta,
@@ -574,8 +573,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
     const fitPhases = fitAngles.map((a) => {
       const rad = (a * Math.PI) / 180;
       let thetaStar = rad;
-      if (fittype === 1) thetaStar = rad - pestLambda1 * Math.sin(rad);
-      if (fittype === 2) thetaStar = rad - pestLambda1 * Math.sin(rad) - pestLambda2 * Math.sin(2 * rad);
+      if (fittype === 1) thetaStar = rad - DEMO_PEST_L1 * Math.sin(rad);
+      if (fittype === 2) thetaStar = rad - DEMO_PEST_L1 * Math.sin(rad) - DEMO_PEST_L2 * Math.sin(2 * rad);
       return ((m * thetaStar * 180) / Math.PI) % 360;
     });
 
@@ -586,7 +585,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "θ (deg)", y: "phase (deg)" },
       meta: { m_fit: m },
     };
-  }, [fittype, pestLambda1, pestLambda2, btCompMode, gateFrac]);
+  }, [fittype, gateFrac]);
 
   // Toroidal node processing
   const processedToroidalNode = useMemo(() => {
@@ -602,12 +601,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
       const basePhase = (n * rad) % (2 * Math.PI);
       const noise = Math.sin(i * 7.42) * 0.08;
       
-      // Bt misalignment compensation noise
-      const btNoise = btCompMode === "none"
-        ? Math.sin(phi * 3.1 + 0.5) * 18
-        : btCompMode === "analog"
-          ? Math.sin(phi * 3.1 + 0.5) * 4
-          : Math.sin(phi * 3.1 + 0.5) * 1.0;
+      // Bt misalignment compensation noise, digital compensation
+      const btNoise = Math.sin(phi * 3.1 + 0.5) * 1.0;
 
       return {
         x: phi,
@@ -628,7 +623,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       axes: { x: "φ (deg)", y: "phase (deg)" },
       meta: { n_fit: n },
     };
-  }, [hasStaticFiles, phaseNode, probePhi1, probePhi2, btCompMode, gateFrac]);
+  }, [hasStaticFiles, phaseNode, probePhi1, probePhi2, gateFrac]);
 
   // --- 3. RENDER SUB-COMPONENTS ---
   const renderSpectrogram = () => {
@@ -1071,30 +1066,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
               </select>
             </div>
 
-            {/* btype */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <label htmlFor="btype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Baseline Method (btype)</label>
-              <select
-                id="btype-select"
-                value={btype}
-                onChange={(e) => setBtype(parseInt(e.target.value))}
-                style={{
-                  background: "var(--panel-2)",
-                  color: "var(--text)",
-                  border: "1px solid var(--border-2)",
-                  padding: "5px",
-                  borderRadius: "4px",
-                  outline: "none",
-                }}
-              >
-                <option value={0}>0 = None</option>
-                <option value={1}>1 = Early baseline</option>
-                <option value={2}>2 = Late baseline</option>
-                <option value={3}>3 = Interpolated</option>
-                <option value={4}>4 = Running average</option>
-              </select>
-            </div>
-
             {/* smoothing — coherence-estimation window (backend coherence_smooth) */}
             <div
               style={{ display: "flex", flexDirection: "column", gap: "4px" }}
@@ -1249,82 +1220,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
                     </div>
                   </div>
 
-                  {/* PEST Shaping Coefficient lambda1 slider */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="lambda1-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      PEST λ₁ (Toroidicity): <strong style={{ color: "var(--good)" }}>{pestLambda1.toFixed(2)}</strong>
-                    </label>
-                    <input
-                      id="lambda1-range"
-                      type="range"
-                      min="0.0"
-                      max="1.0"
-                      step="0.05"
-                      value={pestLambda1}
-                      onChange={(e) => setPestLambda1(parseFloat(e.target.value))}
-                      style={{ accentColor: "var(--good)" }}
-                    />
-                  </div>
-
-                  {/* PEST Shaping Coefficient lambda2 slider */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="lambda2-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      PEST λ₂ (Elongation): <strong style={{ color: "var(--good)" }}>{pestLambda2.toFixed(2)}</strong>
-                    </label>
-                    <input
-                      id="lambda2-range"
-                      type="range"
-                      min="-0.5"
-                      max="0.5"
-                      step="0.05"
-                      value={pestLambda2}
-                      onChange={(e) => setPestLambda2(parseFloat(e.target.value))}
-                      style={{ accentColor: "var(--good)" }}
-                    />
-                  </div>
-
-                  {/* Bt Compensation selection */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="bt-comp-select" style={{ fontSize: "10px", color: "var(--text-dim)" }}>Bt Alignment Comp.</label>
-                    <select
-                      id="bt-comp-select"
-                      value={btCompMode}
-                      onChange={(e) => setBtCompMode(e.target.value as "none" | "analog" | "digital")}
-                      style={{
-                        background: "var(--panel-2)",
-                        color: "var(--text)",
-                        border: "1px solid var(--border-2)",
-                        padding: "4px",
-                        borderRadius: "4px",
-                        fontSize: "11px",
-                        outline: "none",
-                      }}
-                    >
-                      <option value="none">None (±18° Bt-leakage noise)</option>
-                      <option value="analog">Analog Comp. (±4° noise)</option>
-                      <option value="digital">Digital Comp. (±1° noise)</option>
-                    </select>
-                  </div>
-
-                  {/* Sensor Shielding Cutoff slider */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="shielding-cutoff-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      Sensor Bandwidth: <strong style={{ color: "var(--accent)" }}>{shieldingCutoff} kHz</strong>
-                    </label>
-                    <input
-                      id="shielding-cutoff-range"
-                      type="range"
-                      min="5"
-                      max="50"
-                      step="5"
-                      value={shieldingCutoff}
-                      onChange={(e) => setShieldingCutoff(parseInt(e.target.value))}
-                      style={{ accentColor: "var(--accent)" }}
-                    />
-                    <span style={{ fontSize: "8px", color: "var(--text-dim)", lineHeight: 1.1 }}>
-                      Low bandwidth simulates graphite tile attenuation.
-                    </span>
-                  </div>
                 </div>
               )}
             </div>
