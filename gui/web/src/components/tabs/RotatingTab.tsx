@@ -208,10 +208,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
     }
   }, [specNode, cursorMs, setCursorMs]);
 
-  // Which fetched pointnames the analysis actually uses (live backend only) — drives
-  // the collapsible "Data Channels" diagnostic so idle probes can be trimmed from pulls.
+  // Which fetched pointnames the analysis actually uses — drives the collapsible
+  // "Data Channels" diagnostic so idle probes can be trimmed from pulls. State is set
+  // only from the async callbacks (never synchronously in the effect body, which would
+  // trigger cascading renders): fetchChannelUsage resolves to null without a live
+  // backend, so that case clears the panel through the same .then path.
   useEffect(() => {
-    if (!usingLiveBackend() || !machine) { setChannelInfo(null); return; }
+    if (!machine) return;
     let alive = true;
     fetchChannelUsage(machine)
       .then((c) => { if (alive) setChannelInfo(c); })
