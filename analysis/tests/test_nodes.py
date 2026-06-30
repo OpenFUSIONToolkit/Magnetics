@@ -44,6 +44,19 @@ def test_contour_node():
     assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])
 
 
+def test_phase_fit_node_has_real_error_bars():
+    shot = _first_shot()
+    n = nodes.build_node(shot, "phase_fit")
+    assert n["kind"] == "scatter2d"
+    # at least one probe carries a real 1σ cross-spectral phase error_y, and it is
+    # a finite non-negative number (not the GUI's old fabricated value)
+    errs = [p["error_y"] for p in n["points"] if "error_y" in p]
+    assert errs, "phase_fit emitted no error_y bars"
+    assert all(e >= 0.0 for e in errs)
+    assert n["meta"].get("n_confidence") is not None
+    assert n["meta"].get("phase_sigma_deg") is not None
+
+
 def test_fit_quality_node_has_finite_k():
     shot = _first_shot()
     n = nodes.build_node(shot, "fit_quality")

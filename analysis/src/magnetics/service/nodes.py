@@ -265,16 +265,29 @@ def _phase_fit(shot, params=None) -> dict:
     mode = spectral.extract_mode_at_frequency(
         mat, phis, np.asarray(t_ms, dtype=float) * 1e-3,
         frequency=f_khz * 1e3, t_range=t_range)
-    fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n
-    points = [{"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
-              for (nm, p), ph in zip(arr, mode.phase)]
+    fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n + uncertainty
+    # Real per-probe phase σ from the cross-spectral statistics (Bendat & Piersol),
+    # replacing the GUI's previously fabricated error bars. The reference probe's σ is
+    # NaN (self-reference); omit error_y there rather than emit a JSON-invalid NaN.
+    perr = mode.phase_error if mode.phase_error is not None else [None] * len(arr)
+    points = []
+    for (nm, p), ph, e in zip(arr, mode.phase, perr):
+        pt = {"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
+        if e is not None and np.isfinite(e):
+            pt["error_y"] = round(float(e), 3)
+        points.append(pt)
     line = {"x": [0.0, 360.0],
             "y": [fit.intercept_deg, fit.intercept_deg + fit.n * 360.0]}
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
         meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
+              "n_confidence": round(float(fit.n_confidence), 3)
+              if fit.n_confidence is not None else None,
+              "phase_sigma_deg": round(float(fit.phase_sigma), 3)
+              if fit.phase_sigma is not None else None,
               "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "MODESPEC phase-at-frequency + circular n-fit"})
+              "note": "MODESPEC phase-at-frequency + circular n-fit; "
+                      "error bars = 1σ cross-spectral phase uncertainty"})
 
 
 _BUILDERS = {
