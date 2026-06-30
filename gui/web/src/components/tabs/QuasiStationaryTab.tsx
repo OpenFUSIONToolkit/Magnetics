@@ -9,7 +9,6 @@ import { usingLiveBackend } from "../../lib/api";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
 import type { ContourNode, LineNode, MetricsNode, Scatter2DNode } from "../../lib/contract";
-import { qualityForK } from "../../lib/contract";
 
 // ── Colorblind-safe palette (Wong 2011) ──────────────────────────────
 // Blue + orange are distinguishable across deuteranopia, protanopia, tritanopia.
@@ -127,120 +126,94 @@ function remapOverlay(ov: ContourNode["overlay"]): ContourNode["overlay"] {
   return { ...ov, points: ov.points.map(p => ({ ...p, x: p.x > 180 ? p.x - 360 : p.x, y: p.y > 180 ? p.y - 360 : p.y })) };
 }
 
-// ── Live API types (frame envelope from /api/{machine}/qs_fit/stream) ─
-interface QsFitFrame {
-  progress: number;
-  final: boolean;
-  data: {
-    contour: { phi: number[]; theta: number[]; z: number[][]; units: string };
-    sensors: { phi: number; theta: number }[];
-    modes: { n: number; m: number; amp: number; phase_deg: number }[];
-    quality: { K: number; chi2: number; n_channels: number; m_max: number };
-  };
-}
-
 // ── useQsFit ──────────────────────────────────────────────────────────
-// Mock mode:  reads individual mock JSON files via useNode (existing contract).
-// Live mode:  opens an SSE stream to /api/{machine}/qs_fit/stream and builds
-//             ContourNode + MetricsNode from each progressive coarse→fine frame.
-function useQsFit(machine: string, fetchCursor: number) {
+// Mock mode: reads individual mock JSON files via useNode (existing contract).
+// Live mode: calls real REST nodes — qs_fit (spatial map) and fit_quality
+//            (metrics panel). Each path zeros-out the machine string on the
+//            inactive side so useNode skips the fetch (it guards on !machine).
+function useQsFit(
+  machine: string,
+  fetchCursor: number,
+  qsParams: Record<string, string>,
+) {
   const isLive = usingLiveBackend();
 
-  // Pass empty string in live mode so useNode skips fetching (it guards on !machine).
   const mockMachine = isLive ? "" : machine;
+  const liveMachine = isLive ? machine : "";
+
+  const liveQsParams = useMemo(
+    () => ({ ...qsParams, time: String(fetchCursor) }),
+    [qsParams, fetchCursor],
+  );
+
   const { node: rawContour, loading: mockLoading, error: mockError } =
     useNode(mockMachine, "contour", { t: fetchCursor });
   const { node: rawQuality } = useNode(mockMachine, "fit_quality");
-  const { node: rawPhaseFit } = useNode(mockMachine, "phase_fit");
 
-  const [liveContour,  setLiveContour]  = useState<ContourNode | null>(null);
-  const [liveQuality,  setLiveQuality]  = useState<MetricsNode | null>(null);
-  const [liveProgress, setLiveProgress] = useState(0);
-  const [liveLoading,  setLiveLoading]  = useState(isLive);
-  const [liveError,    setLiveError]    = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isLive || !machine) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset before live stream; Meg's hookup, revisit later */
-    setLiveLoading(true);
-    setLiveError(null);
-    setLiveContour(null);
-    setLiveProgress(0);
-    /* eslint-enable react-hooks/set-state-in-effect */
-
-    const base = import.meta.env.VITE_API_BASE as string;
-    const es = new EventSource(`${base}/api/${machine}/qs_fit/stream`);
-
-    es.onmessage = (e: MessageEvent) => {
-      const frame = JSON.parse(e.data as string) as QsFitFrame;
-      const d = frame.data;
-
-      const absMax = Math.max(...d.contour.z.flat().map(Math.abs), 1);
-
-      setLiveContour({
-        kind: "contour",
-        x: d.contour.phi,
-        y: d.contour.theta,
-        z: d.contour.z,
-        axes: { x: "φ (deg)", y: "θ (deg)", z: `δB<sub>p</sub> (${d.contour.units})` },
-        zrange: [-absMax, absMax],
-        overlay: {
-          points: d.sensors.map(s => ({ x: s.phi, y: s.theta })),
-          symbol: "square",
-        },
-        meta: { m: d.modes[0]?.m, n: d.modes[0]?.n },
-      });
-
-      const q = d.quality;
-      setLiveQuality({
-        kind: "metrics",
-        title: "fit quality",
-        fields: [
-          { label: "K (cond.)",  value: q.K.toFixed(1),    status: qualityForK(q.K) },
-          { label: "χ²",         value: q.chi2.toFixed(2) },
-          { label: "channels",   value: q.n_channels },
-          { label: "m max",      value: q.m_max },
-        ],
-      });
-
-      setLiveProgress(frame.progress);
-      if (frame.final) { setLiveLoading(false); es.close(); }
-    };
-
-    es.onerror = () => {
-      setLiveError("connection to backend failed");
-      setLiveLoading(false);
-      es.close();
-    };
-
-    return () => es.close();
-  }, [machine, isLive]);
+  const { node: liveContourNode, loading: liveLoading, error: liveError } =
+    useNode(liveMachine, "qs_fit", liveQsParams);
+  const { node: liveQualityNode } = useNode(liveMachine, "fit_quality", qsParams);
 
   if (isLive) {
     return {
-      contourNode: liveContour,
-      qualityNode:  liveQuality,
-      phaseFitNode: null as Scatter2DNode | null,
-      loading:      liveLoading,
-      error:        liveError,
-      progress:     liveProgress,
+      contourNode: liveContourNode?.kind === "contour" ? liveContourNode : null,
+      qualityNode: liveQualityNode?.kind === "metrics" ? liveQualityNode : null,
+      loading:     liveLoading,
+      error:       liveError,
+      progress:    liveLoading ? 0.5 : 1,
     };
   }
 
   return {
-    contourNode:  rawContour?.kind  === "contour"   ? rawContour  : null,
-    qualityNode:  rawQuality?.kind  === "metrics"   ? rawQuality  : null,
-    phaseFitNode: rawPhaseFit?.kind === "scatter2d" ? rawPhaseFit : null,
-    loading:      mockLoading,
-    error:        mockError ?? null,
-    progress:     1,
+    contourNode: rawContour?.kind === "contour" ? rawContour : null,
+    qualityNode: rawQuality?.kind === "metrics" ? rawQuality : null,
+    loading:     mockLoading,
+    error:       mockError ?? null,
+    progress:    1,
   };
 }
+
+// ── Sensor arrays most useful for QS analysis ────────────────────────
+const CHANNEL_FILTERS = [
+  "Bp LFS midplane",
+  "Bp LFS midplane bdot",
+  "Bp LFS R+1",
+  "Bp LFS R-1",
+  "Bp LFS R+2",
+  "Bp LFS R-2",
+  "All LFS Bp Arrays",
+  "Bp HFS +midplane",
+  "Bp HFS -midplane",
+];
 
 // ── Component ─────────────────────────────────────────────────────────
 export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
   const { cursorMs, setCursorMs } = useStore();
+
+  // ── Analysis settings ─────────────────────────────────────────────
+  const [ns, setNs]               = useState("1,2,3");
+  const [ms, setMs]               = useState("0");
+  const [channelFilter, setChannelFilter] = useState("Bp LFS midplane");
+  const [detrendType, setDetrendType]     = useState("baseline");
+  const [detrendLo, setDetrendLo] = useState("");  // "" = auto (first 10ms)
+  const [detrendHi, setDetrendHi] = useState("");  // "" = auto
+
+  // Stable params dict — triggers re-fetch when any setting changes.
+  // time-cursor is merged in per-node so phi_t/amp/phase_t share the same base.
+  const qsParams = useMemo(() => {
+    const p: Record<string, string> = {
+      ns,
+      ms,
+      channel_filter: channelFilter,
+      detrend_type: detrendType,
+    };
+    if (detrendLo && detrendHi) {
+      p.detrend_lo = detrendLo;
+      p.detrend_hi = detrendHi;
+    }
+    return p;
+  }, [ns, ms, channelFilter, detrendType, detrendLo, detrendHi]);
 
   // localCursor: updates on every slider tick for smooth visuals.
   // cursorMs (store): only updated on pointer-up / chart click, so useNode
@@ -261,13 +234,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   // fetchCursor: stable during drag (only updates on pointer-up / chart click).
   const fetchCursor = cursorMs === 0 ? 3140 : cursorMs;
 
-  const { contourNode, qualityNode, phaseFitNode, loading: contourLoading, error: contourError, progress } =
-    useQsFit(machine, fetchCursor);
+  const { contourNode, qualityNode, loading: contourLoading, error: contourError, progress } =
+    useQsFit(machine, fetchCursor, qsParams);
 
-  // Time-series nodes — useNode; live API doesn't provide these yet.
-  const { node: phiTimeNode }   = useNode(machine, "phi_t");
-  const { node: ampNode }       = useNode(machine, "amplitude");
-  const { node: phaseTimeNode } = useNode(machine, "phase_t");
+  // phase_fit is a plain REST node — works in both mock and live mode.
+  const { node: rawPhaseFit } = useNode(machine, "phase_fit");
+  const phaseFitNode = rawPhaseFit?.kind === "scatter2d" ? rawPhaseFit : null;
+
+  // Time-series nodes — pass qsParams so channel filter / modes / detrend are respected.
+  const { node: phiTimeNode }   = useNode(machine, "phi_t",      qsParams);
+  const { node: ampNode }       = useNode(machine, "amplitude",   qsParams);
+  const { node: phaseTimeNode } = useNode(machine, "phase_t",     qsParams);
 
   // ── Remap phi/theta from 0-360 → -180-180 ──────────────────────────
   const heroContour = useMemo((): ContourNode | null => {
@@ -277,11 +254,29 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     return { ...contourNode, x: rx.vals, y: ry.vals, z: ry.z, overlay: remapOverlay(contourNode.overlay) };
   }, [contourNode]);
 
-  const phiTimeRemapped = useMemo((): ContourNode | null => {
-    if (phiTimeNode?.kind !== "contour") return null;
-    const ry = remapAxis180(phiTimeNode.y, phiTimeNode.z, "y");
-    return { ...phiTimeNode, y: ry.vals, z: ry.z };
-  }, [phiTimeNode]);
+  // phi_t: keep φ in 0-360 to match plots.plot_slice (reference uses [0,360] ticks at 90s)
+  const phiTimePlot = phiTimeNode?.kind === "contour" ? phiTimeNode : null;
+
+  // Peak toroidal angle at each time — mirrors plots.plot_slice's white open-circle trace
+  const phiPeak = useMemo(() => {
+    if (!phiTimePlot) return null;
+    return phiTimePlot.x.map((_, j) => {
+      let bestI = 0, bestV = -Infinity;
+      for (let i = 0; i < phiTimePlot.z.length; i++) {
+        if (phiTimePlot.z[i][j] > bestV) { bestV = phiTimePlot.z[i][j]; bestI = i; }
+      }
+      return phiTimePlot.y[bestI];
+    });
+  }, [phiTimePlot]);
+
+  // RMS amplitude over φ at each time — mirrors plots.plot_slice's top RMS panel
+  const phiRms = useMemo(() => {
+    if (!phiTimePlot) return null;
+    const nPhi = phiTimePlot.z.length;
+    return phiTimePlot.x.map((_, j) =>
+      Math.sqrt(phiTimePlot.z.reduce((s, row) => s + row[j] ** 2, 0) / nPhi)
+    );
+  }, [phiTimePlot]);
 
   const phaseFitRemapped = useMemo((): Scatter2DNode | null => {
     if (phaseFitNode?.kind !== "scatter2d") return null;
@@ -357,8 +352,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     } as Partial<Plotly.Layout>) : {},
   [dark, phaseFitRemapped]);
 
-  const modeTag = contourNode?.meta?.m != null
-    ? `m/n = ${contourNode.meta.m}/${contourNode.meta.n} locked mode`
+  const modeTag = contourNode?.meta?.n != null
+    ? contourNode.meta.m === 0
+      ? `n = ${contourNode.meta.n} locked mode`
+      : `m/n = ${contourNode.meta.m}/${contourNode.meta.n} locked mode`
     : null;
 
   // seekTo: stable ref so Plot.tsx's onClick dep never changes during drag.
@@ -386,17 +383,27 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     },
   }), [fetchCursor, dark]);
 
-  const phiTimeData = useMemo(() =>
-    phiTimeRemapped ? [{
+  const phiTimeData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!phiTimePlot) return [];
+    const [zmin, zmax] = phiTimePlot.zrange ?? [-42, 42];
+    const traces: Partial<Plotly.PlotData>[] = [{
       type: "contour" as const,
-      x: phiTimeRemapped.x, y: phiTimeRemapped.y, z: phiTimeRemapped.z,
+      x: phiTimePlot.x, y: phiTimePlot.y, z: phiTimePlot.z,
       colorscale: dark ? CB_DIV_DARK : CB_DIV_LIGHT,
-      zmin: (phiTimeRemapped.zrange ?? [-42, 42])[0],
-      zmax: (phiTimeRemapped.zrange ?? [-42, 42])[1],
+      zmin, zmax,
       contours: { coloring: "fill" as const },
       showscale: false,
-    } as Partial<Plotly.PlotData>] : [],
-  [dark, phiTimeRemapped]);
+    } as Partial<Plotly.PlotData>];
+    if (phiPeak) {
+      traces.push({
+        type: "scatter" as const, mode: "markers" as const,
+        x: phiTimePlot.x, y: phiPeak,
+        marker: { symbol: "circle-open" as const, size: 4, color: "white", line: { width: 1, color: "white" } },
+        hoverinfo: "skip" as const, showlegend: false,
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [dark, phiTimePlot, phiPeak]);
 
   // Slider / shared axis bounds — derived from loaded data
   const tMin = useMemo(() =>
@@ -410,12 +417,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const timeXAxis = useMemo(() => ({ range: [tMin, tMax] }), [tMin, tMax]);
 
   const phiTimeLayout = useMemo(() =>
-    phiTimeRemapped ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: phiTimeRemapped.axes.x } },
-      yaxis: { title: { text: phiTimeRemapped.axes.y }, dtick: 90, range:[-180,180] },
+    phiTimePlot ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: phiTimePlot.axes.x } },
+      yaxis: { title: { text: phiTimePlot.axes.y }, range: [0, 360], dtick: 90, tickvals: [0, 90, 180, 270, 360] },
       shapes: [cursorLine],
     } as Partial<Plotly.Layout>) : {},
-  [dark, phiTimeRemapped, cursorLine, timeXAxis]);
+  [dark, phiTimePlot, cursorLine, timeXAxis]);
 
   const ampData = useMemo(() =>
     ampNode?.kind === "line" ? lineTraces(ampNode) : [],
@@ -424,7 +431,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const ampLayout = useMemo(() =>
     ampNode?.kind === "line" ? themedLayout(dark, {
       xaxis: { ...timeXAxis, title: { text: ampNode.axes.x } },
-      yaxis: { title: { text: ampNode.axes.y } },
+      yaxis: { title: { text: ampNode.axes.y }, rangemode: "tozero" as const },
       showlegend: true,
       legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
       shapes: [cursorLine],
@@ -438,7 +445,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const phaseTimeLayout = useMemo(() =>
     phaseTimeNode?.kind === "line" ? themedLayout(dark, {
       xaxis: { ...timeXAxis, title: { text: phaseTimeNode.axes.x } },
-      yaxis: { title: { text: phaseTimeNode.axes.y } },
+      yaxis: {
+        title: { text: phaseTimeNode.axes.y },
+        range: [-180, 180],
+        tickvals: [-180, -90, 0, 90, 180],
+      },
       showlegend: true,
       legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
       shapes: [cursorLine],
@@ -450,6 +461,47 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       <div>
         <h2>Quasi-stationary — spatial fit δB<sub>p</sub>(φ, θ)</h2>
         <p className="desc" style={{ margin: 0 }}>shot {machine}{modeTag ? ` · ${modeTag}` : ""}</p>
+      </div>
+
+      {/* ── Analysis settings ─────────────────────────────────────────── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          Array
+          <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
+            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            {CHANNEL_FILTERS.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          n modes
+          <input value={ns} onChange={e => setNs(e.target.value)}
+            style={{ width: 60, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          m modes
+          <input value={ms} onChange={e => setMs(e.target.value)}
+            style={{ width: 40, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          Detrend
+          <select value={detrendType} onChange={e => setDetrendType(e.target.value)}
+            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            <option value="baseline">baseline</option>
+            <option value="none">none</option>
+            <option value="linear">linear</option>
+            <option value="endpoints">endpoints</option>
+          </select>
+        </label>
+        {detrendType !== "none" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            band (ms)
+            <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
+              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            –
+            <input placeholder="auto" value={detrendHi} onChange={e => setDetrendHi(e.target.value)}
+              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          </label>
+        )}
       </div>
 
       {/* Streaming progress bar — visible while live frames arrive */}
@@ -484,11 +536,25 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
         {/* RIGHT — time-series plots stacked, all sharing the same x range */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {phiTimeRemapped && (
+          {phiTimePlot && (
             <div>
               <div className="metrics-title">δB<sub>p</sub> vs time — toroidal array</div>
+              {/* RMS amplitude panel — mirrors plots.plot_slice's top RMS subplot */}
+              {phiRms && (
+                <Plot height={70} data={[{
+                  type: "scatter" as const, mode: "lines" as const,
+                  x: phiTimePlot.x, y: phiRms,
+                  line: { color: LINE_PALETTE[0], width: 1.5 },
+                  showlegend: false,
+                } as Partial<Plotly.PlotData>]} layout={themedLayout(dark, {
+                  xaxis: { ...timeXAxis, showticklabels: false },
+                  yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
+                  margin: { t: 4, b: 4, l: 48, r: 8 },
+                  shapes: [cursorLine],
+                } as Partial<Plotly.Layout>)} onClick={seekTo} />
+              )}
               <Plot height={200} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} />
-              <ColorScale zrange={(phiTimeRemapped.zrange ?? [-42, 42]) as [number, number]} dark={dark} />
+              <ColorScale zrange={(phiTimePlot.zrange ?? [-42, 42]) as [number, number]} dark={dark} />
             </div>
           )}
 

@@ -14,7 +14,16 @@ from functools import lru_cache
 
 import numpy as np
 
+import sys as _sys
+from pathlib import Path as _Path
+# magnetics-code/ is not an installed package — add it to the path so run_steps
+# and the other scripts are importable. parents[3] = analysis/ from service/nodes.py
+_MAGNETICS_CODE = str(_Path(__file__).parents[3] / "magnetics-code")
+if _MAGNETICS_CODE not in _sys.path:
+    _sys.path.insert(0, _MAGNETICS_CODE)
+
 from ..core import contracts, geometry, spectral
+from ..core import qs_bridge
 from ..data import diiid, h5source
 
 T_TO_GAUSS = 1.0e4  # PTDATA integrated field is ~Tesla; show Gauss like the GUI
@@ -47,6 +56,7 @@ def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
     _spec_result.cache_clear()
+    _qs_run.cache_clear()
 
 
 def _array_channels(shot, families: tuple[str, ...]):
@@ -193,20 +203,26 @@ def _n_spectrum(shot, params=None) -> dict:
         meta={"probes": list(probes), "shot": str(shot)})
 
 
-# ── contour: raw δBp(φ, t) over the toroidal array (fit pending) ──────────────
-def _contour(shot, params=None) -> dict:
-    arr = _array_channels(shot, ("MPID",))
+# ── shared grid builder for contour and phi_t ────────────────────────────────
+def _toroidal_grid(shot):
+    """Interpolate toroidal MPID channels onto a regular φ×t grid.
+
+    Returns (t_sub_ms, phi_grid_deg, z, raw_phis, n_channels) where
+    z has shape (n_time, n_phi) — i.e. z[time_idx, phi_idx].
+    """
+    for families in (("MPID",), ("MPI_BDOT",)):
+        arr = _array_channels(shot, families)
+        if len(arr) >= 4:
+            break
     if len(arr) < 4:
-        raise ValueError("not enough MPID toroidal-array channels for a map")
+        raise ValueError("not enough toroidal-array channels for a map (need ≥ 4)")
     names = [n for n, _ in arr]
     phis = np.array([p for _, p in arr])
-    t_ms, mat = _stack(shot, names)            # mat[ch, time], Tesla-ish
-    # subsample time for transport
+    t_ms, mat = _stack(shot, names)
     nt = min(160, t_ms.size)
     ti = np.linspace(0, t_ms.size - 1, nt).astype(int)
     t_sub = t_ms[ti]
-    vals = mat[:, ti] * T_TO_GAUSS             # [ch, time] in Gauss
-    # interpolate over phi onto a regular grid at each time (periodic)
+    vals = mat[:, ti] * T_TO_GAUSS
     phi_grid = np.linspace(0, 360, 73)
     z = np.empty((nt, phi_grid.size))
     order = np.argsort(phis)
@@ -214,6 +230,12 @@ def _contour(shot, params=None) -> dict:
     for j in range(nt):
         ve = np.concatenate([vals[order, j], vals[order, j][:1]])
         z[j] = np.interp(phi_grid, pe, ve)
+    return t_sub, phi_grid, z, phis, len(names)
+
+
+# ── contour: raw δBp(φ, t) — x=φ, y=time (QS contour hero plot) ──────────────
+def _contour(shot, params=None) -> dict:
+    t_sub, phi_grid, z, phis, n_ch = _toroidal_grid(shot)
     zmax = float(np.nanmax(np.abs(z))) or 1.0
     overlay = {"points": [{"x": float(p), "y": float(t_sub[0])} for p in phis],
                "symbol": "square"}
@@ -221,16 +243,33 @@ def _contour(shot, params=None) -> dict:
         phi_grid.tolist(), t_sub.tolist(), z.tolist(),
         {"x": "φ (deg)", "y": "time (ms)", "z": "δBp (G)"},
         zrange=[-zmax, zmax], overlay=overlay,
-        meta={"channels": len(names), "shot": str(shot),
+        meta={"channels": n_ch, "shot": str(shot),
               "note": "raw toroidal δBp(φ,t) — SLCONTOUR φ–θ fit pending"})
 
 
-# ── fit_quality: real condition number K of the toroidal array ───────────────
+# ── phi_t: SLCONTOUR φ–t contour from fit reconstruction ─────────────────────
+def _phi_t(shot, params=None) -> dict:
+    """Reconstructed δBp(φ, t) at fixed θ=0 — the SLCONTOUR waterfall plot.
+
+    Mirrors plots.plot_slice(r.fit, fix_coord='theta', fix_value=0.0).
+    Rotating modes appear as diagonal stripes; locked modes as vertical bands.
+    """
+    return qs_bridge.fit_to_phi_t_node(_prep_qs_ds(shot, params))
+
+
+# ── fit_quality: condition number K + χ² from the SLCONTOUR fit ──────────────
 def _fit_quality(shot, params=None) -> dict:
+    """Fit quality metrics — uses the full run_steps fit when available."""
+    try:
+        return qs_bridge.fit_to_fit_quality_node(_prep_qs_ds(shot, params))
+    except Exception:
+        pass
+    # Fallback: geometry-only K (no fit available yet)
     arr = _array_channels(shot, ("MPID",))
+    if len(arr) < 4:
+        arr = _array_channels(shot, ("MPI_BDOT",))
     m = h5source.meta(shot)
     fields = [{"label": "shot", "value": str(m["shot"])},
-              {"label": "analysis", "value": m["analysis"]},
               {"label": "channels fetched", "value": m["n_channels"]}]
     if len(arr) >= 7:
         phis = [p for _, p in arr]
@@ -243,8 +282,7 @@ def _fit_quality(shot, params=None) -> dict:
         fields.append({"label": "condition number K",
                        "value": "n/a (no toroidal array in this pull)"})
     return contracts.metrics("Fit quality", fields,
-                             meta={"note": "K from the Fourier design matrix; "
-                                           "χ² pending the full fit"})
+                             meta={"note": "geometry-only K; full fit unavailable"})
 
 
 # ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
@@ -277,6 +315,91 @@ def _phase_fit(shot, params=None) -> dict:
               "note": "MODESPEC phase-at-frequency + circular n-fit"})
 
 
+# ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────
+
+@lru_cache(maxsize=8)
+def _qs_run(shot: str, ns: tuple, ms: tuple, channel_filter: str,
+            detrend_type: str, detrend_band: tuple,
+            cutoff_lo: float, cutoff_hi: float, energy: float):
+    """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
+
+    Delegates to magnetics-code/run.run_steps. All tuning parameters are
+    explicit cache-key arguments so the result is reused across node requests
+    that share the same settings.
+    """
+    import h5py
+    from run import run_steps  # magnetics-code/run.py on sys.path
+
+    path = h5source.shot_file(shot)
+    with h5py.File(str(path), "r") as f:
+        tmin_s = float(f.attrs.get("tmin", 0)) / 1e3
+        tmax_s = float(f.attrs.get("tmax", 0)) / 1e3
+
+    # detrend_band is in ms from the GUI; (0, 0) = auto → first 10ms of shot window
+    if detrend_band == (0.0, 0.0):
+        db_lo_s, db_hi_s = tmin_s, tmin_s + 0.01
+    else:
+        db_lo_s = max(detrend_band[0] / 1e3, tmin_s)
+        db_hi_s = min(detrend_band[1] / 1e3, tmax_s)
+
+    r = run_steps(
+        shot,
+        channel_filter=channel_filter,
+        ns=ns,
+        ms=ms,
+        time_trim=(tmin_s, tmax_s),
+        prep_kwargs=dict(
+            cutoff_hz=(cutoff_lo, cutoff_hi),
+            energy=energy,
+            detrend_type=detrend_type,
+            detrend_band=(db_lo_s, db_hi_s),
+        ),
+        verbose=False,
+    )
+    return r.fit
+
+
+def _prep_qs_ds(shot, params):
+    """Parse GUI query params and return the fit xarray Dataset."""
+    ns_raw = params.get("ns", "1,2,3") if params else "1,2,3"
+    ms_raw = params.get("ms", "0") if params else "0"
+    ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())
+    ms = tuple(int(x.strip()) for x in str(ms_raw).split(",") if x.strip())
+    channel_filter = (params.get("channel_filter", "Bp_LFS_midplane") if params
+                      else "Bp_LFS_midplane")
+    detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
+    # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
+    # so _qs_run defaults to the first 10ms of the shot window.
+    db_lo_str = params.get("detrend_lo") if params else None
+    db_hi_str = params.get("detrend_hi") if params else None
+    if db_lo_str is None or db_hi_str is None:
+        db_lo, db_hi = 0.0, 0.0  # sentinel: auto
+    else:
+        db_lo, db_hi = float(db_lo_str), float(db_hi_str)
+    cutoff_lo = float(params.get("cutoff_lo", 5.0)) if params else 5.0
+    cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
+    energy = float(params.get("energy", 0.98)) if params else 0.98
+    return _qs_run(str(shot), ns, ms, channel_filter, detrend_type,
+                   (db_lo, db_hi), cutoff_lo, cutoff_hi, energy)
+
+
+def _qs_fit(shot, params=None) -> dict:
+    """Reconstructed δBp(φ, θ) spatial map at the GUI time cursor → ContourNode."""
+    ds = _prep_qs_ds(shot, params)
+    t0 = _f(params, "time", None)
+    return qs_bridge.fit_to_qs_fit_node(ds, t0_ms=t0)
+
+
+def _amplitude(shot, params=None) -> dict:
+    """Mode amplitude ± 1σ vs time → LineNode."""
+    return qs_bridge.fit_to_amplitude_node(_prep_qs_ds(shot, params))
+
+
+def _phase_t(shot, params=None) -> dict:
+    """Mode phase ± 1σ vs time → LineNode."""
+    return qs_bridge.fit_to_phase_t_node(_prep_qs_ds(shot, params))
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -284,6 +407,10 @@ _BUILDERS = {
     "coherence": _coherence,
     "n_spectrum": _n_spectrum,
     "contour": _contour,
+    "phi_t": _phi_t,
+    "qs_fit": _qs_fit,
+    "amplitude": _amplitude,
+    "phase_t": _phase_t,
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
 }
