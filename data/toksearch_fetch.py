@@ -118,9 +118,12 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     lport = s.getsockname()[1]
     s.close()
 
+    # `gateway` is normally an ~/.ssh/config Host alias, so host/port/key/User come
+    # from ssh config; only prepend user@ when an explicit --username overrides it.
+    target = f"{username}@{gateway}" if username else gateway
     cmd = ["ssh", "-o", "ExitOnForwardFailure=yes", "-o",
            "ServerAliveInterval=30", "-N",
-           "-L", f"{lport}:{mds_host}:{mds_port}", f"{username}@{gateway}"]
+           "-L", f"{lport}:{mds_host}:{mds_port}", target]
     prompt = ("(using supplied credentials; approve Duo if pushed)" if env
               else "(your terminal will prompt for password + Duo once)")
     sys.stderr.write(
@@ -435,12 +438,12 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
 # --- public API ---------------------------------------------------------------
 def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
                username: str | None = None, password: str | None = None,
-               duo: str | None = None, gateway: str = "cybele.gat.com",
+               duo: str | None = None, gateway: str = "cybele",
                server: str = "atlas.gat.com:8000", tcp: bool = False,
                tmin: float | None = None, tmax: float | None = None,
                decimate: int = 1, workers: int = 4, batch_size: int = 40,
                out: str | None = None, compression: str = "lzf",
-               remote_host: str = "omega", ssh_jump: str = "cybele.gat.com",
+               remote_host: str = "omega", ssh_jump: str = "cybele",
                remote_dir: str = "~/magnetics_fetch", remote_setup: str | None = None,
                progress: Progress | None = None) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
@@ -490,10 +493,8 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         channels = _fetch_toksearch(shot, pointnames, tmin=tmin, tmax=tmax,
                                     stride=stride, progress=progress)
     elif backend == "mdsthin":
-        if not username:
-            username = input("GA username: ").strip()
-        if not username:
-            sys.exit("A username is required for the mdsthin backend.")
+        # username is optional: with an ssh-config Host alias as the gateway (the
+        # default), User/port/key come from ~/.ssh/config. --username overrides it.
         # GUI-supplied password → answer the SSH tunnel's auth via askpass (no
         # terminal prompt); without it ssh prompts on the tty as before.
         ssh_env, _ssh_cleanup = (None, lambda: None)
@@ -558,14 +559,17 @@ def main(argv=None) -> int:
                          "round trips; smaller=finer progress/less memory)")
     ap.add_argument("--compression", choices=("none", "lzf", "gzip"),
                     default="lzf")
-    ap.add_argument("--gateway", default="cybele.gat.com",
-                    help="mdsthin SSH gateway host")
+    ap.add_argument("--gateway", default="cybele",
+                    help="mdsthin SSH gateway — normally an ~/.ssh/config Host "
+                         "alias (default 'cybele') so host/port/key/User come from "
+                         "ssh config; or a raw host")
     ap.add_argument("--server", default="atlas.gat.com:8000",
                     help="mdsip host:port reached from the gateway")
     ap.add_argument("--tcp", action="store_true",
                     help="mdsthin: direct TCP mdsip instead of SSH gateway")
     ap.add_argument("--username", default=None,
-                    help="GA username (mdsthin/remote); prompted if omitted")
+                    help="GA username (mdsthin/remote); optional when the gateway "
+                         "ssh-config alias already sets User")
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument("--remote-host", default="omega",

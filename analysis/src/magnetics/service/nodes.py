@@ -22,6 +22,11 @@ def machines() -> list[dict]:
     return h5source.list_shots()
 
 
+def refresh() -> None:
+    """Forget the cached HDF5 file index (call after a new fetch writes a file)."""
+    h5source.refresh()
+
+
 def _array_channels(shot, families: tuple[str, ...]):
     """Channels present in this shot belonging to `families`, with a parseable
     phi, sorted by phi. Returns list of (name, phi)."""
@@ -62,39 +67,38 @@ def _geometry(shot) -> dict:
               "note": "θ is approximate (no geometry table yet)"})
 
 
-# ── spectrogram: real STFT of a Ḃ channel ────────────────────────────────────
-def _pick_bdot(shot) -> str:
-    names = h5source.channel_names(shot)
-    bdot = [n for n in names if diiid.family_of(n) == "MPI_BDOT"]
-    if bdot:
-        return bdot[0]
-    # fallback: the channel with the most samples (highest rate)
-    best, best_n = None, -1
-    for n in names:
-        if diiid.phi_of(n) is None:
-            continue
-        t, _ = h5source.load_channel(shot, n)
-        if t.size > best_n:
-            best, best_n = n, t.size
-    if best is None:
-        raise ValueError("no usable channel for a spectrogram")
-    return best
+# ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
+def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
+    """Two toroidally-separated probes for the 2-point cross-spectrogram.
+    Prefer the fast Mirnov dB/dt array (MPI_BDOT), then integrated Bp (MPID).
+    Returns ((name1, phi1), (name2, phi2)) with the widest non-zero separation."""
+    for families in (("MPI_BDOT",), ("MPID",), ("MPI_BDOT", "MPID", "MPIF")):
+        arr = _array_channels(shot, families)        # (name, phi), sorted by phi
+        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
+            return arr[0], arr[-1]
+    raise ValueError("need two toroidally-separated probes for a spectrogram")
 
 
 def _spectrogram(shot) -> dict:
-    ch = _pick_bdot(shot)
-    t_ms, y = h5source.load_channel(shot, ch)
-    if t_ms.size < 32:
-        raise ValueError(f"channel {ch} too short for a spectrogram "
-                         f"({t_ms.size} samples)")
-    dt_s = float(np.median(np.diff(t_ms))) / 1e3
-    ts, fk, power = spectral.spectrogram(y, dt_s)
+    (n1, phi1), (n2, phi2) = _pick_pair(shot)
+    t1, s1 = h5source.load_channel(shot, n1)
+    t2, s2 = h5source.load_channel(shot, n2)
+    k = min(t1.size, s1.size, t2.size, s2.size)
+    if k < 256:
+        raise ValueError(f"channels too short for a spectrogram ({k} samples)")
+    time_s = np.asarray(t1[:k], dtype=float) * 1e-3   # HDF5 time base is ms
+    res = spectral.compute_spectrogram(time_s, s1[:k], s2[:k],
+                                       delta_phi=float(phi2 - phi1))
+    # power is [n_times, n_freqs]; heatmap z is [i_y=freq][i_x=time] → transpose.
+    z = np.log10(np.maximum(np.asarray(res.power, dtype=float).T, 1e-30))
     return contracts.heatmap(
-        ts.tolist(), fk.tolist(), power.tolist(),
-        {"x": "time (ms)", "y": "f (kHz)", "z": "log power"},
+        (np.asarray(res.time) * 1e3).tolist(),        # x: time (ms)
+        (np.asarray(res.frequency) / 1e3).tolist(),   # y: frequency (kHz)
+        z.tolist(),
+        {"x": "time (ms)", "y": "f (kHz)", "z": "log₁₀ power"},
         discrete=False,
-        meta={"channel": ch, "shot": str(shot),
-              "fs_kHz": round(1e-3 / dt_s, 1)})
+        meta={"probes": [n1, n2], "delta_phi_deg": round(float(phi2 - phi1), 1),
+              "shot": str(shot)})
 
 
 # ── contour: raw δBp(φ, t) over the toroidal array (fit pending) ──────────────
@@ -157,23 +161,20 @@ def _phase_fit(shot, f0_khz: float = 5.0) -> dict:
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a phase fit")
     names = [n for n, _ in arr]
-    phis = np.array([p for _, p in arr])
-    t_ms, mat = _stack(shot, names)
-    dt_s = float(np.median(np.diff(t_ms))) / 1e3
-    phase = spectral.phase_at_frequency(mat, dt_s, f0_khz * 1e3)
-    # unwrap vs phi for a slope (= toroidal n) estimate
-    order = np.argsort(phis)
-    pw = np.unwrap(np.deg2rad(phase[order]))
-    n_slope, intercept = np.polyfit(phis[order], np.rad2deg(pw), 1)
+    phis = np.array([p for _, p in arr], dtype=float)
+    t_ms, mat = _stack(shot, names)               # mat[ch, time]
+    mode = spectral.extract_mode_at_frequency(
+        mat, phis, np.asarray(t_ms, dtype=float) * 1e-3, frequency=f0_khz * 1e3)
+    fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n
     points = [{"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
-              for (nm, p), ph in zip(arr, phase)]
-    fit = {"x": [0.0, 360.0],
-           "y": [float(intercept), float(intercept + n_slope * 360.0)]}
+              for (nm, p), ph in zip(arr, mode.phase)]
+    line = {"x": [0.0, 360.0],
+            "y": [fit.intercept_deg, fit.intercept_deg + fit.n * 360.0]}
     return contracts.scatter2d(
-        points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=fit,
-        meta={"n_estimate": round(float(n_slope), 2), "f_kHz": f0_khz,
-              "shot": str(shot),
-              "note": "single-bin DFT phase — approximate, MODESPEC fit pending"})
+        points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
+        meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
+              "f_kHz": f0_khz, "shot": str(shot),
+              "note": "MODESPEC phase-at-frequency + circular n-fit"})
 
 
 _BUILDERS = {
