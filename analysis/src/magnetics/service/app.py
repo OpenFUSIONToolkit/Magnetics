@@ -79,11 +79,11 @@ class FetchRequest(BaseModel):
     username: str | None = None
     password: str | None = None  # fed to ssh via askpass; localhost only, not stored
     duo: str | None = None       # Duo passcode, or "1" for push (default)
-    # remote backend overrides (None → fetcher defaults: omega via cybele, conda)
+    # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
     remote_host: str | None = None
     ssh_jump: str | None = None
     remote_dir: str | None = None
-    remote_setup: str | None = None
+    remote_python: str | None = None
 
 
 # ── background fetch jobs (so /api/fetch returns instantly and the GUI can show a
@@ -117,7 +117,7 @@ def post_fetch(req: FetchRequest) -> dict:
                             detail=f"fetcher unavailable: {exc}") from exc
     remote_kw = {k: v for k, v in {
         "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
-        "remote_dir": req.remote_dir, "remote_setup": req.remote_setup,
+        "remote_dir": req.remote_dir, "remote_python": req.remote_python,
     }.items() if v is not None}
 
     jid = uuid.uuid4().hex[:12]
