@@ -349,9 +349,23 @@ def _phase_fit(shot, params=None) -> dict:
         if e is not None and np.isfinite(e):
             pt["error_y"] = round(float(e), 3)
         points.append(pt)
-    # fitted line phase(φ) = c − n·φ (slope −n), matching the data ramp — not +n
-    line = {"x": [0.0, 360.0],
-            "y": [fit.intercept_deg, fit.intercept_deg - fit.n * 360.0]}
+    # Fitted line phase(φ) = (c − n·φ) mod 360, sampled densely and WRAPPED so it
+    # traces the same |n| sawteeth as the (wrapped) data instead of one line shooting
+    # off-axis. Insert a null break at each 0/360 wrap so the polyline doesn't draw a
+    # vertical jump across the panel.
+    phi_dense = np.linspace(0.0, 360.0, 361)
+    y_dense = (fit.intercept_deg - fit.n * phi_dense) % 360.0
+    fx: list = []
+    fy: list = []
+    prev = None
+    for x, y in zip(phi_dense, y_dense):
+        if prev is not None and abs(y - prev) > 180.0:
+            fx.append(None)
+            fy.append(None)
+        fx.append(round(float(x), 1))
+        fy.append(round(float(y), 1))
+        prev = y
+    line = {"x": fx, "y": fy}
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
         meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),

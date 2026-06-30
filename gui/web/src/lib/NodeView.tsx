@@ -130,6 +130,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         traces.push({
           type: "scatter", mode: "lines", x: node.fit.x, y: node.fit.y,
           line: { color: "#54e08a", width: 1.5, dash: "dot" }, hoverinfo: "skip",
+          connectgaps: false,  // null entries = wrap breaks; don't bridge them
         } as Partial<Plotly.PlotData>);
       }
       return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
