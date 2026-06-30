@@ -10,10 +10,13 @@
 // The node is a scatter2d (R-Z points) whose `meta` carries the full per-sensor
 // records + the vessel outline; the backend owns every device specific (which
 // family is Bp vs a saddle loop, the wall shape), so this view is device-agnostic.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
+import { usingLiveBackend } from "../../lib/api";
+import { mockEquilibrium, EQ_TIME_RANGE } from "../../lib/mockEquilibrium";
+import type { EquilibriumNode } from "../../lib/contract";
 import Plot from "../../lib/Plot";
 
 type Kind = "Bp" | "Br" | "coil";
@@ -22,9 +25,11 @@ interface Sensor {
   phi: number; r: number; z: number; length: number; delta_phi: number; tilt: number;
 }
 interface Wall { r: number[]; z: number[]; label: string }
+interface SensorSet { name: string; kind: Kind; count: number; sensors: string[] }
 interface GeoMeta {
   n_sensors: number; device: string; sensors: Sensor[]; wall: Wall;
   arrays: { family: string; kind: Kind; shape: string; count: number }[];
+  sensor_sets: SensorSet[];
 }
 
 const COLOR: Record<Kind, string> = { Bp: "#4aa3ff", Br: "#ff5cad", coil: "#ffb454" };
@@ -34,21 +39,89 @@ const KIND_LABEL: Record<Kind, string> = {
 const KINDS: Kind[] = ["Bp", "Br", "coil"];
 const d2r = (deg: number) => (deg * Math.PI) / 180;
 
+// 2D cross-section: scroll to zoom, drag to pan, toolbar for zoom/reset.
+const PAN_CONFIG: Partial<Plotly.Config> = {
+  scrollZoom: true,
+  displayModeBar: true,
+  displaylogo: false,
+  modeBarButtonsToRemove: ["lasso2d", "select2d"],
+};
+
+const LEGEND = { orientation: "h" as const, font: { size: 10 }, y: 1.12 };
+
+// Stable layouts (module constants) + a constant `uirevision`, so re-plotting on
+// a slider move never resets the user's 3D camera or 2D zoom/pan.
+const LAYOUT_2D = {
+  showlegend: true, legend: LEGEND, dragmode: "pan", uirevision: "sensors",
+  xaxis: { title: { text: "R (m)" } },
+  yaxis: { title: { text: "Z (m)" }, scaleanchor: "x", scaleratio: 1 },
+} as Partial<Plotly.Layout>;
+
+const LAYOUT_3D = {
+  showlegend: true, legend: LEGEND, uirevision: "sensors",
+  scene: {
+    aspectmode: "data",
+    // Hover spikes: a single line from the point to each axis, not the
+    // projected cross-sections on the cube walls.
+    xaxis: { title: { text: "X (m)" }, showspikes: true, spikesides: false, spikethickness: 1.5 },
+    yaxis: { title: { text: "Y (m)" }, showspikes: true, spikesides: false, spikethickness: 1.5 },
+    zaxis: { title: { text: "Z (m)" }, showspikes: true, spikesides: false, spikethickness: 1.5 },
+  },
+} as Partial<Plotly.Layout>;
+
 export default function SensorsTab({ machine }: { machine: string }) {
   const dark = useStore((s) => s.theme === "dark");
+  const cursorMs = useStore((s) => s.cursorMs);
+  const setCursorMs = useStore((s) => s.setCursorMs);
   const { node, error, loading } = useNode(machine, "geometry");
   const meta = (node?.meta as unknown as GeoMeta) ?? null;
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
+  const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
+  // 3D vessel shell — brighter/whiter than the 2D outline so it reads in the
+  // dark scene; lighter mode bumped up slightly too.
+  const wallSurface = dark ? "rgb(225,232,245)" : "rgb(70,90,110)";
+  const wallSurfaceOpacity = dark ? 0.22 : 0.16;
 
-  const [visible, setVisible] = useState<Record<Kind, boolean>>({ Bp: true, Br: true, coil: false });
-  const toggle = (k: Kind) => setVisible((v) => ({ ...v, [k]: !v[k] }));
+  const [showEq, setShowEq] = useState(true);
 
-  // Which kinds actually exist in this device's table.
-  const present = useMemo(() => {
-    const set = new Set<Kind>();
-    meta?.sensors.forEach((s) => set.add(s.kind));
-    return KINDS.filter((k) => set.has(k));
-  }, [meta]);
+  // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
+  // is shown if it belongs to ANY checked set. Default: the broadest Bp + Br set.
+  const sets = useMemo<SensorSet[]>(() => meta?.sensor_sets ?? [], [meta]);
+  const [selectedSets, setSelectedSets] = useState<Record<string, boolean>>({});
+  const toggleSet = (name: string) =>
+    setSelectedSets((s) => ({ ...s, [name]: !s[name] }));
+
+  useEffect(() => {
+    if (!sets.length || Object.keys(selectedSets).length) return;
+    const init: Record<string, boolean> = {};
+    const widest: Partial<Record<Kind, SensorSet>> = {};
+    for (const set of sets) {
+      init[set.name] = false;
+      if (set.kind !== "coil" && (!widest[set.kind] || set.count > widest[set.kind]!.count))
+        widest[set.kind] = set;
+    }
+    Object.values(widest).forEach((s) => { if (s) init[s.name] = true; });
+    setSelectedSets(init);
+  }, [sets, selectedSets]);
+
+  // Equilibrium overlay (time-parametrized). On a live backend, pull the real
+  // node; otherwise synthesize a swappable stand-in from the time cursor.
+  const live = usingLiveBackend();
+  const [tmin, tmax] = EQ_TIME_RANGE;
+  const tNow = Math.min(tmax, Math.max(tmin, cursorMs || tmin));
+  const eqLive = useNode(live ? machine : null, "equilibrium", { time: tNow });
+  const equilibrium = useMemo<EquilibriumNode | null>(() => {
+    if (!showEq) return null;
+    return (eqLive.node as unknown as EquilibriumNode | null) ?? mockEquilibrium(tNow);
+  }, [showEq, eqLive.node, tNow]);
+
+  // Sensors visible under the current set selection (union of checked sets).
+  const visibleSensors = useMemo(() => {
+    if (!meta) return [];
+    const names = new Set<string>();
+    for (const set of sets) if (selectedSets[set.name]) set.sensors.forEach((n) => names.add(n));
+    return meta.sensors.filter((s) => names.has(s.name));
+  }, [meta, sets, selectedSets]);
 
   // Vessel center (for the local poloidal-tangent direction of each loop).
   const Rc = useMemo(() => {
@@ -57,18 +130,40 @@ export default function SensorsTab({ machine }: { machine: string }) {
     return (Math.max(...r) + Math.min(...r)) / 2;
   }, [meta]);
 
-  const shownKinds = useMemo(() => present.filter((k) => visible[k]), [present, visible]);
-
   const traces2d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
-    const t: Partial<Plotly.PlotData>[] = [{
+    const t: Partial<Plotly.PlotData>[] = [];
+
+    // Equilibrium first, so flux surfaces sit under the wall + sensors.
+    if (equilibrium) {
+      const lv = equilibrium.levels ?? [0.2, 0.4, 0.6, 0.8, 1.0];
+      t.push({
+        type: "contour", x: equilibrium.r, y: equilibrium.z, z: equilibrium.psi_n,
+        autocontour: false,
+        contours: { coloring: "lines", start: Math.min(...lv), end: 1.0, size: lv.length > 1 ? lv[1] - lv[0] : 0.2 },
+        colorscale: [[0, fluxInk], [1, fluxInk]], showscale: false, hoverinfo: "skip",
+        name: "flux surfaces", showlegend: false,
+      } as unknown as Partial<Plotly.PlotData>);
+      t.push({
+        type: "scatter", mode: "lines", name: "LCFS (synthetic)",
+        x: equilibrium.boundary.r, y: equilibrium.boundary.z,
+        line: { color: "#2ee6cf", width: 2 }, hoverinfo: "skip",
+      } as Partial<Plotly.PlotData>);
+      t.push({
+        type: "scatter", mode: "markers", x: [equilibrium.axis.r], y: [equilibrium.axis.z],
+        marker: { symbol: "cross", size: 8, color: "#2ee6cf" }, hoverinfo: "skip", showlegend: false,
+      } as Partial<Plotly.PlotData>);
+    }
+
+    t.push({
       type: "scatter", mode: "lines", name: meta.wall.label,
       x: meta.wall.r, y: meta.wall.z, hoverinfo: "skip",
       line: { color: wallInk, width: 1.5 },
-    } as Partial<Plotly.PlotData>];
+    } as Partial<Plotly.PlotData>);
 
-    for (const kind of shownKinds) {
-      const group = meta.sensors.filter((s) => s.kind === kind);
+    for (const kind of KINDS) {
+      const group = visibleSensors.filter((s) => s.kind === kind);
+      if (!group.length) continue;
       const points = group.filter((s) => s.shape === "point");
       const loops = group.filter((s) => s.shape === "loop");
       let legendShown = false;
@@ -102,7 +197,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, wallInk, shownKinds]);
+  }, [meta, Rc, wallInk, visibleSensors, equilibrium, fluxInk]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -115,8 +210,10 @@ export default function SensorsTab({ machine }: { machine: string }) {
     const step = Math.max(1, Math.floor(meta.wall.r.length / 64));
     for (let i = 0; i < meta.wall.r.length; i += step) { ru.push(meta.wall.r[i]); zu.push(meta.wall.z[i]); }
     t.push({
-      type: "surface", showscale: false, opacity: 0.1, hoverinfo: "skip",
-      colorscale: [[0, wallInk], [1, wallInk]],
+      type: "surface", showscale: false, opacity: wallSurfaceOpacity, hoverinfo: "skip",
+      colorscale: [[0, wallSurface], [1, wallSurface]],
+      // Flat, even shading so the shell reads uniformly bright (no dark facets).
+      lighting: { ambient: 1.0, diffuse: 0.0, specular: 0.0, fresnel: 0.0 },
       // Suppress the surface's hover cross-section trace lines (the wall
       // "cross sections"); we only want the spike lines to the hovered point.
       contours: {
@@ -127,8 +224,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
       z: ru.map((_, i) => phis.map(() => zu[i])),
     } as unknown as Partial<Plotly.PlotData>);
 
-    for (const kind of shownKinds) {
-      const group = meta.sensors.filter((s) => s.kind === kind);
+    for (const kind of KINDS) {
+      const group = visibleSensors.filter((s) => s.kind === kind);
+      if (!group.length) continue;
       const points = group.filter((s) => s.shape === "point");
       const loops = group.filter((s) => s.shape === "loop");
       let legendShown = false;
@@ -173,9 +271,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, wallInk, shownKinds]);
-
-  const legend = { orientation: "h" as const, font: { size: 10 }, y: 1.12 };
+  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity]);
 
   return (
     <div className="card">
@@ -190,44 +286,55 @@ export default function SensorsTab({ machine }: { machine: string }) {
 
       {meta && (
         <>
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "0 0 12px" }}>
-            {present.map((k) => (
-              <label key={k} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
-                <input type="checkbox" checked={visible[k]} onChange={() => toggle(k)} />
-                <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR[k], display: "inline-block" }} />
-                {KIND_LABEL[k]}
+          {/* Sensor-set selection, grouped by kind. Check any sets to show them. */}
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: 13 }}>
+            {KINDS.map((kind) => {
+              const ks = sets.filter((s) => s.kind === kind);
+              if (!ks.length) return null;
+              return (
+                <div key={kind} style={{ minWidth: 150 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, marginBottom: 4 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR[kind], display: "inline-block" }} />
+                    {KIND_LABEL[kind]}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    {ks.map((s) => (
+                      <label key={s.name} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                        <input type="checkbox" checked={!!selectedSets[s.name]} onChange={() => toggleSet(s.name)} />
+                        {s.name} <span style={{ opacity: 0.5 }}>({s.count})</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ minWidth: 150 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>overlays</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
+                equilibrium {!live && <em style={{ opacity: 0.6 }}>(synthetic)</em>}
               </label>
-            ))}
+            </div>
+          </div>
+
+          {/* Shared time cursor — also linked to the rotating / QS views. */}
+          <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "0 0 14px", fontSize: 13 }}>
+            <span style={{ opacity: 0.7 }}>time</span>
+            <input
+              type="range" min={tmin} max={tmax} step={10} value={tNow}
+              onChange={(e) => setCursorMs(Number(e.target.value))}
+              style={{ flex: "1 1 240px", maxWidth: 420 }}
+            />
+            <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 70 }}>{tNow.toFixed(0)} ms</span>
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot
-                height={460}
-                data={traces2d}
-                layout={{
-                  showlegend: true, legend,
-                  xaxis: { title: { text: "R (m)" } },
-                  yaxis: { title: { text: "Z (m)" }, scaleanchor: "x", scaleratio: 1 },
-                } as Partial<Plotly.Layout>}
-              />
+              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} />
             </div>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot
-                height={460}
-                data={traces3d}
-                layout={{
-                  showlegend: true, legend,
-                  scene: {
-                    aspectmode: "data",
-                    // Hover spikes: a single line from the point to each axis,
-                    // not the projected cross-sections on the cube walls.
-                    xaxis: { title: { text: "X (m)" }, showspikes: true, spikesides: false, spikethickness: 1.5 },
-                    yaxis: { title: { text: "Y (m)" }, showspikes: true, spikesides: false, spikethickness: 1.5 },
-                    zaxis: { title: { text: "Z (m)" }, showspikes: true, spikesides: false, spikethickness: 1.5 },
-                  },
-                } as Partial<Plotly.Layout>}
-              />
+              <Plot height={460} data={traces3d} layout={LAYOUT_3D} />
             </div>
           </div>
         </>

@@ -16,7 +16,12 @@ export interface PlotProps {
   layout?: Partial<Plotly.Layout>;
   height?: number;
   onClick?: (e: Plotly.PlotMouseEvent) => void;
+<<<<<<< Updated upstream
   onRelayout?: (e: Record<string, unknown>) => void;
+=======
+  /** Per-plot Plotly config overrides (e.g. scrollZoom, displayModeBar). */
+  config?: Partial<Plotly.Config>;
+>>>>>>> Stashed changes
 }
 
 function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
@@ -39,7 +44,11 @@ function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
   };
 }
 
+<<<<<<< Updated upstream
 export default function Plot({ data, layout, height = 320, onClick, onRelayout }: PlotProps) {
+=======
+export default function Plot({ data, layout, height = 320, onClick, config }: PlotProps) {
+>>>>>>> Stashed changes
   const ref = useRef<HTMLDivElement>(null);
   const theme = useStore((s) => s.theme);
 
@@ -55,9 +64,14 @@ export default function Plot({ data, layout, height = 320, onClick, onRelayout }
       yaxis: { ...base.yaxis, ...(layout?.yaxis as object) },
     };
     try {
+<<<<<<< Updated upstream
       Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true });
       const clickHandler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
       const relayoutHandler = (e: Record<string, unknown>) => onRelayout?.(e);
+=======
+      Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true, ...config });
+      const handler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
+>>>>>>> Stashed changes
       // @ts-expect-error plotly event typing is loose on the dist build
       if (onClick) el.on("plotly_click", clickHandler);
       // @ts-expect-error plotly event typing is loose on the dist build
@@ -75,7 +89,11 @@ export default function Plot({ data, layout, height = 320, onClick, onRelayout }
         /* noop */
       }
     };
+<<<<<<< Updated upstream
   }, [data, layout, height, onClick, onRelayout, theme]);
+=======
+  }, [data, layout, height, onClick, theme, config]);
+>>>>>>> Stashed changes
 
   useEffect(() => {
     const el = ref.current;

@@ -40,6 +40,7 @@ def build_node() -> dict:
             "sensors": sensors,
             "wall": geo["wall"],
             "arrays": geo["arrays"],
+            "sensor_sets": geo["sensor_sets"],
         },
     )
 
