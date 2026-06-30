@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
+import { usingLiveBackend } from "../../lib/api";
 import { MODE_PALETTE, POWER_SEQUENTIAL } from "../../lib/colormaps";
 import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
@@ -39,9 +40,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [fmin, setFmin] = useState<number>(0);
   const [fmax, setFmax] = useState<number>(50);
   const [fittype, setFittype] = useState<number>(2); // 0 = circular, 1 = toroidicity, 2 = PEST theta*
-  const [btype, setBtype] = useState<number>(4);
+  const [btype, setBtype] = useState<number>(4); // visual only — no backend (QS/SLCONTOUR path)
   const [smoothing, setSmoothing] = useState<number>(5);
   const [coherenceThreshold, setCoherenceThreshold] = useState<number>(0.5);
+  // Toroidal mode-number range (real knob — bounded to the Δφ aliasing ceiling by the backend)
+  const [nMin, setNMin] = useState<number>(-6);
+  const [nMax, setNMax] = useState<number>(6);
 
   // Advanced Parameter states
   const [advancedExpanded, setAdvancedExpanded] = useState<boolean>(false);
@@ -91,17 +95,41 @@ export default function RotatingTab({ machine }: { machine: string }) {
   }, []);
 
   // --- 1. DATA INGESTION & FALLBACKS ---
+  const live = usingLiveBackend();
+
+  // Knob → node params. Sent to the live backend (re-runs the core on change);
+  // ignored by the static mock. Memoized so useNode only refetches on real changes.
+  const specParams = useMemo(
+    () => ({
+      fmin, fmax,
+      coherence_min: coherenceThreshold,
+      smoothing,
+      fft_overlap: fftOverlap,
+      n_min: nMin, n_max: nMax,
+    }),
+    [fmin, fmax, coherenceThreshold, smoothing, fftOverlap, nMin, nMax],
+  );
+
   // Fetch main spectrogram node (from static files if available)
   const {
     node: specNode,
     loading: specLoading,
     error: specError,
-  } = useNode(machine, "spectrogram");
+  } = useNode(machine, "spectrogram", specParams);
 
   // Fetch toroidal phase fit node (from static files if available)
   const {
     node: phaseNode,
   } = useNode(machine, "phase_fit", { time: cursorMs });
+
+  // Rich MODESPEC nodes — gated on a live backend (no static mock fixtures for these).
+  // Passing `null` as the machine when not live makes useNode a no-op (returns null),
+  // so the panels fall back to the clearly-labeled synthetic generators below.
+  const liveMachine = live ? machine : null;
+  const { node: modeNode } = useNode(liveMachine, "mode_number", specParams);
+  const { node: cohNode } = useNode(liveMachine, "coherence", specParams);
+  const { node: rawNode } = useNode(liveMachine, "raw_signal", { time: cursorMs, window_ms: 2 });
+  const { node: contourNode } = useNode(liveMachine, "contour", {});
 
   // Auto-initialize the time cursor to the start of the data range
   useEffect(() => {
@@ -115,10 +143,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
     }
   }, [specNode, cursorMs, setCursorMs]);
 
-  // Detect data source
+  // Detect data source. Live backend = real Python/FastAPI nodes; otherwise the
+  // static mock JSON (if present) or the synthetic generator (last resort).
   const hasStaticFiles = !!specNode && !specError;
-  const dataSourceText = hasStaticFiles ? "Mock Files (Static)" : "Synthetic Generator (Dynamic)";
-  const dataSourceColor = hasStaticFiles ? "var(--good)" : "var(--accent)";
+  const dataSourceText = live
+    ? "Live Backend"
+    : hasStaticFiles
+      ? "Mock Files (Static)"
+      : "Synthetic Generator (Dynamic)";
+  const dataSourceColor = live || hasStaticFiles ? "var(--good)" : "var(--accent)";
 
   // --- 2. DYNAMIC SYNTHETIC DATA GENERATOR ---
   // When static files aren't found, we synthesize mode activity
@@ -181,6 +214,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
   // Merge loaded specNode with controls/display settings
   const processedSpecNode = useMemo(() => {
+    // Live backend: the real nodes are already cropped/gated/mode-ranged server-side
+    // (we pass fmin/fmax/coherence/n_min/n_max), so render them directly. "Mode n"
+    // uses the real mode_number node; "Log Power" uses the real spectrogram.
+    if (live) {
+      const node = displayMode === "n" ? modeNode : specNode;
+      return node && node.kind === "heatmap" ? node : null;
+    }
+
     const baseNode = hasStaticFiles ? specNode : syntheticSpecNode;
     if (!baseNode || baseNode.kind !== "heatmap") return null;
 
@@ -272,7 +313,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         zrange: [-3, 0] as [number, number],
       };
     }
-  }, [hasStaticFiles, specNode, syntheticSpecNode, displayMode, fmin, fmax, coherenceThreshold, shieldingCutoff]);
+  }, [live, modeNode, hasStaticFiles, specNode, syntheticSpecNode, displayMode, fmin, fmax, coherenceThreshold, shieldingCutoff]);
 
   // Determine active mode frequencies at the current time slice
   const currentModeFreqs = useMemo(() => {
@@ -289,33 +330,44 @@ export default function RotatingTab({ machine }: { machine: string }) {
   }, [cursorMs]);
 
   // Sliced Sub-interval spectrum arrays
+  const nearestCol = (xs: number[]) => {
+    let tIdx = 0, minDiff = Infinity;
+    xs.forEach((t, idx) => {
+      const diff = Math.abs(t - cursorMs);
+      if (diff < minDiff) { minDiff = diff; tIdx = idx; }
+    });
+    return tIdx;
+  };
+
   const subIntervalData = useMemo(() => {
+    // Live: slice the REAL spectrogram / coherence / mode-number heatmaps at the
+    // cursor column (all three share the core's STFT grid, so columns align).
+    if (live && specNode?.kind === "heatmap") {
+      const freqs = specNode.y;
+      const tIdx = nearestCol(specNode.x);
+      const power = freqs.map((_, fIdx) => Math.pow(10, specNode.z[fIdx][tIdx]));
+      const coh = cohNode?.kind === "heatmap"
+        ? freqs.map((_, fIdx) => cohNode.z[fIdx]?.[tIdx] ?? 0)
+        : power.map(() => 0);
+      const nMode = modeNode?.kind === "heatmap"
+        ? freqs.map((_, fIdx) => modeNode.z[fIdx]?.[tIdx] ?? 0)
+        : freqs.map(() => 0);
+      return { freqs, power, coh, nMode };
+    }
+
     const baseNode = hasStaticFiles ? specNode : syntheticSpecNode;
     if (!baseNode || baseNode.kind !== "heatmap") {
       return { freqs: [], power: [], coh: [], nMode: [] };
     }
-
-    // Find time column index closest to cursorMs
-    let tIdx = 0;
-    let minDiff = Infinity;
-    baseNode.x.forEach((t, idx) => {
-      const diff = Math.abs(t - cursorMs);
-      if (diff < minDiff) {
-        minDiff = diff;
-        tIdx = idx;
-      }
-    });
-
+    const tIdx = nearestCol(baseNode.x);
     const freqs = baseNode.y;
-    const power = freqs.map((_, fIdx) => Math.pow(10, baseNode.z[fIdx][tIdx])); // Convert log power to linear power
-    
-    // Simulate coherence based on power peaks
+    const power = freqs.map((_, fIdx) => Math.pow(10, baseNode.z[fIdx][tIdx])); // log → linear
+
+    // Synthetic fallback (no backend): simulate coherence + mode number.
     const coh = power.map((p) => {
       const rawCoh = p > 0.05 ? 0.9 - (0.1 / p) : 0.15 + p * 2.0;
       return Math.max(0.0, Math.min(1.0, rawCoh));
     });
-
-    // Simulate mode number
     const nMode = coh.map((c, fIdx) => {
       if (c < coherenceThreshold) return 0;
       const f = freqs[fIdx];
@@ -328,7 +380,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
     });
 
     return { freqs, power, coh, nMode };
-  }, [hasStaticFiles, specNode, syntheticSpecNode, cursorMs, coherenceThreshold, currentModeFreqs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, specNode, cohNode, modeNode, hasStaticFiles, syntheticSpecNode, cursorMs, coherenceThreshold, currentModeFreqs]);
 
   // Toroidal & Poloidal wave stripes data (Array Tab)
   const arrayStripesData = useMemo(() => {
@@ -537,7 +590,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const renderSubInterval = () => {
     const { freqs, power, coh, nMode } = subIntervalData;
     const activeFreqs = currentModeFreqs[0] > 0 ? currentModeFreqs : [8.0];
-    const rawTrace = generateDeterministicTimeTrace(cursorMs, activeFreqs);
+    // Live: real probe dB/dt around the cursor; else the synthetic sum-of-sines.
+    const liveRaw = live && rawNode?.kind === "line" && rawNode.series.length > 0;
+    const rawTrace = liveRaw
+      ? { times: rawNode.series[0].x, values: rawNode.series[0].y }
+      : generateDeterministicTimeTrace(cursorMs, activeFreqs);
 
     const rawPlotData = [
       {
@@ -644,18 +701,23 @@ export default function RotatingTab({ machine }: { machine: string }) {
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
 
+    // Live: real toroidal δBp(φ,t) from the `contour` node (its own φ-vs-time axes).
+    const liveContour = live && contourNode?.kind === "contour";
+
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: arrayLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Toroidal Array Waves dBp(φ, t)
+            Toroidal Array δBp(φ, t){liveContour ? "" : "  ·  synthetic"}
           </h4>
-          <Plot data={toroidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "φ (deg)" } } }} height={200} />
+          {liveContour
+            ? <NodeView node={contourNode} height={200} />
+            : <Plot data={toroidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "φ (deg)" } } }} height={200} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Poloidal Array Waves dBp(θ, t)
+            Poloidal Array dBp(θ, t)  ·  synthetic — pending backend
           </h4>
           <Plot data={poloidalTrace} layout={{ ...baseLayout, yaxis: { title: { text: "θ (deg)" } } }} height={200} />
         </div>
@@ -677,7 +739,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Poloidal Phase Fit (m = {String(poloidalMeta?.m_fit ?? "")}, fittype = {fittype})
+            Poloidal Phase Fit (m = {String(poloidalMeta?.m_fit ?? "")}, fittype = {fittype})  ·  synthetic — pending backend
           </h4>
           <NodeView node={processedPoloidalNode} height={200} />
         </div>
@@ -827,7 +889,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
             {/* btype */}
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <label htmlFor="btype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Baseline Method (btype)</label>
+              <label htmlFor="btype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Baseline Method (btype) · visual only</label>
               <select
                 id="btype-select"
                 value={btype}
@@ -880,6 +942,38 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 onChange={(e) => setCoherenceThreshold(parseFloat(e.target.value))}
                 style={{ accentColor: "var(--accent)" }}
               />
+            </div>
+
+            {/* toroidal mode-number range (real; backend clamps to the Δφ ceiling) */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <label style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+                Mode range n: <strong style={{ color: "var(--text)" }}>{nMin} … {nMax}</strong>
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                <input
+                  aria-label="n_min"
+                  type="range"
+                  min="-6"
+                  max="0"
+                  step="1"
+                  value={nMin}
+                  onChange={(e) => setNMin(Math.min(parseInt(e.target.value), nMax))}
+                  style={{ accentColor: "var(--accent)" }}
+                />
+                <input
+                  aria-label="n_max"
+                  type="range"
+                  min="0"
+                  max="6"
+                  step="1"
+                  value={nMax}
+                  onChange={(e) => setNMax(Math.max(parseInt(e.target.value), nMin))}
+                  style={{ accentColor: "var(--accent)" }}
+                />
+              </div>
+              <span style={{ fontSize: "8px", color: "var(--text-dim)", lineHeight: 1.1 }}>
+                A 2-probe pair resolves only |n| ≤ ⌊180/Δφ⌋; the backend clamps to that.
+              </span>
             </div>
 
             {/* Advanced Parameters Divider & Header */}
@@ -1000,7 +1094,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   {/* PEST Shaping Coefficient lambda1 slider */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                     <label htmlFor="lambda1-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      PEST λ₁ (Toroidicity): <strong style={{ color: "var(--good)" }}>{pestLambda1.toFixed(2)}</strong>
+                      PEST λ₁ (Toroidicity) · visual: <strong style={{ color: "var(--good)" }}>{pestLambda1.toFixed(2)}</strong>
                     </label>
                     <input
                       id="lambda1-range"
@@ -1017,7 +1111,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   {/* PEST Shaping Coefficient lambda2 slider */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                     <label htmlFor="lambda2-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      PEST λ₂ (Elongation): <strong style={{ color: "var(--good)" }}>{pestLambda2.toFixed(2)}</strong>
+                      PEST λ₂ (Elongation) · visual: <strong style={{ color: "var(--good)" }}>{pestLambda2.toFixed(2)}</strong>
                     </label>
                     <input
                       id="lambda2-range"
@@ -1033,7 +1127,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
                   {/* Bt Compensation selection */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="bt-comp-select" style={{ fontSize: "10px", color: "var(--text-dim)" }}>Bt Alignment Comp.</label>
+                    <label htmlFor="bt-comp-select" style={{ fontSize: "10px", color: "var(--text-dim)" }}>Bt Alignment Comp. · visual only</label>
                     <select
                       id="bt-comp-select"
                       value={btCompMode}
@@ -1057,7 +1151,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   {/* Sensor Shielding Cutoff slider */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                     <label htmlFor="shielding-cutoff-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      Sensor Bandwidth: <strong style={{ color: "var(--accent)" }}>{shieldingCutoff} kHz</strong>
+                      Sensor Bandwidth · visual: <strong style={{ color: "var(--accent)" }}>{shieldingCutoff} kHz</strong>
                     </label>
                     <input
                       id="shielding-cutoff-range"

@@ -248,9 +248,9 @@ def _stft(
 
 
 def stft_layout(
-    n_samples: int, sample_rate: float, slice_duration: float
+    n_samples: int, sample_rate: float, slice_duration: float, overlap: float = 0.5
 ) -> tuple[int, int, int]:
-    """FFT length, native 50%-overlap hop, and natural column count for an STFT.
+    """FFT length, hop for the requested overlap, and natural column count for an STFT.
 
     Single source of truth for the sliding-window geometry, shared by
     ``compute_spectrogram`` and the streaming/contract layer so the two cannot drift.
@@ -259,14 +259,17 @@ def stft_layout(
         n_samples (int): signal length (samples).
         sample_rate (float): sampling rate (Hz).
         slice_duration (float): FFT window width (s).
+        overlap (float): fractional window overlap in [0, 0.95]; hop = n_fft·(1−overlap).
+            0.5 is the native 50%-overlap stride.
     Returns:
-        (n_fft, natural_hop, n_cols_natural): window length, 50%-overlap stride, and
-        the number of windows at that stride.
+        (n_fft, base_hop, n_cols_natural): window length, the overlap stride, and the
+        number of windows at that stride.
     """
+    overlap = min(max(overlap, 0.0), 0.95)
     n_fft = max(8, int(next_fast_len(int(round(slice_duration * sample_rate)))))
-    natural_hop = max(1, n_fft // 2)
-    n_cols_natural = max(1, (n_samples - n_fft) // natural_hop + 1)
-    return n_fft, natural_hop, n_cols_natural
+    base_hop = max(1, int(round(n_fft * (1.0 - overlap))))
+    n_cols_natural = max(1, (n_samples - n_fft) // base_hop + 1)
+    return n_fft, base_hop, n_cols_natural
 
 
 def compute_spectrogram(
@@ -277,6 +280,7 @@ def compute_spectrogram(
     *,
     slice_duration: float = 0.001,
     window: str = "hann",
+    overlap: float = 0.5,
     max_columns: int = 2000,
     coherence_smooth: int = 5,
 ) -> SpectrogramResult:
@@ -295,6 +299,7 @@ def compute_spectrogram(
         delta_phi (float): toroidal separation (deg); must be non-zero.
         slice_duration (float): FFT window width (s) — sets the frequency resolution.
         window (str): scipy window name for the taper.
+        overlap (float): fractional window overlap in [0, 0.95]; hop = n_fft·(1−overlap).
         max_columns (int): cap on spectrogram time columns (decimation lever).
         coherence_smooth (int): frequency-bin width for the coherence estimate (>1).
     Returns:
@@ -312,11 +317,11 @@ def compute_spectrogram(
     dt = float(np.median(np.diff(time)))
     sample_rate = 1.0 / dt
 
-    n_fft, natural_hop, n_cols_natural = stft_layout(n, sample_rate, slice_duration)
+    n_fft, base_hop, n_cols_natural = stft_layout(n, sample_rate, slice_duration, overlap)
     if n_cols_natural > max_columns:
-        hop = max(natural_hop, (n - n_fft) // max(1, max_columns - 1))
+        hop = max(base_hop, (n - n_fft) // max(1, max_columns - 1))
     else:
-        hop = natural_hop
+        hop = base_hop
 
     win = get_window(window, n_fft, fftbins=True).astype(np.float32)
 

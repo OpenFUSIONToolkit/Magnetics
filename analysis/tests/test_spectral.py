@@ -13,6 +13,7 @@ from magnetics.core.spectral import (
     downsample,
     extract_mode_at_frequency,
     integrate_bdot,
+    stft_layout,
 )
 
 
@@ -231,6 +232,32 @@ class TestComputeSpectrogramEngine:
         cp = cs.power.copy()
         cp[cs.frequency < 1e3] = 0.0
         assert spec.mode_number[it, iff] == cs.mode_number[np.argmax(cp)]
+
+    def test_stft_layout_hop_honors_overlap(self):
+        # hop = n_fft·(1−overlap): 50% → n_fft/2, 75% → n_fft/4
+        n_fft, hop_50, _ = stft_layout(10_000, 50_000, 0.01, overlap=0.5)
+        _, hop_75, _ = stft_layout(10_000, 50_000, 0.01, overlap=0.75)
+        assert hop_50 == max(1, round(n_fft * 0.5))
+        assert hop_75 == max(1, round(n_fft * 0.25))
+        assert hop_75 < hop_50
+
+    def test_overlap_increases_columns(self, synthetic_n2):
+        d = synthetic_n2
+        # higher overlap → smaller hop → more time columns (max_columns kept generous)
+        low = compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"],
+            slice_duration=0.005, overlap=0.5, max_columns=100_000,
+        )
+        high = compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"],
+            slice_duration=0.005, overlap=0.9, max_columns=100_000,
+        )
+        assert high.time.size > low.time.size
+        # mode number still recovered at higher overlap
+        p = high.power.copy()
+        p[:, high.frequency < 1e3] = 0.0
+        _, iff = np.unravel_index(np.argmax(p), p.shape)
+        assert abs(high.mode_number[np.argmax(p[:, iff]), iff]) == d["n_true"]
 
 
 # -----------------------------------------------------------------------

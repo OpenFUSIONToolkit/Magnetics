@@ -99,11 +99,13 @@ def _peak_freq_khz(
     return float(f_khz[band_idx[int(np.argmax(col[fmask]))]])
 
 
-def _natural_columns(time: NDArray[np.floating], n_samples: int, slice_duration: float) -> int:
-    """Time-column count at the native 50%-overlap hop (shares compute_spectrogram's
+def _natural_columns(
+    time: NDArray[np.floating], n_samples: int, slice_duration: float, overlap: float = 0.5
+) -> int:
+    """Time-column count at the requested overlap hop (shares compute_spectrogram's
     geometry via stft_layout so the two cannot drift)."""
     dt = float(np.median(np.diff(np.asarray(time, dtype=np.float64))))
-    return stft_layout(n_samples, 1.0 / dt, slice_duration)[2]
+    return stft_layout(n_samples, 1.0 / dt, slice_duration, overlap)[2]
 
 
 def _stage_targets(stages: tuple[float, ...], ceiling: int) -> list[int]:
@@ -284,6 +286,7 @@ def stream_spectrogram(
     tmax_ms: float | None = None,
     window: str = "hann",
     slice_duration: float = 0.001,
+    overlap: float = 0.5,
     max_columns: int = 2000,
     stages: tuple[float, ...] = (0.15, 0.4, 1.0),
     t0_ms: float | None = None,
@@ -333,7 +336,10 @@ def stream_spectrogram(
 
     # Coarse→fine column budgets, clamped to what the record can actually deliver so
     # no two frames recompute the same grid and the last frame is true full resolution.
-    ceiling = min(max_columns, _natural_columns(time, int(np.asarray(sig1).size), slice_duration))
+    ceiling = min(
+        max_columns,
+        _natural_columns(time, int(np.asarray(sig1).size), slice_duration, overlap),
+    )
     targets = _stage_targets(stages, ceiling)
     n_frames = len(targets)
 
@@ -342,6 +348,7 @@ def stream_spectrogram(
             time, sig1, sig2, delta_phi,
             slice_duration=slice_duration,
             window=window,
+            overlap=overlap,
             max_columns=cols,
         )
         # Tie the phase-fit frequency to the displayed band + actual power: when the

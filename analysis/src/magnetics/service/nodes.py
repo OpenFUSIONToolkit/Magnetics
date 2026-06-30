@@ -108,7 +108,7 @@ def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
 
 
 @lru_cache(maxsize=8)
-def _spec_result(shot: str, slice_duration: float, coherence_smooth: int):
+def _spec_result(shot: str, slice_duration: float, coherence_smooth: int, overlap: float):
     """The (expensive) STFT, cached so the spectrogram/n-map/coherence/n-spectrum
     nodes share one compute. Keyed on the STFT-shaping params only; cheap post-ops
     (freq crop, denoise) are applied per node. Returns (result, probes, delta_phi)."""
@@ -121,8 +121,16 @@ def _spec_result(shot: str, slice_duration: float, coherence_smooth: int):
     time_s = np.asarray(t1[:k], dtype=float) * 1e-3   # HDF5 time base is ms
     res = spectral.compute_spectrogram(
         time_s, s1[:k], s2[:k], delta_phi=float(phi2 - phi1),
-        slice_duration=slice_duration, coherence_smooth=coherence_smooth)
+        slice_duration=slice_duration, overlap=overlap, coherence_smooth=coherence_smooth)
     return res, (n1, n2), round(float(phi2 - phi1), 1)
+
+
+def _overlap_of(params) -> float:
+    """GUI sends FFT overlap as a percent (`fft_overlap`); accept a fraction
+    (`overlap`) too. Clamp to the core's [0, 0.95]."""
+    pct = _f(params, "fft_overlap", None)
+    frac = (pct / 100.0) if pct is not None else _f(params, "overlap", 0.5)
+    return min(max(float(frac), 0.0), 0.95)
 
 
 def _prep_spec(shot, params):
@@ -132,7 +140,7 @@ def _prep_spec(shot, params):
     cs = _i(params, "coherence_smooth", None)
     if cs is None:
         cs = _i(params, "smoothing", 5)
-    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs))
+    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs), _overlap_of(params))
     if _flag(params, "denoise"):
         res = spectral.denoise_spectrogram(res, coherence_min=_f(params, "coherence_min", 0.5))
     f_khz = np.asarray(res.frequency) / 1e3
@@ -157,16 +165,31 @@ def _spectrogram(shot, params=None) -> dict:
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
 
 
+def _mode_bounds(params, modes) -> tuple[int, int, int]:
+    """Requested [n_min, n_max] clamped to the 2-point Δφ aliasing ceiling — the
+    achievable mode set is exactly ``modes`` (= res.mode_indices). Returns
+    (n_min, n_max, ceiling) so callers can report the honest bound in meta."""
+    lo_a, hi_a = int(modes.min()), int(modes.max())
+    n_min = _i(params, "n_min", lo_a)
+    n_max = _i(params, "n_max", hi_a)
+    n_min = max(lo_a, min(n_min, hi_a))
+    n_max = max(n_min, min(n_max, hi_a))
+    return n_min, n_max, hi_a
+
+
 def _mode_number(shot, params=None) -> dict:
     """Real toroidal mode-number n(t,f) — n = round(phase/Δφ) from the core."""
     res, mask, probes, dphi = _prep_spec(shot, params)
     f = np.asarray(res.frequency)[mask] / 1e3
     n = np.asarray(res.mode_number, dtype=float)[:, mask]
+    n_min, n_max, ceiling = _mode_bounds(params, np.asarray(res.mode_indices))
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(), f.tolist(), n.T.tolist(),
         {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal n"},
-        discrete=True, zrange=[-6.5, 6.5],
-        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
+        discrete=True, zrange=[n_min - 0.5, n_max + 0.5],
+        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot),
+              "n_range": [n_min, n_max], "n_resolvable": [-ceiling, ceiling],
+              "note": f"2-point pair resolves |n| ≤ {ceiling} (set by Δφ={dphi}°)"})
 
 
 def _coherence(shot, params=None) -> dict:
@@ -183,14 +206,43 @@ def _coherence(shot, params=None) -> dict:
 
 def _n_spectrum(shot, params=None) -> dict:
     """RMS amplitude per toroidal mode number vs time (the n-spectrum)."""
-    res, _mask, probes, _dphi = _prep_spec(shot, params)
+    res, _mask, probes, dphi = _prep_spec(shot, params)
     rms = np.asarray(res.rms_by_mode, dtype=float)   # [n_times, n_modes]
     modes = np.asarray(res.mode_indices)             # [n_modes]
+    n_min, n_max, ceiling = _mode_bounds(params, modes)
+    keep = (modes >= n_min) & (modes <= n_max)       # crop served modes to the request
     return contracts.heatmap(
-        (np.asarray(res.time) * 1e3).tolist(), modes.tolist(), rms.T.tolist(),
+        (np.asarray(res.time) * 1e3).tolist(), modes[keep].tolist(), rms[:, keep].T.tolist(),
         {"x": "time (ms)", "y": "toroidal n", "z": "rms amplitude"},
         discrete=False,
-        meta={"probes": list(probes), "shot": str(shot)})
+        meta={"probes": list(probes), "shot": str(shot),
+              "n_range": [n_min, n_max], "n_resolvable": [-ceiling, ceiling],
+              "delta_phi_deg": dphi})
+
+
+# ── raw_signal: reference probe dB/dt around the cursor (real trace) ──────────
+def _raw_signal(shot, params=None) -> dict:
+    """Raw dB/dt of the reference Mirnov probe in a window around the cursor t0.
+
+    Backs the RotatingTab "Raw Signal dB/dt" panel with a real trace instead of a
+    synthesized sum-of-sines. Windowed to ``time ± window_ms`` (the GUI cursor)."""
+    (n1, phi1), _ = _pick_pair(shot)
+    t_ms, d = h5source.load_channel(shot, n1)            # HDF5 time base is ms
+    t_ms = np.asarray(t_ms, dtype=float)
+    d = np.asarray(d, dtype=float)
+    t0 = _f(params, "time", None)
+    w = _f(params, "window_ms", 2.0)
+    if t0 is not None:
+        m = (t_ms >= t0 - w) & (t_ms <= t0 + w)
+        if m.any():
+            t_ms, d = t_ms[m], d[m]
+    if t_ms.size > 4000:                                 # subsample for transport
+        idx = np.linspace(0, t_ms.size - 1, 4000).astype(int)
+        t_ms, d = t_ms[idx], d[idx]
+    return contracts.line(
+        [{"name": n1, "x": t_ms.tolist(), "y": d.tolist()}],
+        {"x": "time (ms)", "y": "dB/dt (a.u.)"},
+        meta={"probe": n1, "phi_deg": phi1, "t0_ms": t0, "shot": str(shot)})
 
 
 # ── contour: raw δBp(φ, t) over the toroidal array (fit pending) ──────────────
@@ -283,6 +335,7 @@ _BUILDERS = {
     "mode_number": _mode_number,
     "coherence": _coherence,
     "n_spectrum": _n_spectrum,
+    "raw_signal": _raw_signal,
     "contour": _contour,
     "fit_quality": _fit_quality,
     "phase_fit": _phase_fit,
