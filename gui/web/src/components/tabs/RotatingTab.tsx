@@ -693,7 +693,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: modeLeftWidth, overflow: "auto", flexShrink: 0 }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Toroidal Phase Fit (n = {String(toroidalMeta?.n_fit ?? "")})
+            Toroidal Phase Fit (n = {String(toroidalMeta?.n_estimate ?? toroidalMeta?.n_fit ?? "")})
           </h4>
           <NodeView node={processedToroidalNode} height={200} />
         </div>
