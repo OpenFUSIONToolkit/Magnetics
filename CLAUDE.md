@@ -91,6 +91,63 @@ rather than fabricating data in the GUI. Keep `contracts.py` and `contract.ts` i
 - Python via **`uv`** (pinned to 3.14, standard GIL build); commit `uv.lock`, never `.venv/`. Always use uv venv to run python.
 - Paths in committed docs must be **repo-relative** — no machine-specific absolute paths.
 
+## Git Workflow
+
+This project uses a GitFlow-lite model (http://nvie.com/posts/a-successful-git-branching-model):
+
+- Two long-lived branches: `main` and `develop`.
+- `develop` is the integration branch — all branches merge here via pull request.
+- `main` is updated only at release-ready stages, via PR from `develop`.
+
+**IMPORTANT:** Do all work on a branch off `develop` and open a PR back into `develop`.
+No direct commits to `develop` or `main`. This is a four-team effort — cross-team changes
+go through a PR so another team can review before it lands (see "Don't do other teams' work").
+
+### Branch Naming
+
+Branches use a typed prefix and a lowercase hyphen-separated description:
+
+| Prefix | Purpose | Branches from | Merges into |
+|---|---|---|---|
+| `feature/` | New functionality | `develop` | `develop` |
+| `bugfix/` | Non-critical bug fixes | `develop` | `develop` |
+| `hotfix/` | Critical production fix | `main` | `main` + `develop` |
+| `performance/` | Performance improvements | `develop` | `develop` |
+| `refactor/` | Refactoring without behavior change | `develop` | `develop` |
+| `docs/` | Documentation only | `develop` | `develop` |
+| `test/` | Test additions/improvements | `develop` | `develop` |
+| `experiment/` | Exploratory work, may not merge | `develop` | — |
+
+Examples: `feature/array-mode-spectrogram`, `bugfix/stft-hop-offset`,
+`refactor/quasistationary-port`, `performance/wire-transfer`.
+
+Author-named branches (e.g. `nlogan/`) are not used — git history already records authorship.
+(Some existing branches predate this convention; it applies to new branches going forward.)
+
+### Hotfix Workflow
+
+Hotfixes address critical bugs in `main` that cannot wait for the next release:
+
+1. Branch `hotfix/description` from the current tagged `main` commit.
+2. Fix the bug with one or more commits.
+3. Merge into `main` via PR; tag the merge commit with a new patch version (e.g. `v0.1.1`).
+4. Merge the same branch into `develop` so the fix is not lost.
+
+### Versioning
+
+Semantic versioning: `v{major}.{minor}.{patch}` — major = breaking change,
+minor = backward-compatible feature, patch = bug fix. Tags are applied to merge commits on `main`.
+
+### Commit Messages
+
+Keep commits clean and reviewable:
+
+- One logical change per commit; don't bundle unrelated edits.
+- Subject line in the imperative mood, ≤72 chars, no trailing period.
+- Optional `scope:` prefix naming the touched area, matching existing history
+  (e.g. `PullControl: default to the fast remote backend`, `mode_number: cap array STFT columns`).
+- Add a body (blank line after the subject) only when the *why* isn't obvious from the diff.
+
 ## Other Priorities
 - Speed is paramount in this project. Everything must be snappy and responsive. If something must
   take a long time (i.e. while a fit is computing) keep the GUI user informed. Progress bars, status

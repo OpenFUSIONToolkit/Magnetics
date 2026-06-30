@@ -55,29 +55,45 @@ from typing import Callable
 import numpy as np
 
 import magnetics_signals as ms
+# Shared device config + shot-aware geometry resolution (one impl for fetch +
+# analysis). `load_device` is the single source of truth for a machine's mdsip
+# addresses/geometry; `pointname_at` maps a canonical sensor id → the pointname
+# valid at a shot (None = out of range / decommissioned).
+from devices import load_device, pointname_at
 
 # All fetched shot files land here: data/datafile/ (next to this script).
 DATA_DIR = Path(__file__).resolve().parent / "datafile"
 
-# Per-device config (mdsip gateway/server, geometry, ...) lives in data/device/.
-DEVICE_DIR = Path(__file__).resolve().parent / "device"
 
+def _resolve_pointnames(dev, pointnames, shot):
+    """Map canonical sensor ids -> the MDS pointnames valid at `shot`.
 
-def load_device(device: str) -> dict:
-    """Load data/device/<device>.json (case-insensitive), or raise with the list.
-
-    The device file is the single source of truth for that machine's mdsip
-    `gateway` and `server` addresses (among other things), so the fetcher stays
-    device-agnostic: pass `--device nstxu` and it reads nstxu.json's servers.
+    Returns ``(query_pointnames, canonical_of, skipped)``:
+      * ``query_pointnames`` — the names to actually fetch (a legacy/alternate
+        pointname for an old shot, else the canonical id), out-of-range and
+        decommissioned (``NotAvailable``) sensors dropped;
+      * ``canonical_of`` — ``{queried pointname -> canonical sensor id}`` so the
+        writer can relabel groups back to the shot-agnostic id;
+      * ``skipped`` — canonical ids with no valid segment at this shot.
+    Names the device file doesn't model (plasma ip/bt/kappa) pass through unchanged.
     """
-    path = DEVICE_DIR / f"{device.lower()}.json"
-    if not path.exists():
-        avail = ", ".join(sorted(p.stem for p in DEVICE_DIR.glob("*.json"))) \
-            or "none"
-        raise ValueError(f"unknown device {device!r}; "
-                         f"available in {DEVICE_DIR}: {avail}")
-    with open(path) as f:
-        return json.load(f)
+    sensors_cfg = dev.get("sensors", {})
+    shot_i = int(shot)
+    query: list[str] = []
+    canonical_of: dict[str, str] = {}
+    skipped: list[str] = []
+    for cid in pointnames:
+        if cid not in sensors_cfg:       # unmodeled (plasma params, etc.)
+            query.append(cid)
+            canonical_of[cid] = cid
+            continue
+        pt = pointname_at(dev, cid, shot_i)
+        if pt is None:                   # out of range / NotAvailable
+            skipped.append(cid)
+            continue
+        query.append(pt)
+        canonical_of[pt] = cid
+    return query, canonical_of, skipped
 
 
 def _plasma_signal(entry):
@@ -594,8 +610,11 @@ def _attr_names(h5, attr):
 
 
 def _write_h5(path, shot, analysis, backend, channels, *, compression,
-              tmin, tmax, stride, device="DIII-D", merge=False):
+              tmin, tmax, stride, device="DIII-D", query_names=None,
+              merge=False):
     import h5py
+
+    query_names = query_names or {}
 
     comp = None if compression in (None, "none") else compression
     missing = [c for c in channels if not c.ok]
@@ -671,6 +690,8 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
                              chunks=True if comp else None)
             g["time"] = tb_grp[tb_name]  # hard link -> shared time base
             g.attrs["time_units"] = "ms"
+            if c.name in query_names:    # fetched under a legacy pointname
+                g.attrs["pointname"] = query_names[c.name]
 
         # Union new channels with whatever the file already recorded; a name that
         # is now fetched is removed from the missing list.
@@ -811,6 +832,13 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         tree_signals = ms.tree_signals_for(analysis)
         label = analysis
 
+    # Shot-aware pointname resolution: map canonical ids -> the pointnames valid
+    # at THIS shot, dropping channels the shot can't have so we never query them.
+    shot_i = int(shot)
+    pointnames, canonical_of, skipped = _resolve_pointnames(dev, pointnames, shot_i)
+    if skipped:
+        progress(0.0, f"{len(skipped)} sensors not valid at shot {shot_i}")
+
     if backend == "auto":
         try:
             import toksearch  # noqa: F401
@@ -873,10 +901,23 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         raise ValueError(f"unknown backend {backend!r}")
     elapsed = time.perf_counter() - t0
 
+    # Relabel each fetched channel from its queried (possibly legacy) pointname
+    # back to the canonical sensor id, so HDF5 groups and downstream analysis stay
+    # shot-agnostic by id even when an old shot was pulled under an old name; keep
+    # the queried name for traceability (written as a per-channel attr).
+    query_names: dict[str, str] = {}
+    for c in channels:
+        cid = canonical_of.get(c.name, c.name)
+        if cid != c.name:
+            query_names[cid] = c.name
+            c.name = cid
+
+    # out_path was resolved before the (possibly incremental) fetch above.
     n_fetch = len(pointnames) + len(tree_signals)
     got, missing = _write_h5(out, shot, label, backend, channels,
                              compression=compression, tmin=tmin, tmax=tmax,
-                             stride=stride, device=device_name, merge=merge)
+                             stride=stride, device=device_name,
+                             query_names=query_names, merge=merge)
     skipped_note = f", {n_skipped} cached" if n_skipped else ""
     sys.stderr.write(
         f"Saved {len(got)}/{n_fetch} channels to {out} "
@@ -889,6 +930,10 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         for reason, names in sorted(by_reason.items()):
             shown = ", ".join(names[:12]) + (" ..." if len(names) > 12 else "")
             sys.stderr.write(f"  missing [{reason}] x{len(names)}: {shown}\n")
+    if skipped:
+        shown = ", ".join(skipped[:12]) + (" ..." if len(skipped) > 12 else "")
+        sys.stderr.write(f"  skipped [not valid at shot {shot_i}] "
+                         f"x{len(skipped)}: {shown}\n")
     return out
 
 
