@@ -58,11 +58,14 @@ export interface FetchBody {
   decimate?: number;
 }
 
-/** Trigger a live toksearch/mdsthin/remote pull on the backend, then get the
- * refreshed machine list. Requires a live backend (VITE_API_BASE set). */
-export async function triggerFetch(
-  body: FetchBody,
-): Promise<{ ok: boolean; shot: string; machines: MachineInfo[] }> {
+/** The live backend's base URL (for building an EventSource), or undefined. */
+export function apiBase(): string | undefined {
+  return API_BASE;
+}
+
+/** Start a live pull in the background; returns a job_id. Stream its progress at
+ * `${apiBase()}/api/fetch/{job_id}/stream`. Requires a live backend. */
+export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
   if (!API_BASE) throw new Error("set VITE_API_BASE to pull live data");
   const res = await fetch(`${API_BASE}/api/fetch`, {
     method: "POST",

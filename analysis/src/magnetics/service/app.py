@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -83,38 +86,107 @@ class FetchRequest(BaseModel):
     remote_setup: str | None = None
 
 
+# ── background fetch jobs (so /api/fetch returns instantly and the GUI can show a
+#    real per-channel progress bar instead of a blind elapsed timer) ────────────
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _job_set(jid: str, **kw) -> None:
+    with _JOBS_LOCK:
+        if jid in _JOBS:
+            _JOBS[jid].update(kw)
+
+
+def _job_get(jid: str) -> dict | None:
+    with _JOBS_LOCK:
+        return dict(_JOBS[jid]) if jid in _JOBS else None
+
+
 @app.post("/api/fetch")
 def post_fetch(req: FetchRequest) -> dict:
-    """Pull a shot live via the toksearch/mdsthin fetcher, then expose it.
-
-    Works where the fetcher works (GA cluster, or laptop with creds/Duo or a
-    key-based ssh-config gateway). Offline it returns a clear error and the cached
-    shots keep serving.
-    """
+    """Start a live pull in the background; returns {job_id}. Stream its progress
+    at GET /api/fetch/{job_id}/stream. Works where the fetcher works (laptop with
+    creds/Duo or a key-based ssh-config gateway, or the cluster); offline the job
+    reports a clear error and cached shots keep serving."""
     h5source._ensure_catalog_on_path()
     try:
         import toksearch_fetch  # repo-root data/ module
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500,
                             detail=f"fetcher unavailable: {exc}") from exc
-    # only pass remote overrides the caller actually set, so fetcher defaults hold
     remote_kw = {k: v for k, v in {
         "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
         "remote_dir": req.remote_dir, "remote_setup": req.remote_setup,
     }.items() if v is not None}
-    try:
-        out = toksearch_fetch.fetch_shot(
-            req.shot, req.analysis, backend=req.backend, username=req.username,
-            password=req.password, duo=req.duo,
-            tmin=req.tmin, tmax=req.tmax, decimate=req.decimate, **remote_kw)
-    except SystemExit as exc:  # fetcher uses sys.exit for missing deps/creds
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400,
-                            detail=f"fetch failed: {exc}") from exc
-    h5source.refresh()
-    return {"ok": True, "shot": str(req.shot), "file": out,
-            "machines": nodes.machines()}
+
+    jid = uuid.uuid4().hex[:12]
+    with _JOBS_LOCK:
+        _JOBS[jid] = {"progress": 0.0, "msg": "starting", "status": "running",
+                      "result": None, "error": None}
+
+    def on_progress(frac, msg):
+        _job_set(jid, progress=float(frac), msg=str(msg))
+
+    def work():
+        try:
+            out = toksearch_fetch.fetch_shot(
+                req.shot, req.analysis, backend=req.backend,
+                username=req.username, password=req.password, duo=req.duo,
+                tmin=req.tmin, tmax=req.tmax, decimate=req.decimate,
+                progress=on_progress, **remote_kw)
+            h5source.refresh()
+            nodes.refresh()
+            _job_set(jid, status="done", progress=1.0, msg="done",
+                     result={"ok": True, "shot": str(req.shot), "file": out,
+                             "machines": nodes.machines()})
+        except SystemExit as exc:  # fetcher sys.exit for missing deps/creds
+            _job_set(jid, status="error", error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            _job_set(jid, status="error", error=f"fetch failed: {exc}")
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": jid}
+
+
+@app.get("/api/fetch/{job_id}")
+def fetch_status(job_id: str) -> dict:
+    job = _job_get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    return job
+
+
+@app.get("/api/fetch/{job_id}/stream")
+def fetch_stream(job_id: str) -> StreamingResponse:
+    if _job_get(job_id) is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+
+    def gen():
+        last = None
+        while True:
+            job = _job_get(job_id)
+            if job is None:
+                yield f"data: {json.dumps({'status': 'error', 'error': 'job lost'})}\n\n"
+                return
+            frame = {"progress": job["progress"], "msg": job["msg"],
+                     "status": job["status"]}
+            if job["status"] == "done":
+                frame["result"] = job["result"]
+                yield f"data: {json.dumps(frame)}\n\n"
+                return
+            if job["status"] == "error":
+                frame["error"] = job["error"]
+                yield f"data: {json.dumps(frame)}\n\n"
+                return
+            if frame != last:
+                yield f"data: {json.dumps(frame)}\n\n"
+                last = frame
+            time.sleep(0.25)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/{machine}/{result}")
