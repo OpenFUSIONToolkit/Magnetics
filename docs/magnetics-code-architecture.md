@@ -15,7 +15,7 @@ io_data.py   prep.py   fit.py   plots.py
     ↑              ↑       ↑
               run.py  (orchestrator)
                   ↑
-        example_154551.ipynb
+        example_magnetics.ipynb
 ```
 
 Dependency detail:
@@ -23,7 +23,7 @@ Dependency detail:
 | Module | Imports from (local) |
 |--------|----------------------|
 | `omfit_compat` | *(none)* |
-| `io_data` | `omfit_compat` (resolve_channel_filter) |
+| `io_data` | `omfit_compat` (sensor_geometry, resolve_channel_filter, list_sensor_subsets, printw) |
 | `prep` | `omfit_compat` |
 | `fit` | `omfit_compat` |
 | `plots` | `omfit_compat` |
@@ -36,15 +36,14 @@ Dependency detail:
 ```mermaid
 flowchart TD
     subgraph INPUT["Input / Storage"]
-        NC["netCDF files on disk\n(RAW, PLASMA_PARAMS, COUPLING)"]
+        H5["shot HDF5 on disk\n(data/datafile/shot_<n>.h5)"]
+        DEV["device JSON\n(data/device/diiid.json)"]
     end
 
     subgraph IODATA["io_data.py"]
         load_shot["load_shot()"]
         valid_channels["valid_channels()"]
-        _open["_open()"]
-        _open_h5["_open_with_h5py()"]
-        _scalar["_scalar()"]
+        available_subsets["available_subsets()"]
     end
 
     subgraph PREP["prep.py"]
@@ -77,10 +76,11 @@ flowchart TD
         delta_deg["delta_degrees()"]
         cornernote["cornernote()"]
         uband["uband()"]
-        load_wall["load_wall()"]
-        load_chan_filt["load_channel_filters()"]
+        load_device["load_device()"]
+        sensor_geometry["sensor_geometry()"]
+        list_subsets["list_sensor_subsets()"]
         resolve_filt["resolve_channel_filter()"]
-        load_wall2["load_wall()"]
+        load_wall["load_wall()"]
     end
 
     subgraph RUN["run.py"]
@@ -88,13 +88,13 @@ flowchart TD
         MagneticsRun["MagneticsRun (dataclass)"]
     end
 
-    subgraph NOTEBOOK["example_154551.ipynb"]
+    subgraph NOTEBOOK["example_magnetics.ipynb"]
         NB["User / notebook cells"]
     end
 
     %% storage → io_data
-    NC --> _open --> load_shot
-    NC --> _open_h5 --> load_shot
+    H5 --> load_shot
+    DEV --> load_device --> sensor_geometry --> load_shot
 
     %% io_data → prep / run
     load_shot -->|ShotData| prepare
@@ -138,8 +138,10 @@ flowchart TD
     fit -.-> delta_deg
     plots -.-> cornernote
     plots -.-> uband
-    plots -.-> load_wall2
+    plots -.-> load_wall
     io_data -.-> resolve_filt
+    io_data -.-> sensor_geometry
+    io_data -.-> list_subsets
 
     %% notebook drives run
     NB --> run_steps
@@ -174,43 +176,44 @@ No local imports. Never touches MDSplus or a remote server.
 | `delta_degrees` | vectorised `_delta_degrees_scalar` | Used in `fit.form_basis_function` for sensor extents |
 | `cornernote(ax, device, shot, ...)` | `→ None` | Annotates the figure bottom-right with shot/device text |
 | `uband(x, y, yerr, ax, ...)` | `→ (line,)` | Plots a line + shaded ±σ uncertainty band; returns `(line,)` for call-site compatibility |
-| `device_data_dir(device)` | `→ str` | Path to `OMFIT-magnetics/DATA/<device>/` |
-| `_extract_quoted(s)` | `→ list[str]` | Extracts all `'...'` tokens from a line (used for channel_filters.txt parsing) |
-| `load_channel_filters(device)` | `→ dict[str, list[str]]` | Parses `channel_filters.txt` into `{name: [regex, ...]}` |
-| `resolve_channel_filter(filter, device)` | `→ list[str]` | Maps a friendly name like `"Bp_LFS_midplane"` to its regex list; passes raw regexes through unchanged |
-| `_parse_namelist_array(text)` | `→ ndarray` | Parses Fortran namelist numeric arrays (with `N*value` repeat syntax) |
-| `load_wall(device)` | `→ (r, z)` | Reads the first-wall R-Z outline from `<device>.txt`; returns `(None, None)` if unavailable |
+| `load_device(device)` | `→ dict` | Loads (and caches) `data/device/<slug>.json` — `R0`, `wall`, `sensors`, `sensor_sets` |
+| `sensor_geometry(device)` | `→ xr.Dataset` | Per-sensor base geometry from the JSON **plus** the derived `theta` and `*_end1/2` ends (the ported `init_magnetics.py` step); indexed by `channel` |
+| `list_sensor_subsets(device)` | `→ dict[str, list[str]]` | All named `sensor_sets` flattened to `{name: [sensor, ...]}` (composites resolved) |
+| `resolve_channel_filter(filter, device)` | `→ list[str]` | Maps a friendly name like `"Bp_LFS_midplane"`/`"Bp LFS midplane"` to its (anchored) sensor-name patterns; passes raw regexes through unchanged |
+| `load_sensor_table(device)` | `→ xr.Dataset` | Alias of `sensor_geometry` |
+| `load_wall(device)` | `→ (r, z)` | Reads the first-wall R-Z outline from the device JSON `wall`; returns `(None, None)` if unavailable |
 
 ---
 
 ### `io_data.py` — Data loading
 
-Replaces OMFIT's MDSplus fetch. Loads pre-saved netCDF files from
-`analysis/data/<shot>/`. Returns typed `ShotData` bundles.
+Replaces OMFIT's MDSplus fetch (and its `init` step). Reads the per-shot signals
+from `data/datafile/shot_<n>.h5` and joins the per-channel geometry from the
+device JSON (`omfit_compat.sensor_geometry`). Returns typed `ShotData` bundles.
 
 **Class:**
 
 | Class | Fields | Notes |
 |-------|--------|-------|
-| `ShotData` | `shot`, `device`, `raw`, `plasma`, `coupling` | Dataclass bundle of the three input Datasets for one shot. `coupling` is `None` if no COUPLING file exists. |
+| `ShotData` | `shot`, `device`, `raw`, `plasma`, `coupling` | Dataclass bundle of the input Datasets for one shot. `coupling` is always `None` — the HDF5 files carry no DC-coupling matrix. |
 
-**`raw` Dataset layout** (from OMFIT's `fetch_magnetics.py`):
-- dims: `channel (192) × time (204800, seconds)`
-- vars: `signal(channel, time)`, `signal_sigma(channel)`, plus geometry fields per channel:
-  `r`, `z`, `phi`, `theta`, `tilt`, `length`, `delta_phi`, `na`, `pair`, and endpoint coordinates `*_end1` / `*_end2`
+**`raw` Dataset layout:**
+- dims: `channel × time` (**seconds**). Every sensor channel is linearly interpolated onto a single
+  common axis — the densest native HDF5 timebase, clipped to the window all channels share.
+- vars: `signal(channel, time)`, a constant `signal_sigma(channel)` (2e-5 T), plus the geometry
+  joined from the device JSON: `r`, `z`, `phi`, `theta`, `tilt`, `length`, `delta_phi`, `na`,
+  `pair`, and the derived endpoint coordinates `*_end1` / `*_end2`
 - attrs: `shot`, `device`, `sigma_type`
 
-**`plasma` Dataset:** `Bt`, `Ip` on a millisecond time base; `helicity` attr.
-
-**`coupling` Dataset:** `dc_coupling(coil, channel)` DC vacuum compensation matrix.
+**`plasma` Dataset:** `Bt`, `Ip` (from the HDF5 `bt`/`ip` channels) on a millisecond time base;
+`helicity` attr (default −1).
 
 | Function | Signature | Role |
 |----------|-----------|------|
-| `_open(path)` | `→ xr.Dataset` | Tries `h5netcdf` then `netcdf4` engines; falls back to `_open_with_h5py` |
-| `_open_with_h5py(path)` | `→ xr.Dataset` | Backend-free HDF5 loader using `h5py`; reconstructs xarray from dimension scales and DIMENSION_LIST refs |
-| `_scalar(v)` | `→ scalar` | Unwraps length-1 arrays / bytes from HDF5 attrs |
-| `load_shot(shot, data_root)` | `→ ShotData` | Main entry point. Loads RAW + PLASMA_PARAMS + (optional) COUPLING. Normalises channel names to plain strings. |
+| `shot_path(shot, data_root)` | `→ str` | Resolves `data/datafile/shot_<shot>.h5` (or passes through an explicit path) |
+| `load_shot(shot, data_root, helicity=-1)` | `→ ShotData` | Main entry point. Reads the HDF5 signals, builds `raw` (interpolated + geometry-joined) and `plasma` (`ip`/`bt`); `coupling` is `None`. |
 | `valid_channels(raw, channel_filter, device)` | `→ list[str]` | Returns channel names that match `channel_filter` and have non-NaN signal. Calls `omfit_compat.resolve_channel_filter`. |
+| `available_subsets(device)` | `→ dict[str, list[str]]` | Named sensor subsets accepted as `channel_filter` (thin wrapper over `list_sensor_subsets`). |
 
 ---
 
@@ -318,11 +321,13 @@ Ports `SCRIPTS/run_magnetics.py`. Chains load → prep → fit into a single cal
 
 ---
 
-### `example_154551.ipynb` — Usage example
+### `example_magnetics.ipynb` — Usage example
 
-Notebook demonstrating the full pipeline on DIII-D shot 154551.
-Calls `run_steps()` and then each `plots.*` function to produce the full
-suite of diagnostic figures.
+Notebook demonstrating the full pipeline. A single *Parameters* cell sets `SHOT`,
+`CHANNEL_FILTER`, `TIME_TRIM`, and the mode lists (default: DIII-D shot 199749,
+`Bp_LFS_midplane`), so it runs on any shot without further edits. Calls
+`run_steps()` and then each `plots.*` function to produce the full suite of
+diagnostic figures.
 
 ---
 
@@ -331,9 +336,9 @@ suite of diagnostic figures.
 ```
 run_steps()
 ├── load_shot()                       [io_data]
-│   ├── _open()
-│   │   └── _open_with_h5py()         (fallback)
-│   └── → ShotData(raw, plasma, coupling)
+│   ├── h5py.File(shot_<n>.h5)        (read + interpolate signals)
+│   ├── sensor_geometry()             [omfit_compat]   (geometry from device JSON)
+│   └── → ShotData(raw, plasma, coupling=None)
 │
 ├── prepare()                         [prep]
 │   ├── resolve_channel_filter()      [omfit_compat]
