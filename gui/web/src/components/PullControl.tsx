@@ -15,7 +15,10 @@ export default function PullControl() {
   const setMachine = useStore((s) => s.setMachine);
   const [shot, setShot] = useState("184927");
   const [analysis, setAnalysis] = useState("rotating");
-  const [backend, setBackend] = useState("mdsthin");
+  // Default to the fast cluster path. `mdsthin` (laptop tunnel) streams raw float
+  // over the SSH tunnel — minutes; `remote` fetches on the cluster and ships back a
+  // compressed h5 — tens of seconds. Users without cluster access pick mdsthin.
+  const [backend, setBackend] = useState("remote");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [duo, setDuo] = useState("1");
@@ -91,8 +94,8 @@ export default function PullControl() {
       </select>
       <select className="pull-input" value={backend}
         onChange={(e) => setBackend(e.target.value)}>
-        <option value="mdsthin">mdsthin (laptop → DIII-D)</option>
-        <option value="remote">remote (run on cluster · WIP)</option>
+        <option value="remote">remote (cluster · fast)</option>
+        <option value="mdsthin">mdsthin (laptop · slow, no cluster)</option>
         <option value="auto">auto</option>
       </select>
 
@@ -111,12 +114,16 @@ export default function PullControl() {
 
       {needsCreds && (
         <>
+          <div className="note pull-hint">
+            leave password/Duo blank if your SSH key (ssh-config alias) is set up
+          </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="GA username" autoComplete="username" />
           <input className="pull-input" type="password" value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="GA password" autoComplete="current-password" />
+            placeholder="GA password (blank if key auth)"
+            autoComplete="current-password" />
           <input className="pull-input" value={duo}
             onChange={(e) => setDuo(e.target.value)}
             placeholder="Duo: 1 = push, or passcode" />
