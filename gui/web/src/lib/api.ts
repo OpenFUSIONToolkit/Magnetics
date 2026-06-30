@@ -56,6 +56,26 @@ export interface FetchBody {
   tmin?: number;
   tmax?: number;
   decimate?: number;
+  device?: string; // data/device/<device>.json (default: diiid)
+  sensor_set?: string; // a set under the device's sensor_sets; overrides analysis
+}
+
+/** A device config (data/device/<id>.json) the backend can fetch from. */
+export interface DeviceInfo {
+  id: string; // --device value, e.g. "diiid"
+  name: string; // display name, e.g. "DIII-D"
+  sensor_sets: string[]; // selectable as sensor_set (composites included)
+}
+
+/** List available device configs + their sensor-set names (GET /api/devices).
+ * Empty when no live backend or no device files. */
+export async function fetchDevices(): Promise<DeviceInfo[]> {
+  if (!API_BASE) return [];
+  try {
+    return await getJSON<DeviceInfo[]>(`${API_BASE}/api/devices`);
+  } catch {
+    return [];
+  }
 }
 
 /** The live backend's base URL (for building an EventSource), or undefined. */
