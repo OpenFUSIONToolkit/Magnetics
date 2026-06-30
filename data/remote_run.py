@@ -6,21 +6,30 @@ A new user should not have to rsync the fetcher to the cluster by hand. This mod
 does the whole round trip over a single authenticated SSH connection:
 
   1. open one SSH master to the cluster (reused below);
-  2. rsync the fetcher (toksearch_fetch.py + magnetics_signals.py + inspect_h5.py)
-     to the cluster automatically;
-  3. run `toksearch_fetch.py --backend toksearch ...` there, where PTDATA is local
-     and toksearch lives (loaded via the configured `setup` command);
-  4. rsync the resulting .h5 back into the local data/datafile/ dir.
+  2. rsync the fetcher (toksearch_fetch.py + magnetics_signals.py) up;
+  3. run the fetcher there with the cluster env's interpreter directly -- PTDATA is
+     local and `toksearch_d3d` reads it natively (benchmarked ~5-7x faster than
+     mdsip), then writes a compact (lzf) .h5;
+  4. rsync that .h5 back into the local data/datafile/ dir.
+
+Why this beats the laptop mdsthin pull: only the *compressed* .h5 crosses the tunnel
+(~80 MB) instead of ~370 MB of raw float over mdsip. Measured end-to-end ~21-24s
+cold (vs ~60s laptop) -- after which all fitting is local and instant.
+
+Connection: `host` is normally an ~/.ssh/config Host alias (default "omega") that
+already carries User, port, key, and a ProxyJump through the gateway, so nothing
+else need be passed. The alias's ProxyJump handles the cybele hop -- do NOT also
+pass `jump` for an alias (that would double-jump). For setups WITHOUT an alias, pass
+an explicit `username` and `jump` (e.g. jump="cybele.gat.com:2039").
+
+Environment: we do NOT `module load` or `conda activate` on the cluster. The env's
+activate.d scripts set nothing the fetch needs, so we invoke the env interpreter
+directly (`python` arg) -- simpler, and ~4-5s faster per pull than `conda run`.
 
 Auth: if `password` is given (e.g. from the GUI), it is fed to ssh via an
-SSH_ASKPASS helper so NO terminal prompt is needed — the password answers the
-password prompt and `duo` answers the Duo prompt (default "1" = Duo Push, which
-also works across the jump hop where a one-time passcode would not). If no
-password is given, ssh prompts interactively in the terminal as usual.
-
-Defaults target omega via the cybele gateway with the conda toksearch env; all of
-it is configurable. Secrets are passed once to the local ssh subprocess and never
-stored.
+SSH_ASKPASS helper so no terminal prompt is needed (`duo` answers the Duo prompt,
+default "1" = Duo Push). With a key-based ssh-config alias (the default), no
+password is needed at all. Secrets are passed once to ssh and never stored.
 """
 from __future__ import annotations
 
@@ -36,19 +45,15 @@ LOCAL_OUT = HERE / "datafile"                    # where pulled .h5 land locally
 SYNC_FILES = ["toksearch_fetch.py", "magnetics_signals.py", "inspect_h5.py",
               "sshauth.py"]
 
-# Cluster defaults (override via args / CLI flags). The setup command is run in a
-# login shell before the fetch so `module`/`conda` are available.
-DEFAULT_HOST = "omega"
-DEFAULT_JUMP = "cybele.gat.com:2039"
+# Cluster defaults (override via args / CLI flags).
+DEFAULT_HOST = "omega"          # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
+DEFAULT_JUMP = None             # alias carries the gateway hop; set only for a raw host
 DEFAULT_DIR = "~/magnetics_fetch"
-# `conda activate` needs conda's shell function, which a non-interactive `bash -lc`
-# does not get for free — source conda.sh first, or activation silently no-ops and
-# `python` stays the system one (→ "toksearch not installed").
-DEFAULT_SETUP = (
-    'module purge && module load conda && '
-    'source "$(conda info --base)/etc/profile.d/conda.sh" && '
-    'conda activate toksearch_env'
-)
+# Invoke the cluster env's interpreter DIRECTLY -- no `module load` / `conda activate`
+# (its activate.d scripts set nothing PTDATA needs; direct is ~4-5s faster per pull).
+DEFAULT_PYTHON = (
+    "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python")
+
 
 def _log(msg: str) -> None:
     sys.stderr.write(msg + "\n")
@@ -57,19 +62,17 @@ def _log(msg: str) -> None:
 
 def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
                username=None, password=None, duo=None, remote_dir=DEFAULT_DIR,
-               setup=DEFAULT_SETUP, tmin=None, tmax=None, decimate=1,
+               python=DEFAULT_PYTHON, tmin=None, tmax=None, decimate=1,
                local_out_dir=None, progress=None) -> str:
     """Sync code → run the pull on the cluster → copy the .h5 back. Returns the
     local path of the fetched file."""
-    if not username:
-        username = input("GA username: ").strip()
-    if not username:
-        sys.exit("A username is required for the remote backend.")
-
     env, cleanup = (askpass_env(password, duo) if password else (None, lambda: None))
 
-    target = f"{username}@{host}"
-    sock = f"/tmp/ms-{username}-{host}.sock"  # short ControlPath (macOS length limit)
+    # host/jump may be ~/.ssh/config aliases (User/port/key/ProxyJump from config) or
+    # raw hosts; only prepend user@ when an explicit username overrides the alias.
+    target = f"{username}@{host}" if username else host
+    tag = (f"{username}-" if username else "") + host.replace("/", "_")
+    sock = f"/tmp/ms-{tag}.sock"               # short ControlPath (macOS length limit)
     ctl = ["-o", "ControlMaster=auto", "-o", f"ControlPath={sock}",
            "-o", "ControlPersist=300"]
     reuse = ["ssh", "-o", f"ControlPath={sock}"]  # subsequent hops reuse the master
@@ -78,16 +81,17 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
         return subprocess.run(cmd, env=env, **kw)
 
     try:
-        # 1) establish ONE authenticated master connection.
-        master = ["ssh", *ctl, "-o", "ExitOnForwardFailure=yes"]
+        # 1) establish ONE authenticated master connection (alias supplies the jump).
+        master = ["ssh", *ctl]
         if jump:
-            master += ["-J", f"{username}@{jump}"]
+            master += ["-J", f"{username}@{jump}" if username else jump]
         master += [target, "true"]
         _log(f"Connecting to {target}" + (f" via {jump}" if jump else "")
-             + (" (using GUI-supplied credentials; approve Duo if pushed)"
-                if password else " (password + Duo prompt) ..."))
+             + (" (using supplied credentials; approve Duo if pushed)"
+                if password else " ..."))
         if run(master).returncode != 0:
-            sys.exit("SSH to the cluster failed (check username/password/Duo).")
+            sys.exit("SSH to the cluster failed (check the ssh-config alias / "
+                     "username / password / Duo).")
 
         # 2) ensure the remote dir exists, then rsync the fetcher up.
         out_remote = f"{remote_dir}/out"
@@ -97,9 +101,9 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
         run(["rsync", "-az", "-e", rsh, *[str(HERE / f) for f in SYNC_FILES],
              f"{target}:{remote_dir}/"], check=True)
 
-        # 3) run the pull on the cluster (login shell so module/conda work).
+        # 3) run the pull on the cluster via the env interpreter directly.
         remote_out = f"out/shot_{shot}.h5"
-        fetch = ["python", "toksearch_fetch.py", "--backend", "toksearch",
+        fetch = [python, "toksearch_fetch.py", "--backend", "toksearch",
                  "--shot", str(shot), "--analysis", analysis, "--out", remote_out]
         if tmin is not None:
             fetch += ["--tmin", str(tmin)]
@@ -107,11 +111,14 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
             fetch += ["--tmax", str(tmax)]
         if decimate and decimate > 1:
             fetch += ["--decimate", str(decimate)]
-        inner = f"cd {remote_dir} && {setup} && {shlex.join(fetch)}"
+        # TOKSEARCH_INDEX_DIR only matters for SQL/index shot *discovery*; we pass an
+        # explicit shotlist, so point it at the workdir to silence ~1 warning/signal.
+        inner = (f'cd {remote_dir} && TOKSEARCH_INDEX_DIR="$PWD" '
+                 f"{shlex.join(fetch)}")
         _log(f"Running on {host}: {shlex.join(fetch)}")
         if progress:
             progress(0.5, f"pulling shot {shot} on {host}")
-        if run([*reuse, target, f"bash -lc {shlex.quote(inner)}"]).returncode != 0:
+        if run([*reuse, target, inner]).returncode != 0:
             sys.exit("remote fetch failed.")
 
         # 4) copy the result back.

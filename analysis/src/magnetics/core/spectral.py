@@ -527,6 +527,61 @@ def array_shape_spectrum(
     )
 
 
+@dataclass(slots=True)
+class ArrayModeSpectrogram:
+    kind: str
+    time: NDArray[np.floating]              # (n_times,) window-center times (s)
+    freq_band: NDArray[np.floating]         # (n_band,) Hz kept
+    mode_number: NDArray[np.integer]        # (n_times, n_band) best-fit toroidal n
+    amplitude: NDArray[np.floating]         # (n_times, n_band) |Σ_p Z_p e^{-inφ}|
+    quality: NDArray[np.floating]           # (n_times, n_band) resultant length ∈ [0,1]
+
+
+def array_mode_spectrogram(
+    spectrum: ArrayShapeSpectrum,
+    angle_deg: NDArray[np.floating],
+    *,
+    n_max: int = 5,
+) -> ArrayModeSpectrogram:
+    """Toroidal-mode-number-resolved spectrogram from the *full array* STFT.
+
+    At every (time, frequency) cell the complex array pattern ``Z_p`` is projected onto
+    the toroidal basis ``exp(-i n φ_p)`` for each integer ``n ∈ [-n_max, n_max]``; the n
+    with the largest projection magnitude is that cell's mode number. Unlike the 2-point
+    ``round(Δφ_phase / Δφ)`` estimate — which a wide probe pair aliases down to ``|n|≤1``
+    — a P-probe fit resolves ``|n|`` up to ~P/2, so n = 2, 3, 4… are recovered.
+
+    The projection's resultant length ``|Σ_p Z_p e^{-inφ_p}| / Σ_p |Z_p| ∈ [0, 1]`` is a
+    per-cell mode-coherence (1 = a clean single-n pattern, ~1/√P = incoherent noise),
+    suitable for gating. The ``exp(-i n φ)`` sign matches ``mode_from_spectrum`` and the
+    phase fit, so the reported n agrees with them.
+
+    Inputs:
+        spectrum (ArrayShapeSpectrum): the per-probe complex STFT band.
+        angle_deg (ndarray): toroidal angle φ (deg) of each probe, ordered as ``spec``.
+        n_max (int): largest |n| to test (physical ceiling ≈ n_probes // 2).
+    Returns:
+        result (ArrayModeSpectrogram): n / amplitude / quality as (n_times, n_band).
+    """
+    z = np.asarray(spectrum.spec)                          # (P, T, F) complex
+    phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
+    ns = np.arange(-int(n_max), int(n_max) + 1)
+    basis = np.exp(-1j * ns[:, None] * phi[None, :])       # (M, P)
+    proj = np.einsum("mp,ptf->mtf", basis, z)              # (M, T, F)
+    amp = np.abs(proj)
+    k = np.argmax(amp, axis=0)                             # (T, F)
+    peak = np.take_along_axis(amp, k[None], axis=0)[0]     # (T, F)
+    denom = np.abs(z).sum(axis=0) + 1e-30                  # (T, F)
+    return ArrayModeSpectrogram(
+        kind="array_mode_spectrogram",
+        time=np.asarray(spectrum.time),
+        freq_band=np.asarray(spectrum.freq_band),
+        mode_number=ns[k].astype(np.intp),
+        amplitude=peak,
+        quality=peak / denom,
+    )
+
+
 def mode_from_spectrum(
     spectrum: ArrayShapeSpectrum,
     angle_deg: NDArray[np.floating],

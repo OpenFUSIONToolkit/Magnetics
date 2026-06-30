@@ -50,7 +50,7 @@ def machines() -> list[dict]:
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _array_spectrum):
+    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec):
         fn.cache_clear()
 
 
@@ -132,10 +132,15 @@ def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
 
 
 @lru_cache(maxsize=8)
-def _spec_result(shot: str, slice_duration: float, coherence_smooth: int):
+def _spec_result(shot: str, slice_duration: float, coherence_smooth: int,
+                 max_columns: int = 4000):
     """The (expensive) STFT, cached so the spectrogram/n-map/coherence/n-spectrum
     nodes share one compute. Keyed on the STFT-shaping params only; cheap post-ops
-    (freq crop, denoise) are applied per node. Returns (result, probes, delta_phi)."""
+    (freq crop, denoise) are applied per node. Returns (result, probes, delta_phi).
+
+    ``slice_duration`` sets the frequency resolution (df = 1/slice_duration) and
+    ``max_columns`` the time-column cap (decimation lever) — the two knobs that
+    trade off spectrogram sharpness against compute."""
     (n1, phi1), (n2, phi2) = _pick_pair(shot)
     t1, s1 = h5source.load_channel(shot, n1)
     t2, s2 = h5source.load_channel(shot, n2)
@@ -145,7 +150,8 @@ def _spec_result(shot: str, slice_duration: float, coherence_smooth: int):
     time_s = np.asarray(t1[:k], dtype=float) * 1e-3   # HDF5 time base is ms
     res = spectral.compute_spectrogram(
         time_s, s1[:k], s2[:k], delta_phi=float(phi2 - phi1),
-        slice_duration=slice_duration, coherence_smooth=coherence_smooth)
+        slice_duration=slice_duration, coherence_smooth=coherence_smooth,
+        max_columns=max_columns)
     return res, (n1, n2), round(float(phi2 - phi1), 1)
 
 
@@ -156,7 +162,8 @@ def _prep_spec(shot, params):
     cs = _i(params, "coherence_smooth", None)
     if cs is None:
         cs = _i(params, "smoothing", 5)
-    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs))
+    mc = _i(params, "max_columns", 4000)
+    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs), max(2, mc))
     if _flag(params, "denoise"):
         res = spectral.denoise_spectrogram(res, coherence_min=_f(params, "coherence_min", 0.5))
     f_khz = np.asarray(res.frequency) / 1e3
@@ -181,16 +188,75 @@ def _spectrogram(shot, params=None) -> dict:
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
 
 
-def _mode_number(shot, params=None) -> dict:
-    """Real toroidal mode-number n(t,f) — n = round(phase/Δφ) from the core."""
+def _mode_number_2pt(shot, params=None) -> dict:
+    """2-point toroidal mode number n(t,f) = round(Δφ_phase / Δφ). Alias-limited to
+    |n| ≲ 180/Δφ by the probe separation; used only as a fallback when a shot lacks a
+    usable multi-probe toroidal array."""
     res, mask, probes, dphi = _prep_spec(shot, params)
     f = np.asarray(res.frequency)[mask] / 1e3
-    n = np.asarray(res.mode_number, dtype=float)[:, mask]
+    n = np.abs(np.asarray(res.mode_number, dtype=float)[:, mask])   # |n|, 0…6
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(), f.tolist(), n.T.tolist(),
-        {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal n"},
-        discrete=True, zrange=[-6.5, 6.5],
-        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
+        {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal |n|"},
+        discrete=True, zrange=[-0.5, 6.5],
+        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot),
+              "method": "2-point round(phase/Δφ)"})
+
+
+def _mode_number(shot, params=None) -> dict:
+    """Array-resolved toroidal mode number n(t,f): a multi-probe fit per (t,f) cell
+    (exp(-inφ) projection over the whole toroidal array), so it recovers the |n| ≥ 2
+    modes that the 2-point round(phase/Δφ) aliases away on a wide probe pair. Cells are
+    shown only where the fit is clean (mode-coherence ≥ gate) and there is real array
+    power; the rest are blanked. Falls back to the 2-point estimate for shots with no
+    usable toroidal array.
+
+    Two knobs control the blanking, both separate from the spectrogram's coherence
+    slider so the n-map stays clean regardless of the power view's gate: ``n_gate``
+    (mode-coherence, default 0.65) hides cells whose fit isn't a clean single-n, and
+    ``n_amp_pct`` (amplitude percentile, default 80) keeps only the strongest cells —
+    lower it to reveal weaker/broadband modes, raise it to show only the dominant one."""
+    try:
+        arr = _toroidal_arr(str(shot))
+    except ValueError:
+        return _mode_number_2pt(shot, params)
+    names = tuple(n for n, _ in arr)
+    phis = tuple(float(p) for _, p in arr)
+    sd = _f(params, "slice_duration", 0.002)   # honor the resolution knob (500 Hz default)
+    ms = _array_mode_spec(str(shot), names, phis, sd)
+
+    f_khz = np.asarray(ms.freq_band) / 1e3
+    mask = np.ones(f_khz.size, dtype=bool)
+    fmin, fmax = _f(params, "fmin"), _f(params, "fmax")
+    if fmin is not None:
+        mask &= f_khz >= fmin
+    if fmax is not None:
+        mask &= f_khz <= fmax
+
+    # The array STFT keeps a fine native hop; decimate time columns for the display.
+    t_ms = np.asarray(ms.time) * 1e3
+    ti = np.linspace(0, t_ms.size - 1, min(t_ms.size, 1500)).astype(int)
+
+    n = np.asarray(ms.mode_number)[np.ix_(ti, mask)].astype(float)
+    q = np.asarray(ms.quality)[np.ix_(ti, mask)]
+    amp = np.asarray(ms.amplitude)[np.ix_(ti, mask)]
+
+    gate = _f(params, "n_gate", 0.65)
+    amp_pct = min(100.0, max(0.0, _f(params, "n_amp_pct", 80.0)))
+    floor = float(np.percentile(amp, amp_pct)) if amp.size else 0.0
+    show = (q >= gate) & (amp >= floor)
+    # Display magnitude |n| (0…6) — folds co/counter-rotating into one label so the
+    # discrete palette stays visually distinct; signed n is in the phase fit.
+    z = np.where(show, np.abs(n), np.nan).T    # [freq, time]; NaN → null (Plotly gap)
+    zlist = [[None if not np.isfinite(v) else float(v) for v in row] for row in z]
+
+    return contracts.heatmap(
+        t_ms[ti].tolist(), f_khz[mask].tolist(), zlist,
+        {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal |n|"},
+        discrete=True, zrange=[-0.5, 6.5],   # 7-bin |n| palette aligned to integers
+        meta={"probes": list(names), "n_probes": len(names), "shot": str(shot),
+              "method": f"array projection |n|≤5 ({len(names)} probes)",
+              "n_gate": round(float(gate), 2), "n_amp_pct": round(amp_pct, 1)})
 
 
 def _coherence(shot, params=None) -> dict:
@@ -309,6 +375,26 @@ def _array_spectrum(shot, names):
     speed-for-memory cap — raise it only with that resident cost in mind."""
     t_ms, mat = _stack(shot, names)
     return spectral.array_shape_spectrum(mat, np.asarray(t_ms, dtype=float) * 1e-3)
+
+
+@lru_cache(maxsize=2)
+def _array_mode_spec(shot, names, phis, slice_duration):
+    """Toroidal-|n|-resolved spectrogram from a *dedicated* full-array STFT computed at
+    the requested frequency resolution over a fixed 0–50 kHz band — so the n-map refines
+    with the resolution knob and spans the same band as the power view, rather than being
+    locked to the cursor-analysis spectrum's 1–25 kHz / 1 kHz grid.
+
+    Heavier than reusing ``_array_spectrum`` (its own 14-probe STFT), so ``maxsize`` is
+    small and only the resolution changes it — band cropping is a cheap post-op in the
+    node. ``names``/``phis`` are tuples so the call is hashable; cleared by ``refresh``."""
+    t_ms, mat = _stack(shot, names)
+    # Cap STFT columns at ~2000: the node decimates the display to 1500 anyway, so the
+    # native fine hop would just inflate the per-cell projection (an (n, t, f) einsum)
+    # with columns we'd throw away.
+    spec = spectral.array_shape_spectrum(
+        mat, np.asarray(t_ms, dtype=float) * 1e-3,
+        fmin=0.0, fmax=50_000.0, slice_duration=slice_duration, max_columns=2000)
+    return spectral.array_mode_spectrogram(spec, np.asarray(phis, dtype=float), n_max=5)
 
 
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
