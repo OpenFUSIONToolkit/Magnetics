@@ -304,7 +304,17 @@ def _array_spectrum(shot, names):
 
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
 def _toroidal_arr(shot):
-    arr = _array_channels(shot, ("MPI_BDOT", "MPID"))
+    """The toroidal (midplane) array for the n-fit: ONE consistent probe type, all at
+    θ≈0 so the phase is a clean −nφ ramp. Prefer the fast-Mirnov dB/dt array; a "both"
+    pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
+    probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
+    scrambles the fit, so they're excluded."""
+    arr = _array_channels(shot, ("MPI_BDOT",))
+    if len(arr) >= 4:
+        return arr
+    theta = _real_theta()                          # integrated-Bp midplane fallback
+    arr = [(n, p) for n, p in _array_channels(shot, ("MPID",))
+           if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)]
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a mode fit")
     return arr
@@ -339,8 +349,9 @@ def _phase_fit(shot, params=None) -> dict:
         if e is not None and np.isfinite(e):
             pt["error_y"] = round(float(e), 3)
         points.append(pt)
+    # fitted line phase(φ) = c − n·φ (slope −n), matching the data ramp — not +n
     line = {"x": [0.0, 360.0],
-            "y": [fit.intercept_deg, fit.intercept_deg + fit.n * 360.0]}
+            "y": [fit.intercept_deg, fit.intercept_deg - fit.n * 360.0]}
     return contracts.scatter2d(
         points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
         meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
@@ -405,18 +416,31 @@ def _poloidal_arr(shot):
     return arr
 
 
+def _toroidal_n(shot, t0_s, f_khz):
+    """Best-fit toroidal n at (t0, f) from the midplane array — used to de-trend the
+    poloidal phase (the poloidal probes span φ, so the nφ ramp must be removed)."""
+    arr = _toroidal_arr(shot)
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(shot, tuple(n for n, _ in arr))
+    mode = spectral.mode_from_spectrum(spec, phis, t0_s, f_khz * 1e3)
+    return spectral.fit_toroidal_mode(mode).n
+
+
 def _poloidal_mode(shot, params):
-    """Per-probe phase/amplitude across the poloidal array at one frequency, using
-    the real published θ. Returns (arr, mode, f_khz, t0_ms)."""
+    """Per-probe phase/amplitude across the poloidal array vs θ. The probes span φ, so
+    the toroidal nφ ramp is removed (phase += n·φ → −m·θ + const) using the toroidal n
+    at the same (t0, f). Returns (arr, mode, f_khz, t0_ms)."""
     t0_ms = _f(params, "time", None)
     f_khz = _f(params, "f_khz", None)
     if f_khz is None:
         f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _poloidal_arr(str(shot))
     thetas = np.array([th for _, th in arr], dtype=float)
+    pphis = np.array([diiid.phi_of(n) or 0.0 for n, _ in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
+    mode.phase = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
     return arr, mode, f_khz, t0_ms
 
 

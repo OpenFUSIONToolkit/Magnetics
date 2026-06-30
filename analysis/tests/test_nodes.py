@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from magnetics.core import contracts
+from magnetics.data import diiid
 from magnetics.service import nodes
 
 
@@ -71,6 +72,15 @@ def test_mode_shape_node_has_band_and_markers():
         assert all(lo <= y <= up for lo, y, up in zip(s["lower"], s["y"], s["upper"]))
         # measured probe markers present (cf. Olofsson fig 10)
         assert len(s["markers"]["x"]) == len(s["markers"]["y"]) > 0
+
+
+def test_toroidal_array_single_family():
+    # the toroidal n-fit must use ONE consistent probe type at the midplane — a
+    # "both" pull also brings integrated-Bp + off-midplane poloidal probes, and
+    # mixing those scrambles the fit
+    shot = _first_shot()
+    arr = nodes._toroidal_arr(shot)
+    assert len({diiid.family_of(n) for n, _ in arr}) == 1
 
 
 def test_poloidal_shape_node():
