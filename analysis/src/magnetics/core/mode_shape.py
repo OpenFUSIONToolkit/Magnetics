@@ -148,7 +148,8 @@ def gp_periodic_fit(
     """Fit one real periodic GP to (angle, value) samples; return mean+σ on a grid.
 
     Hyper-parameters (length scale, noise) are tuned by maximizing the marginal
-    likelihood (eq 22) unless both are pinned. Angles in degrees; grid spans [0, 360).
+    likelihood (eq 22); a pinned value is held fixed and only the free one is tuned.
+    Angles in degrees; grid spans [0, 360).
     """
     angle_deg = np.asarray(angle_deg, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64)
@@ -157,7 +158,9 @@ def gp_periodic_fit(
     ls = length_scale if length_scale is not None else 1.0
     nz = noise if noise is not None else float(np.std(values) * 0.1 + 1e-6)
     if optimize and (length_scale is None or noise is None):
-        ls, nz = _optimize_hyperparams(angle_deg, [values], ls, nz)
+        opt_ls, opt_nz = _optimize_hyperparams(angle_deg, [values], ls, nz)
+        ls = opt_ls if length_scale is None else ls   # keep a pinned value pinned
+        nz = opt_nz if noise is None else nz
 
     mean, sigma = _posterior(angle_deg, values, grid, ls, nz**2)
     nll = _neg_log_marginal(np.log([ls, nz]), angle_deg, [values])

@@ -544,6 +544,11 @@ def mode_from_spectrum(
     columns within ±``window_s``/2 of ``t0_s`` at the frequency bin nearest
     ``frequency`` — i.e. over genuine time segments (not a wide frequency band, which
     would dephase and destroy the coherence). Yields the coherence and Bendat–Piersol σ.
+
+    Caveat: the window holds only a handful of segments (≥3), so the magnitude-squared
+    coherence is biased high at low K and the σ runs mildly optimistic — inherent to a
+    short cursor window, not a defect. Widen ``window_s`` to trade time-resolution for
+    tighter coherence statistics.
     """
     band = spectrum.spec                                  # (n_probes, n_times, n_band)
     times = np.asarray(spectrum.time)

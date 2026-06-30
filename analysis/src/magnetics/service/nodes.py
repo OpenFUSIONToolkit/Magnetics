@@ -10,12 +10,16 @@ rather than fake numbers.
 """
 from __future__ import annotations
 
+import dataclasses
+import logging
 from functools import lru_cache
 
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, spectral
 from ..data import diiid, h5source
+
+logger = logging.getLogger(__name__)
 
 T_TO_GAUSS = 1.0e4  # PTDATA integrated field is ~Tesla; show Gauss like the GUI
 
@@ -276,6 +280,8 @@ def _auto_freq_khz(shot, t0_ms=None, fmin=1.0, fmax=25.0):
     try:
         res, _probes, _dphi = _spec_result(str(shot), 0.001, 5)
     except Exception:  # noqa: BLE001
+        logger.warning("auto-freq: spectrogram unavailable for shot %s, using 5 kHz",
+                       shot, exc_info=True)
         return 5.0
     f_khz = np.asarray(res.frequency) / 1e3
     band = (f_khz >= fmin) & (f_khz <= fmax)
@@ -297,7 +303,10 @@ def _array_spectrum(shot, names):
     expensive step. Every cursor position AND frequency then reads the complex array
     pattern out of this by indexing (``mode_from_spectrum``), so both scrubbing and
     mode-frequency changes are array-fast with no rebuild. ``names`` is a tuple so the
-    call is hashable; cleared by ``refresh``."""
+    call is hashable; cleared by ``refresh``.
+
+    Each entry is the full complex64 STFT (~100 MB/shot); ``maxsize`` is the deliberate
+    speed-for-memory cap — raise it only with that resident cost in mind."""
     t_ms, mat = _stack(shot, names)
     return spectral.array_shape_spectrum(mat, np.asarray(t_ms, dtype=float) * 1e-3)
 
@@ -454,7 +463,8 @@ def _poloidal_mode(shot, params):
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
-    mode.phase = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
+    detrended = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
+    mode = dataclasses.replace(mode, phase=detrended)
     return arr, mode, f_khz, t0_ms
 
 
