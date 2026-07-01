@@ -25,7 +25,7 @@ from typing import NamedTuple
 import numpy as np
 
 from magnetics.data import device_geom, devices, diiid, signals
-from magnetics.data.fetch.toksearch import Channel, _write_h5, resolve_sensor_set
+from magnetics.data.fetch.toksearch import Channel, Profile, _write_h5, resolve_sensor_set
 
 
 class _Mode(NamedTuple):
@@ -112,6 +112,17 @@ def _channels(shot: int, *, include_qs: bool) -> list[Channel]:
     chans.append(Channel("ip", t_ms.copy(), ip, ok=True))
     chans.append(Channel("bt", t_ms.copy(), np.full(n, 2.0, np.float32), ok=True))
     chans.append(Channel("kappa", t_ms.copy(), np.full(n, 1.8, np.float32), ok=True))
+
+    if include_qs:
+        # A synthetic EFIT02-style q-profile: monotonic q0≈1.05 → q_edge≈4.5 on a
+        # uniform ψ_N grid, ~constant over a handful of coarse EFIT time slices. Gives
+        # the mode-number anchor real rational surfaces (q=2 at m/n=6/3, etc.) to test
+        # against — no tokamak data, just a physical shape.
+        q_t = np.linspace(0.0, _DURATION * 1e3, 5)  # 5 EFIT slices (ms)
+        psi = np.linspace(0.0, 1.0, 65)
+        q1d = 1.05 + 3.45 * psi**2  # q(0)=1.05, q(1)=4.5
+        q2d = np.tile(q1d, (q_t.size, 1)).astype(np.float32)  # [ntime, npsi], steady
+        chans.append(Profile("q_profile", q_t, psi, q2d, ok=True))
     return chans
 
 
