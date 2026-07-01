@@ -13,10 +13,13 @@ from magnetics.service import nodes
 
 
 def _first_shot():
+    # Prefer a DIII-D shot: these tests assume full geometry + QS arrays, which the
+    # synthetic KSTAR shot (device=kstar, toroidal-only, no r/z) does not yet carry.
     ms = nodes.machines()
     if not ms:
         pytest.skip("no fetched HDF5 in the data dir")
-    return ms[0]["id"]
+    non_kstar = [m for m in ms if (m.get("device") or "").lower() != "kstar"]
+    return (non_kstar or ms)[0]["id"]
 
 
 def test_machines_shape():

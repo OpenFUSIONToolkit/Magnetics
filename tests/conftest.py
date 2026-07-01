@@ -29,6 +29,8 @@ _DATAFILE = _SYNTH_DIR / "datafile"
 #: Synthetic shot ids (≥ 151593 so all channels resolve in the post-upgrade era).
 SYNTH_SHOT = 990000  # full rotating + quasi-stationary arrays
 SYNTH_ROTATING_ONLY_SHOT = 990001  # MPI_BDOT only → QS fit has no array (422 path)
+#: KSTAR synthetic shot — device=kstar, MC1T toroidal array (rotating path only).
+SYNTH_KSTAR_SHOT = 42485
 #: Synthetic NSTX-U shot (real fastmag channel names, fabricated signals).
 SYNTH_NSTX_SHOT = 204718
 
@@ -36,7 +38,11 @@ SYNTH_NSTX_SHOT = 204718
 @pytest.fixture(scope="session", autouse=True)
 def _synthetic_data():
     """Write the synthetic shots once and point the caches at them."""
-    from synthetic_shot import write_synthetic_nstx_shot, write_synthetic_shot
+    from synthetic_shot import (
+        write_synthetic_kstar_shot,
+        write_synthetic_nstx_shot,
+        write_synthetic_shot,
+    )
 
     _DATAFILE.mkdir(parents=True, exist_ok=True)
     write_synthetic_shot(_DATAFILE / f"shot_{SYNTH_SHOT}.h5", SYNTH_SHOT, include_qs=True)
@@ -45,6 +51,7 @@ def _synthetic_data():
         SYNTH_ROTATING_ONLY_SHOT,
         include_qs=False,
     )
+    write_synthetic_kstar_shot(_DATAFILE / f"shot_{SYNTH_KSTAR_SHOT}.h5", SYNTH_KSTAR_SHOT)
     write_synthetic_nstx_shot(_DATAFILE / f"shot_{SYNTH_NSTX_SHOT}.h5", SYNTH_NSTX_SHOT)
     # Clear the lru_cached shot index + node compute caches so they see the files.
     from magnetics.data import h5source
@@ -65,6 +72,12 @@ def synthetic_shot():
 def rotating_only_shot():
     """Id of a synthetic shot with only the rotating array (no QS Bp array)."""
     return str(SYNTH_ROTATING_ONLY_SHOT)
+
+
+@pytest.fixture()
+def kstar_shot():
+    """Id of the synthetic KSTAR shot (device=kstar, MC1T toroidal array)."""
+    return str(SYNTH_KSTAR_SHOT)
 
 
 @pytest.fixture()

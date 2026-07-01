@@ -87,19 +87,26 @@ def devices():
             d = json.loads(path.read_text())
         except Exception:  # noqa: BLE001 — skip an unparseable device file
             continue
+        if "name" not in d or "sensor_sets" not in d:
+            continue  # not a device file (e.g. kstar_mirnov_config.json)
+        conn = d.get("connection") or {}
         out.append(
             {
                 "id": path.stem,  # e.g. "diiid" → --device diiid
                 "name": d.get("name", path.stem),  # e.g. "DIII-D"
                 "default_shot": d.get("default_shot"),  # per-device example shot
                 "sensor_sets": list(d.get("sensor_sets", {}).keys()),
-                # `access` = "mdsplus_tree" for NSTX-style devices whose sensors live
-                # in an MDSplus tree: those pull ONLY via mdsthin + a named sensor_set
-                # (no cluster/remote path, no analysis→signal map). Lets the GUI adapt.
+                # `access` = "mdsplus_tree" for NSTX/KSTAR-style devices whose sensors
+                # live in an MDSplus tree: those pull ONLY via mdsthin + a named
+                # sensor_set (no cluster/remote path, no analysis→signal map).
                 "access": d.get("access", "ptdata"),
                 # remote (cluster) backend is available only when the device file has
-                # a network.cluster block (DIII-D omega); NSTX has none.
+                # a network.cluster block (DIII-D omega); NSTX/KSTAR have none.
                 "remote_capable": bool((d.get("network", {}) or {}).get("cluster")),
+                # a `connection` block means a device-specific VPN+SSH transport
+                # (KSTAR): the GUI collects creds + shows the site note.
+                "needs_ssh_creds": bool(d.get("connection")),
+                "connect_note": conn.get("note"),
             }
         )
     return out
@@ -167,6 +174,10 @@ class FetchRequest(BaseModel):
     username: str | None = None
     password: str | None = None  # fed to ssh via askpass; localhost only, not stored
     duo: str | None = None  # Duo passcode, or "1" for push (default)
+    # KSTAR two-step auth: VPN login (username/password above) + a separate nkstar
+    # SSH login here. localhost only, not stored.
+    ssh_user: str | None = None
+    ssh_password: str | None = None
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
     device: str | None = None  # data/device/<device>.json
     sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
@@ -242,6 +253,8 @@ def post_fetch(req: FetchRequest) -> dict:
                 username=req.username,
                 password=req.password,
                 duo=req.duo,
+                ssh_user=req.ssh_user,
+                ssh_password=req.ssh_password,
                 tmin=req.tmin,
                 tmax=req.tmax,
                 decimate=req.decimate,
