@@ -753,7 +753,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     // Fill the card: subtract its 12px padding (×2), ~38px header and the 8px gap, so the
     // plot — and its x-axis title — fit instead of overflowing and getting clipped.
     const plotH = Math.max(220, specHeight - 78);
-    return <Plot data={data} layout={layout} height={plotH} onClick={handlePlotClick} />;
+    return <Plot data={data} layout={layout} height={plotH} onClick={handlePlotClick} exportName={`shot_${machine}_spectrogram`} download={{ machine, nodeId: "spectrogram", params: specParams }} />;
   };
 
   const renderSubInterval = () => {
@@ -831,7 +831,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             Raw Signal <span style={{ textTransform: "none" }}>dB/dt (4&nbsp;ms window)</span>
           </h4>
           {rawTrace
-            ? <Plot data={rawPlotData} height={250} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} />
+            ? <Plot data={rawPlotData} height={250} layout={{ margin: { l: 40, r: 10, t: 10, b: 30 }, xaxis: { title: { text: "Time (ms)" } } }} exportName={`shot_${machine}_raw_trace`} download={{ machine, nodeId: "raw_trace", params: { time: cursorMs } }} />
             : <PanelPlaceholder text="raw dB/dt trace — not yet wired to the backend" height={250} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleSubintervalSplit} />
@@ -839,7 +839,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Frequency Spectrum
           </h4>
-          <Plot data={specSubplotsData} layout={specSubplotsLayout} height={250} />
+          <Plot data={specSubplotsData} layout={specSubplotsLayout} height={250} exportName={`shot_${machine}_frequency_spectrum`} download={{ machine, nodeId: "spectrogram", params: specParams }} />
         </div>
       </div>
     );
@@ -862,11 +862,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
       xaxis: { title: { text: "Time (ms)" } },
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
-    const stripePlot = (d: { x: number[]; y: number[]; z: number[][] }, axisTitle: string) => (
+    const stripePlot = (d: { x: number[]; y: number[]; z: number[][] }, axisTitle: string, nodeId?: string) => (
       <Plot
         data={[{ type: "heatmap" as const, x: d.x, y: d.y, z: d.z, colorscale: POWER_SEQUENTIAL, showscale: false }]}
         layout={{ ...baseLayout, yaxis: { title: { text: axisTitle } } }}
         height={200}
+        exportName={nodeId ? `shot_${machine}_${nodeId}` : undefined}
+        // only the live stripes come from a node; the mock stripes are client-side (image only)
+        download={live && nodeId ? { machine, nodeId, params: { time: cursorMs } } : undefined}
       />
     );
 
@@ -877,7 +880,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             Toroidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(φ, t)</span>
           </h4>
           {torData
-            ? stripePlot(torData, "φ (deg)")
+            ? stripePlot(torData, "φ (deg)", "toroidal_stripes")
             : <PanelPlaceholder text={`toroidal array waves · waiting for stripes at t=${cursorMs.toFixed(0)} ms`} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
@@ -886,7 +889,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             Poloidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(θ, t)</span>
           </h4>
           {polData
-            ? stripePlot(polData, "θ (deg)")
+            ? stripePlot(polData, "θ (deg)", "poloidal_stripes")
             : <PanelPlaceholder text="poloidal array not available for this shot" />}
         </div>
       </div>
@@ -903,7 +906,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             Toroidal Phase Fit <span style={{ textTransform: "none" }}>(n = {String(toroidalMeta?.n_estimate ?? toroidalMeta?.n_fit ?? "")})</span>
           </h4>
           {processedToroidalNode
-            ? <NodeView node={processedToroidalNode} height={200} />
+            ? <NodeView node={processedToroidalNode} height={200} exportName={`shot_${machine}_phase_fit`} download={{ machine, nodeId: "phase_fit", params: { time: cursorMs } }} />
             : <PanelPlaceholder text={`toroidal phase fit · waiting for phase_fit at t=${cursorMs.toFixed(0)} ms`} />}
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
@@ -912,7 +915,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             Poloidal Phase Fit{poloidalMeta ? ` (m = ${String(poloidalMeta.m_fit ?? "")}, fittype = ${fittype})` : ""}
           </h4>
           {processedPoloidalNode
-            ? <NodeView node={processedPoloidalNode} height={200} />
+            ? <NodeView node={processedPoloidalNode} height={200} exportName={`shot_${machine}_poloidal_phase_fit`} download={{ machine, nodeId: "poloidal_phase_fit", params: { time: cursorMs } }} />
             : <PanelPlaceholder text="poloidal phase fit · no poloidal array in this shot" />}
         </div>
       </div>
@@ -965,7 +968,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       // explicit range = data extent → no autorange padding, fills the tile while sliding
       yaxis: { title: { text: node.axes.y }, range: [y0, y1], tickvals, ticktext },
     };
-    return <Plot data={traces} layout={layout} height={260} />;
+    return <Plot data={traces} layout={layout} height={260} exportName={`shot_${machine}_mode_pattern`} download={{ machine, nodeId: "mode_pattern", params: { time: cursorMs } }} />;
   };
 
   // Each analysis below renders in its OWN card panel (see the JSX), and only when
@@ -977,8 +980,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
     kind: Node["kind"],
     height: number,
     subtitle?: string,
+    download?: { machine: string; nodeId: string; params?: Record<string, string | number> },
   ) => {
     if (!node || node.kind !== kind) return null;
+    const exportName = download ? `shot_${download.machine}_${download.nodeId}` : undefined;
     return (
       // marginTop 7px matches the height of the DraggableDividers between the top
       // panels, so every card is spaced consistently down the column.
@@ -988,7 +993,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
           {subtitle ? <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}> · {subtitle}</span> : null}
         </h4>
         <div style={{ flex: 1, minHeight: 0 }}>
-          <NodeView node={node} height={height} />
+          <NodeView node={node} height={height} exportName={exportName} download={download} />
         </div>
       </div>
     );
@@ -1438,10 +1443,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
             serves it (poloidal shape & 2D pattern need a shot with the MPID array). */}
         {analysisCard("Toroidal Mode Shape", modeShapeNode, "line", 220,
           shapeMeta(modeShapeNode)?.f_kHz != null
-            ? `GP fit ±2σ · markers = probes @ ${shapeMeta(modeShapeNode)!.f_kHz} kHz` : "GP fit ±2σ")}
+            ? `GP fit ±2σ · markers = probes @ ${shapeMeta(modeShapeNode)!.f_kHz} kHz` : "GP fit ±2σ",
+          { machine, nodeId: "mode_shape", params: { time: cursorMs } })}
         {analysisCard("Poloidal Mode Shape", poloidalShapeNode, "line", 220,
           shapeMeta(poloidalShapeNode)?.f_kHz != null
-            ? `GP fit ±2σ · markers = probes @ ${shapeMeta(poloidalShapeNode)!.f_kHz} kHz` : "GP fit ±2σ")}
+            ? `GP fit ±2σ · markers = probes @ ${shapeMeta(poloidalShapeNode)!.f_kHz} kHz` : "GP fit ±2σ",
+          { machine, nodeId: "poloidal_shape", params: { time: cursorMs } })}
         {processedPatternNode && processedPatternNode.kind === "contour" && (
           <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
             <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
@@ -1513,14 +1520,16 @@ export default function RotatingTab({ machine }: { machine: string }) {
         {analysisCard("Mode Persistence", modeTrackNode, "line", 200,
           shapeMeta(modeTrackNode)?.dominant_n != null
             ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`
-            : "shape similarity to the dominant mode vs time")}
+            : "shape similarity to the dominant mode vs time",
+          { machine, nodeId: "mode_track" })}
         {analysisCard("Toroidal Mode vs Time", modeOverTimeNode, "line", 200,
           shapeMeta(modeOverTimeNode)?.dominant_n != null
             ? `n of the strongest mode (freq follows the ridge${
                 Array.isArray(shapeMeta(modeOverTimeNode)?.f_range_kHz)
                   ? `, ${(shapeMeta(modeOverTimeNode)!.f_range_kHz as unknown as number[]).join("–")} kHz`
                   : ""}) · dominant n≈${shapeMeta(modeOverTimeNode)!.dominant_n}`
-            : "best-fit toroidal n over time")}
+            : "best-fit toroidal n over time",
+          { machine, nodeId: "mode_over_time" })}
       </div>
     </div>
   );
