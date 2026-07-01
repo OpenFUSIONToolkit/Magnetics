@@ -39,6 +39,7 @@ dev = [
     "nbconvert>=7.16",
     "nbstripout>=0.9.1",
     "ty>=0.0.52",
+    "httpx>=0.28.1",
 ]
 
 # Run the mock service:  uv run --extra service magnetics-service

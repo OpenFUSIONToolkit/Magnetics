@@ -10,6 +10,7 @@ committed device JSON — no fetched HDF5.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from magnetics._slcontour import omfit_compat as oc
 
@@ -59,3 +60,26 @@ def test_sensor_geometry_shot_none_falls_back_to_earliest():
     geo = oc.sensor_geometry("DIII-D")
     sel = geo.sel(channel=_QS_CHANNELS[0])
     assert np.isfinite(float(sel["r_end1"].values))
+
+
+@pytest.mark.parametrize("shot", [124400, 151593, 156014, 184928, 990000])
+def test_two_resolvers_agree_across_eras(shot):
+    """The device JSON is read by TWO independent segment resolvers — data/devices
+    (rotating path) and _slcontour/omfit_compat (QS path). They must never diverge;
+    that duplication is what produced the all-NaN geometry bug."""
+    from magnetics.data import devices
+
+    dev = devices.load_device("diiid")
+    geo = oc.sensor_geometry("DIII-D", shot=shot)
+    checked = 0
+    for ch in _QS_CHANNELS:
+        want = devices.geometry_at(dev, ch, shot)
+        if want is None:  # not modeled at this shot in the strict resolver
+            continue
+        sel = geo.sel(channel=ch)
+        for field in ("r", "z", "phi"):
+            v = float(sel[field].values)
+            assert np.isfinite(v)
+            assert v == want[field], f"{ch}.{field} disagrees at shot {shot}"
+        checked += 1
+    assert checked > 0, f"no shared channels checked at shot {shot}"

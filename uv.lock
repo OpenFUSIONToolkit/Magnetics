@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-24T00:40:29.393634Z"
+exclude-newer = "2026-06-24T04:49:47.509798Z"
 exclude-newer-span = "P1W"
 
 [[package]]
@@ -992,6 +992,7 @@ service = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "ipykernel" },
     { name = "jupyter" },
     { name = "nbconvert" },
@@ -1017,6 +1018,7 @@ provides-extras = ["service"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "jupyter", specifier = ">=1.1.0" },
     { name = "nbconvert", specifier = ">=7.16" },

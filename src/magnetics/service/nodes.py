@@ -563,8 +563,8 @@ def _fit_quality(shot, params=None) -> dict:
     """Fit quality metrics — uses the full run_steps fit when available."""
     try:
         return qs_bridge.fit_to_fit_quality_node(_prep_qs_ds(shot, params).fit)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — degrade to geometry-only K, but never silently
+        logger.warning("fit_quality: SLCONTOUR fit unavailable for shot %s", shot, exc_info=True)
     # Fallback: geometry-only K (no fit available yet)
     arr = _array_channels(shot, ("MPID",))
     if len(arr) < 4:
