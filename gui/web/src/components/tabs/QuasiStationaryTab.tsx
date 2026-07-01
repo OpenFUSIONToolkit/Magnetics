@@ -164,7 +164,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // ── Section collapse state ────────────────────────────────────────
   const [fitQualityOpen, setFitQualityOpen] = useState(false);
-  const [svdOpen, setSvdOpen]               = useState(true);
+  const [svdOpen, setSvdOpen]               = useState(false);
   const [sensorMapOpen, setSensorMapOpen]   = useState(false);
   const [advancedOpen, setAdvancedOpen]     = useState(false);
 
@@ -668,12 +668,21 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       {/* ── Settings bar ──────────────────────────────────────────────── */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-          title="Selects which sensor array (channel-name filter) is used for the fit. Internally this resolves to a regular-expression filter over channel names, e.g. &quot;M.*&quot; for all channels starting with &quot;M&quot;.">
+          title="Select which sensor array is used for the fit. Choose from the options in the dropdown.">
           Array
           <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
             style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
             {channelFilterOptions.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Prepared and fit data will be trimmed to be within these bounds.">
+          t trim (ms)
+          <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
+            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          –
+          <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
+            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}
           title="Toroidal mode numbers to include in the fit basis (comma-separated, e.g. &quot;1,2,3&quot;). Total number of modes must be less than half the number of channels.">
@@ -701,7 +710,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         {detrendType !== "none" && (
           <label style={{ display: "flex", alignItems: "center", gap: 4 }}
             title="Time window (within the trimmed bounds) used to estimate the detrend baseline, line, or endpoints.">
-            band (ms)
+            detrend band (ms)
             <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
               style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
             –
@@ -709,15 +718,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           </label>
         )}
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-          title="Prepared and fit data will be trimmed to be within these bounds.">
-          t trim (ms)
-          <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          –
-          <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-        </label>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {paramsDirty && (
             <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
@@ -919,12 +919,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         {svdOpen && (
           <div>
             {svdEnergyNode
-              ? <Plot height={150} data={svdEnergyData} layout={svdEnergyLayout} />
-              : <div className="placeholder" style={{ height: 150 }}>{svdEnergyError ? `error: ${svdEnergyError}` : "loading SVD energy…"}</div>
+              ? <Plot height={300} data={svdEnergyData} layout={svdEnergyLayout} />
+              : <div className="placeholder" style={{ height: 300 }}>{svdEnergyError ? `error: ${svdEnergyError}` : "loading SVD energy…"}</div>
             }
             {svdCondNode
-              ? <Plot height={150} data={svdCondData} layout={svdCondLayout} />
-              : <div className="placeholder" style={{ height: 150 }}>{svdCondError ? `error: ${svdCondError}` : "loading SVD condition…"}</div>
+              ? <Plot height={300} data={svdCondData} layout={svdCondLayout} />
+              : <div className="placeholder" style={{ height: 300 }}>{svdCondError ? `error: ${svdCondError}` : "loading SVD condition…"}</div>
             }
           </div>
         )}
