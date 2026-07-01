@@ -10,6 +10,7 @@ from the channel name, theta an approximate per-array offset — so callers neve
 
 family/kind stay name-based: they don't change with shot.
 """
+
 from __future__ import annotations
 
 import math
@@ -26,15 +27,28 @@ _Z0 = 0.0  # DIII-D magnetic-axis height — origin for the poloidal angle
 
 # family -> sensor kind (matches the contract's Bp|Br|coil vocabulary)
 _KIND = {
-    "MPID": "Bp", "MPI_BDOT": "Bp", "MPIF": "Bp",
-    "ISLD": "Br", "ISLF": "Br", "ESLD": "Br",
-    "COILS": "coil", "AUX": "aux",
+    "MPID": "Bp",
+    "MPI_BDOT": "Bp",
+    "MPIF": "Bp",
+    "ISLD": "Br",
+    "ISLF": "Br",
+    "ESLD": "Br",
+    "COILS": "coil",
+    "AUX": "aux",
 }
 
 # Approximate poloidal offset (deg) per array-id, so different poloidal rows
 # separate visually. Only a FALLBACK now (used when the device table lacks r/z).
-_THETA_BY_ARRAY = {"66": 0.0, "67": 15.0, "79": -15.0,
-                   "1": 40.0, "2": 80.0, "3": 120.0, "4": 160.0, "5": 200.0}
+_THETA_BY_ARRAY = {
+    "66": 0.0,
+    "67": 15.0,
+    "79": -15.0,
+    "1": 40.0,
+    "2": 80.0,
+    "3": 120.0,
+    "4": 160.0,
+    "5": 200.0,
+}
 
 
 def _reverse_family() -> dict[str, str]:
@@ -69,7 +83,7 @@ def _dev() -> dict | None:
 def _shot_int(shot) -> int | None:
     try:
         return int(shot)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

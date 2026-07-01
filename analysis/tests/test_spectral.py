@@ -98,9 +98,7 @@ class TestCrossSpectrum:
 
     def test_recovers_synthetic_mode_number(self, synthetic_n2):
         d = synthetic_n2
-        result = cross_spectrum(
-            d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"]
-        )
+        result = cross_spectrum(d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"])
         peak_idx = np.argmax(result.power)
         assert abs(result.mode_number[peak_idx]) == d["n_true"]
 
@@ -112,9 +110,7 @@ class TestCrossSpectrum:
 
     def test_rms_by_mode_peaks_at_true_n(self, synthetic_n2):
         d = synthetic_n2
-        result = cross_spectrum(
-            d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"]
-        )
+        result = cross_spectrum(d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"])
         peak_mode_idx = np.argmax(result.rms_by_mode)
         assert abs(result.mode_indices[peak_mode_idx]) == d["n_true"]
 
@@ -203,8 +199,12 @@ class TestComputeSpectrogramEngine:
     def test_max_columns_caps_time_bins(self, synthetic_n2):
         d = synthetic_n2
         result = compute_spectrogram(
-            d["time"], d["sig1"], d["sig2"], d["delta_phi"],
-            slice_duration=0.001, max_columns=50,
+            d["time"],
+            d["sig1"],
+            d["sig2"],
+            d["delta_phi"],
+            slice_duration=0.001,
+            max_columns=50,
         )
         assert result.time.size <= 50
 
@@ -312,9 +312,7 @@ class TestExtractModeAtFrequency:
         d = synthetic_n2
         signals = np.vstack([d["sig1"], d["sig2"]])
         tor = np.array([30.0, 120.0])
-        result = extract_mode_at_frequency(
-            signals, tor, d["time"], frequency=d["f_mode"]
-        )
+        result = extract_mode_at_frequency(signals, tor, d["time"], frequency=d["f_mode"])
         assert result.kind == "mode_at_frequency"
         assert isinstance(result, ModeAtFrequencyResult)
 
@@ -329,9 +327,7 @@ class TestExtractModeAtFrequency:
         d = synthetic_n2
         signals = np.vstack([d["sig1"], d["sig2"]])
         tor = np.array([30.0, 120.0])
-        result = extract_mode_at_frequency(
-            signals, tor, d["time"], frequency=d["f_mode"]
-        )
+        result = extract_mode_at_frequency(signals, tor, d["time"], frequency=d["f_mode"])
         assert len(result.phase) == 2
         assert len(result.amplitude) == 2
         assert len(result.coherence) == 2
@@ -342,13 +338,13 @@ class TestExtractModeAtFrequency:
         signals = np.vstack([d["sig1"], d["sig2"]])
         tor = np.array([30.0, 120.0])
 
-        result_no_pol = extract_mode_at_frequency(
-            signals, tor, d["time"], frequency=d["f_mode"]
-        )
+        result_no_pol = extract_mode_at_frequency(signals, tor, d["time"], frequency=d["f_mode"])
         assert result_no_pol.poloidal_angle is None
 
         result_with_pol = extract_mode_at_frequency(
-            signals, tor, d["time"],
+            signals,
+            tor,
+            d["time"],
             frequency=d["f_mode"],
             poloidal_angles=np.array([0.0, 0.0]),
         )
@@ -384,10 +380,14 @@ class TestCrossSpectralUncertainty:
         t = np.linspace(0, 0.1, int(fs * 0.1), endpoint=False)
         f0 = 3000.0
         base1, base2 = np.sin(2 * np.pi * f0 * t), np.sin(2 * np.pi * f0 * t - 0.6)
-        hi = cross_spectrum(base1 + 0.02 * rng.standard_normal(t.size),
-                            base2 + 0.02 * rng.standard_normal(t.size), fs)
-        lo = cross_spectrum(base1 + 1.5 * rng.standard_normal(t.size),
-                            base2 + 1.5 * rng.standard_normal(t.size), fs)
+        hi = cross_spectrum(
+            base1 + 0.02 * rng.standard_normal(t.size),
+            base2 + 0.02 * rng.standard_normal(t.size),
+            fs,
+        )
+        lo = cross_spectrum(
+            base1 + 1.5 * rng.standard_normal(t.size), base2 + 1.5 * rng.standard_normal(t.size), fs
+        )
         i = int(np.argmin(np.abs(hi.frequency - f0)))
         assert hi.coherence[i] > lo.coherence[i]
         assert hi.phase_error[i] < lo.phase_error[i]
@@ -407,10 +407,12 @@ class TestModeUncertaintyPropagation:
         t = np.linspace(0, 0.1, int(fs * 0.1), endpoint=False)
         f0, n = 3000.0, 2
         phis = np.array([0.0, 33.0, 66.0, 120.0, 200.0, 300.0])
-        sigs = np.vstack([
-            np.sin(2 * np.pi * f0 * t - np.deg2rad(n * p)) + 0.05 * rng.standard_normal(t.size)
-            for p in phis
-        ])
+        sigs = np.vstack(
+            [
+                np.sin(2 * np.pi * f0 * t - np.deg2rad(n * p)) + 0.05 * rng.standard_normal(t.size)
+                for p in phis
+            ]
+        )
         return extract_mode_at_frequency(sigs, phis, t, frequency=f0), n
 
     def test_per_probe_errors_present(self):
@@ -442,10 +444,13 @@ class TestModeUncertaintyPropagation:
         fs = 50_000
         t = np.linspace(0, 0.02, int(fs * 0.02), endpoint=False)
         phis = np.array([0.0, 33.0])
-        sigs = np.vstack([
-            np.sin(2 * np.pi * 3000.0 * t - np.deg2rad(2 * p)) + 1.2 * rng.standard_normal(t.size)
-            for p in phis
-        ])
+        sigs = np.vstack(
+            [
+                np.sin(2 * np.pi * 3000.0 * t - np.deg2rad(2 * p))
+                + 1.2 * rng.standard_normal(t.size)
+                for p in phis
+            ]
+        )
         noisy = fit_toroidal_mode(extract_mode_at_frequency(sigs, phis, t, frequency=3000.0))
         assert noisy.n_confidence <= clean.n_confidence + 1e-9
 
@@ -467,17 +472,21 @@ class TestArrayShapeSpectrum:
         fs = 200_000
         t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
         phi = np.linspace(0, 330, 16)
-        sigs = np.vstack([
-            np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(2 * p)) + noise * rng.standard_normal(t.size)
-            for p in phi
-        ])
+        sigs = np.vstack(
+            [
+                np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(2 * p))
+                + noise * rng.standard_normal(t.size)
+                for p in phi
+            ]
+        )
         return sigs, phi, t
 
     def test_spectrum_shape(self):
         from magnetics.core.spectral import array_shape_spectrum
+
         sigs, phi, t = self._array()
         spec = array_shape_spectrum(sigs, t, fmin=2000, fmax=12000)
-        assert spec.spec.shape[0] == phi.size            # one row per probe
+        assert spec.spec.shape[0] == phi.size  # one row per probe
         assert spec.spec.shape[1] == spec.time.size
         assert spec.spec.shape[2] == spec.freq_band.size  # kept [fmin,fmax] band
         assert spec.freq_band.min() >= 1000 and spec.freq_band.max() <= 13000
@@ -490,15 +499,17 @@ class TestArrayShapeSpectrum:
             fit_toroidal_mode,
             mode_from_spectrum,
         )
+
         sigs, phi, t = self._array()
         t0 = 0.025
-        slow = extract_mode_at_frequency(sigs, phi, t, frequency=8000.0,
-                                         t_range=(t0 - 0.001, t0 + 0.001))
-        spec = array_shape_spectrum(sigs, t)             # default 1–25 kHz band
+        slow = extract_mode_at_frequency(
+            sigs, phi, t, frequency=8000.0, t_range=(t0 - 0.001, t0 + 0.001)
+        )
+        spec = array_shape_spectrum(sigs, t)  # default 1–25 kHz band
         fast = mode_from_spectrum(spec, phi, t0, 8000.0)
         assert fit_toroidal_mode(fast).n == fit_toroidal_mode(slow).n
         d = ((fast.phase - slow.phase + 180) % 360) - 180
-        assert np.sqrt(np.mean(d**2)) < 10.0             # phases agree within ~deg
+        assert np.sqrt(np.mean(d**2)) < 10.0  # phases agree within ~deg
         assert fast.phase_error[0] != fast.phase_error[0]  # ref probe NaN
 
 
@@ -508,15 +519,18 @@ class TestArrayModeSpectrogram:
         fs = 200_000
         t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
         phi = np.linspace(0, 330, 16)
-        sigs = np.vstack([
-            np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(n_true * p))
-            + noise * rng.standard_normal(t.size)
-            for p in phi
-        ])
+        sigs = np.vstack(
+            [
+                np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(n_true * p))
+                + noise * rng.standard_normal(t.size)
+                for p in phi
+            ]
+        )
         return sigs, phi, t
 
     def test_shapes_and_quality_range(self):
         from magnetics.core.spectral import array_mode_spectrogram, array_shape_spectrum
+
         sigs, phi, t = self._array(n_true=2)
         ms = array_mode_spectrogram(array_shape_spectrum(sigs, t), phi)
         assert ms.mode_number.shape == ms.amplitude.shape == ms.quality.shape
@@ -528,25 +542,29 @@ class TestArrayModeSpectrogram:
         # a wide 2-point pair aliases |n|>1 away; the array projection must not.
         # Sign follows the same convention as fit_toroidal_mode/the phase fit.
         from magnetics.core.spectral import (
-            array_mode_spectrogram, array_shape_spectrum, fit_toroidal_mode,
+            array_mode_spectrogram,
+            array_shape_spectrum,
+            fit_toroidal_mode,
             mode_from_spectrum,
         )
+
         sigs, phi, t = self._array(n_true=n_true)
         spec = array_shape_spectrum(sigs, t)
         ms = array_mode_spectrogram(spec, phi)
-        fi = int(np.argmin(np.abs(ms.freq_band - 8000.0)))   # the injected mode bin
+        fi = int(np.argmin(np.abs(ms.freq_band - 8000.0)))  # the injected mode bin
         it = ms.time.size // 2
         n_fit = fit_toroidal_mode(mode_from_spectrum(spec, phi, t[it], 8000.0)).n
-        assert abs(ms.mode_number[it, fi]) == n_true         # right |n| (not aliased)
-        assert ms.mode_number[it, fi] == n_fit               # agrees with the phase fit
-        assert ms.quality[it, fi] > 0.9                      # clean single-n → high q
+        assert abs(ms.mode_number[it, fi]) == n_true  # right |n| (not aliased)
+        assert ms.mode_number[it, fi] == n_fit  # agrees with the phase fit
+        assert ms.quality[it, fi] > 0.9  # clean single-n → high q
 
     def test_quality_low_for_incoherent_noise(self):
         from magnetics.core.spectral import array_mode_spectrogram, array_shape_spectrum
+
         rng = np.random.default_rng(1)
         fs = 200_000
         t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
         phi = np.linspace(0, 330, 16)
-        sigs = rng.standard_normal((phi.size, t.size))       # pure noise, no mode
+        sigs = rng.standard_normal((phi.size, t.size))  # pure noise, no mode
         ms = array_mode_spectrogram(array_shape_spectrum(sigs, t), phi)
-        assert np.median(ms.quality) < 0.6                   # resultant length stays low
+        assert np.median(ms.quality) < 0.6  # resultant length stays low

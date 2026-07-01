@@ -14,6 +14,7 @@ hatch, so this needs no change to contract.ts / contracts.py.
 These are mock fixtures (dev aids): both mock machines get the same full device
 layout, since the sensor geometry is static and shot-independent.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,10 +31,10 @@ _MACHINES = ("MOCK-A", "MOCK-B")
 def build_node() -> dict:
     geo = diiid_geometry.device_geometry()
     sensors = geo["sensors"]
-    points = [{"x": s["r"], "y": s["z"], "label": s["name"], "group": s["kind"]}
-              for s in sensors]
+    points = [{"x": s["r"], "y": s["z"], "label": s["name"], "group": s["kind"]} for s in sensors]
     return contracts.scatter2d(
-        points, {"x": "R (m)", "y": "Z (m)"},
+        points,
+        {"x": "R (m)", "y": "Z (m)"},
         meta={
             "n_sensors": len(sensors),
             "device": geo["device"],

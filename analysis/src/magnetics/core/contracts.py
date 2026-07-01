@@ -5,6 +5,7 @@ React GUI renders generically via `<NodeView>`. These builders mirror, field for
 field, the TypeScript types in `gui/web/src/lib/contract.ts` — keep the two in
 sync. No physics here, just shaping.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,26 +18,47 @@ def _clean(d: dict[str, Any]) -> dict[str, Any]:
 
 def contour(x, y, z, axes, *, zrange=None, overlay=None, meta=None) -> dict:
     """Filled contour of a 2-D field — the SLCONTOUR φ–θ map. z is row-major [y][x]."""
-    return _clean({
-        "kind": "contour", "x": x, "y": y, "z": z, "axes": axes,
-        "zrange": zrange, "overlay": overlay, "meta": meta,
-    })
+    return _clean(
+        {
+            "kind": "contour",
+            "x": x,
+            "y": y,
+            "z": z,
+            "axes": axes,
+            "zrange": zrange,
+            "overlay": overlay,
+            "meta": meta,
+        }
+    )
 
 
 def heatmap(x, y, z, axes, *, discrete=None, zrange=None, meta=None) -> dict:
     """Image/heatmap — the MODESPEC spectrogram. discrete ⇒ z is a mode number."""
-    return _clean({
-        "kind": "heatmap", "x": x, "y": y, "z": z, "axes": axes,
-        "discrete": discrete, "zrange": zrange, "meta": meta,
-    })
+    return _clean(
+        {
+            "kind": "heatmap",
+            "x": x,
+            "y": y,
+            "z": z,
+            "axes": axes,
+            "discrete": discrete,
+            "zrange": zrange,
+            "meta": meta,
+        }
+    )
 
 
 def scatter2d(points, axes, *, fit=None, meta=None) -> dict:
     """Scattered points — sensor geometry, phase-vs-angle fits."""
-    return _clean({
-        "kind": "scatter2d", "points": points, "axes": axes,
-        "fit": fit, "meta": meta,
-    })
+    return _clean(
+        {
+            "kind": "scatter2d",
+            "points": points,
+            "axes": axes,
+            "fit": fit,
+            "meta": meta,
+        }
+    )
 
 
 def line(series, axes, *, meta=None) -> dict:
@@ -44,25 +66,33 @@ def line(series, axes, *, meta=None) -> dict:
     return _clean({"kind": "line", "series": series, "axes": axes, "meta": meta})
 
 
-def equilibrium(r, z, psi_n, boundary, axis, *, levels=None, time_ms=0.0,
-                axes=None, meta=None) -> dict:
+def equilibrium(
+    r, z, psi_n, boundary, axis, *, levels=None, time_ms=0.0, axes=None, meta=None
+) -> dict:
     """A plasma equilibrium slice — ψ_N(R,Z) + LCFS, like an EFIT gEQDSK slice.
 
     `psi_n` is row-major [z][r], 0 at the magnetic axis and 1 at the boundary.
     `boundary` is {"r": [...], "z": [...]}; `axis` is {"r": .., "z": ..}.
     """
-    return _clean({
-        "kind": "equilibrium", "r": r, "z": z, "psi_n": psi_n,
-        "boundary": boundary, "axis": axis, "levels": levels,
-        "time_ms": time_ms, "axes": axes or {"x": "R (m)", "y": "Z (m)"},
-        "meta": meta,
-    })
+    return _clean(
+        {
+            "kind": "equilibrium",
+            "r": r,
+            "z": z,
+            "psi_n": psi_n,
+            "boundary": boundary,
+            "axis": axis,
+            "levels": levels,
+            "time_ms": time_ms,
+            "axes": axes or {"x": "R (m)", "y": "Z (m)"},
+            "meta": meta,
+        }
+    )
 
 
 def metrics(title, fields, *, meta=None) -> dict:
     """A scalar quality panel — condition number K, χ², channel counts."""
-    return _clean({"kind": "metrics", "title": title, "fields": fields,
-                   "meta": meta or {}})
+    return _clean({"kind": "metrics", "title": title, "fields": fields, "meta": meta or {}})
 
 
 def quality_for_k(k: float) -> str:

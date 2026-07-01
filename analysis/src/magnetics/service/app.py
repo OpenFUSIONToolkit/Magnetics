@@ -11,6 +11,7 @@ Endpoints (see docs/CONTRACT.md):
     cd analysis && uv run python -m magnetics.service.app      # → :8000
     # then point the GUI at it:  VITE_API_BASE=http://127.0.0.1:8000 npm run dev
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,8 +33,11 @@ from . import mock, nodes
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="magnetics service", version="0.1.0",
-              description="Real kind-nodes from fetched shot data, with a MOCK fallback.")
+app = FastAPI(
+    title="magnetics service",
+    version="0.1.0",
+    description="Real kind-nodes from fetched shot data, with a MOCK fallback.",
+)
 
 # permissive CORS for the Vite dev server
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -42,8 +46,13 @@ STREAM_DELAY_S = 0.5  # simulate compute time between refinement frames
 
 
 def _frame(result: str, progress: float, final: bool, data: dict, meta: dict) -> dict:
-    return {"type": result, "progress": round(progress, 3), "final": final,
-            "meta": meta, "data": data}
+    return {
+        "type": result,
+        "progress": round(progress, 3),
+        "final": final,
+        "meta": meta,
+        "data": data,
+    }
 
 
 @app.get("/api/health")
@@ -79,11 +88,13 @@ def devices():
             d = json.loads(path.read_text())
         except Exception:  # noqa: BLE001 — skip an unparseable device file
             continue
-        out.append({
-            "id": path.stem,                       # e.g. "diiid" → --device diiid
-            "name": d.get("name", path.stem),      # e.g. "DIII-D"
-            "sensor_sets": list(d.get("sensor_sets", {}).keys()),
-        })
+        out.append(
+            {
+                "id": path.stem,  # e.g. "diiid" → --device diiid
+                "name": d.get("name", path.stem),  # e.g. "DIII-D"
+                "sensor_sets": list(d.get("sensor_sets", {}).keys()),
+            }
+        )
     return out
 
 
@@ -121,10 +132,10 @@ class FetchRequest(BaseModel):
     decimate: int = 1
     username: str | None = None
     password: str | None = None  # fed to ssh via askpass; localhost only, not stored
-    duo: str | None = None       # Duo passcode, or "1" for push (default)
+    duo: str | None = None  # Duo passcode, or "1" for push (default)
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
-    device: str | None = None        # data/device/<device>.json
-    sensor_set: str | None = None    # a set under the device's sensor_sets; overrides analysis
+    device: str | None = None  # data/device/<device>.json
+    sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
     # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
     remote_host: str | None = None
     ssh_jump: str | None = None
@@ -159,20 +170,31 @@ def post_fetch(req: FetchRequest) -> dict:
     try:
         import toksearch_fetch  # repo-root data/ module
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500,
-                            detail=f"fetcher unavailable: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"fetcher unavailable: {exc}") from exc
     # only pass overrides that are set, so the fetcher's own defaults apply
     # otherwise (e.g. device "diiid", analysis-group selection).
-    fetch_kw = {k: v for k, v in {
-        "device": req.device, "sensor_set": req.sensor_set,
-        "remote_host": req.remote_host, "ssh_jump": req.ssh_jump,
-        "remote_dir": req.remote_dir, "remote_python": req.remote_python,
-    }.items() if v is not None}
+    fetch_kw = {
+        k: v
+        for k, v in {
+            "device": req.device,
+            "sensor_set": req.sensor_set,
+            "remote_host": req.remote_host,
+            "ssh_jump": req.ssh_jump,
+            "remote_dir": req.remote_dir,
+            "remote_python": req.remote_python,
+        }.items()
+        if v is not None
+    }
 
     jid = uuid.uuid4().hex[:12]
     with _JOBS_LOCK:
-        _JOBS[jid] = {"progress": 0.0, "msg": "starting", "status": "running",
-                      "result": None, "error": None}
+        _JOBS[jid] = {
+            "progress": 0.0,
+            "msg": "starting",
+            "status": "running",
+            "result": None,
+            "error": None,
+        }
 
     def on_progress(frac, msg):
         _job_set(jid, progress=float(frac), msg=str(msg))
@@ -180,15 +202,32 @@ def post_fetch(req: FetchRequest) -> dict:
     def work():
         try:
             out = toksearch_fetch.fetch_shot(
-                req.shot, req.analysis, backend=req.backend,
-                username=req.username, password=req.password, duo=req.duo,
-                tmin=req.tmin, tmax=req.tmax, decimate=req.decimate,
-                progress=on_progress, **fetch_kw)
+                req.shot,
+                req.analysis,
+                backend=req.backend,
+                username=req.username,
+                password=req.password,
+                duo=req.duo,
+                tmin=req.tmin,
+                tmax=req.tmax,
+                decimate=req.decimate,
+                progress=on_progress,
+                **fetch_kw,
+            )
             h5source.refresh()
             nodes.refresh()
-            _job_set(jid, status="done", progress=1.0, msg="done",
-                     result={"ok": True, "shot": str(req.shot), "file": out,
-                             "machines": nodes.machines()})
+            _job_set(
+                jid,
+                status="done",
+                progress=1.0,
+                msg="done",
+                result={
+                    "ok": True,
+                    "shot": str(req.shot),
+                    "file": out,
+                    "machines": nodes.machines(),
+                },
+            )
         except SystemExit as exc:  # fetcher sys.exit for missing deps/creds
             _job_set(jid, status="error", error=str(exc))
         except Exception as exc:  # noqa: BLE001
@@ -218,8 +257,7 @@ def fetch_stream(job_id: str) -> StreamingResponse:
             if job is None:
                 yield f"data: {json.dumps({'status': 'error', 'error': 'job lost'})}\n\n"
                 return
-            frame = {"progress": job["progress"], "msg": job["msg"],
-                     "status": job["status"]}
+            frame = {"progress": job["progress"], "msg": job["msg"], "status": job["status"]}
             if job["status"] == "done":
                 frame["result"] = job["result"]
                 yield f"data: {json.dumps(frame)}\n\n"
@@ -233,9 +271,11 @@ def fetch_stream(job_id: str) -> StreamingResponse:
                 last = frame
             time.sleep(0.25)
 
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/{machine}/{result}")
@@ -269,8 +309,11 @@ async def stream(machine: str, result: str, request: Request):
             if not final:
                 await asyncio.sleep(STREAM_DELAY_S)
 
-    return StreamingResponse(event_source(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── single-origin (cluster) deploy: serve the built GUI at / if it exists ──
@@ -284,6 +327,7 @@ if _DIST.is_dir():
 def main() -> None:
     """Console entry point: `uv run --extra service magnetics-service`."""
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=8000)
 
 

@@ -32,17 +32,17 @@ from magnetics.core.spectral import (
 
 @dataclass(slots=True)
 class GPFitResult:
-    grid_deg: NDArray[np.floating]   # evaluation grid (deg)
-    mean: NDArray[np.floating]       # posterior mean on the grid
-    sigma: NDArray[np.floating]      # posterior 1σ on the grid
-    length_scale: float              # fitted kernel length scale (rad)
-    noise: float                     # representative observation noise (σ₁)
+    grid_deg: NDArray[np.floating]  # evaluation grid (deg)
+    mean: NDArray[np.floating]  # posterior mean on the grid
+    sigma: NDArray[np.floating]  # posterior 1σ on the grid
+    length_scale: float  # fitted kernel length scale (rad)
+    noise: float  # representative observation noise (σ₁)
     log_marginal_likelihood: float
 
 
 @dataclass(slots=True)
 class ModeShapeResult:
-    kind: str                        # "mode_shape"
+    kind: str  # "mode_shape"
     grid_deg: NDArray[np.floating]
     re_mean: NDArray[np.floating]
     re_sigma: NDArray[np.floating]
@@ -50,8 +50,8 @@ class ModeShapeResult:
     im_sigma: NDArray[np.floating]
     amplitude: NDArray[np.floating]  # |re + i·im| of the mean shape
     angle_deg: NDArray[np.floating]  # measured probe angles
-    re_obs: NDArray[np.floating]     # measured real parts
-    im_obs: NDArray[np.floating]     # measured imaginary parts
+    re_obs: NDArray[np.floating]  # measured real parts
+    im_obs: NDArray[np.floating]  # measured imaginary parts
     length_scale: float
     noise: float
 
@@ -88,9 +88,9 @@ def _posterior(angle_deg, values, grid_deg, length_scale, noise_var):
     """GP posterior mean (eq 20) and 1σ (eq 21) on the grid. ``noise_var`` may be a
     scalar or a per-probe array (seeded from the measured cross-spectral σ)."""
     c = cho_factor(_k11(angle_deg, length_scale, noise_var), lower=True)
-    k12 = periodic_kernel(angle_deg, grid_deg, length_scale)        # (m, g)
-    mean = k12.T @ cho_solve(c, values)                             # eq 20
-    var = 1.0 - np.einsum("ij,ij->j", k12, cho_solve(c, k12))       # eq 21 (k₂₂ = 1)
+    k12 = periodic_kernel(angle_deg, grid_deg, length_scale)  # (m, g)
+    mean = k12.T @ cho_solve(c, values)  # eq 20
+    var = 1.0 - np.einsum("ij,ij->j", k12, cho_solve(c, k12))  # eq 21 (k₂₂ = 1)
     return mean, np.sqrt(np.clip(var, 0.0, None))
 
 
@@ -117,8 +117,10 @@ def _optimize_hyperparams(angle_deg, columns, ls0, nz0):
     """Maximize the (summed) marginal likelihood over (length_scale, noise)."""
     scale = float(np.std(np.concatenate(columns))) or 1.0
     res = minimize(
-        _neg_log_marginal, x0=np.log([ls0, max(nz0, 1e-4 * scale)]),
-        args=(angle_deg, columns), method="Nelder-Mead",
+        _neg_log_marginal,
+        x0=np.log([ls0, max(nz0, 1e-4 * scale)]),
+        args=(angle_deg, columns),
+        method="Nelder-Mead",
         options={"xatol": 1e-3, "fatol": 1e-3, "maxiter": 400},
     )
     ls, nz = np.exp(res.x)
@@ -129,8 +131,10 @@ def _optimize_length_scale(angle_deg, columns, noise_var, ls0=1.0):
     """Maximize the marginal likelihood over the length scale alone, with the noise
     diagonal fixed to the measured per-probe variances."""
     res = minimize(
-        _neg_log_marginal, x0=np.log([ls0]),
-        args=(angle_deg, columns, noise_var), method="Nelder-Mead",
+        _neg_log_marginal,
+        x0=np.log([ls0]),
+        args=(angle_deg, columns, noise_var),
+        method="Nelder-Mead",
         options={"xatol": 1e-3, "fatol": 1e-3, "maxiter": 300},
     )
     return float(np.clip(np.exp(res.x[0]), 0.05, 6.0))
@@ -159,7 +163,7 @@ def gp_periodic_fit(
     nz = noise if noise is not None else float(np.std(values) * 0.1 + 1e-6)
     if optimize and (length_scale is None or noise is None):
         opt_ls, opt_nz = _optimize_hyperparams(angle_deg, [values], ls, nz)
-        ls = opt_ls if length_scale is None else ls   # keep a pinned value pinned
+        ls = opt_ls if length_scale is None else ls  # keep a pinned value pinned
         nz = opt_nz if noise is None else nz
 
     mean, sigma = _posterior(angle_deg, values, grid, ls, nz**2)
@@ -183,10 +187,16 @@ def shape_noise(
     if phase_error_deg is None and amplitude_error is None:
         return None
     a = np.asarray(amplitude, dtype=np.float64)
-    s_phi = np.deg2rad(np.nan_to_num(np.asarray(phase_error_deg, dtype=np.float64))) \
-        if phase_error_deg is not None else np.zeros_like(a)
-    s_amp = np.nan_to_num(np.asarray(amplitude_error, dtype=np.float64)) \
-        if amplitude_error is not None else np.zeros_like(a)
+    s_phi = (
+        np.deg2rad(np.nan_to_num(np.asarray(phase_error_deg, dtype=np.float64)))
+        if phase_error_deg is not None
+        else np.zeros_like(a)
+    )
+    s_amp = (
+        np.nan_to_num(np.asarray(amplitude_error, dtype=np.float64))
+        if amplitude_error is not None
+        else np.zeros_like(a)
+    )
     sigma = np.sqrt(s_amp**2 + (a * s_phi) ** 2)
     ok = np.isfinite(sigma) & (sigma > 0)
     fill = float(np.median(sigma[ok])) if np.any(ok) else float(np.mean(np.abs(a)) * 0.1 + 1e-6)
@@ -240,11 +250,16 @@ def gp_mode_shape(
     return ModeShapeResult(
         kind="mode_shape",
         grid_deg=grid,
-        re_mean=re_mean * scale, re_sigma=re_sigma * scale,
-        im_mean=im_mean * scale, im_sigma=im_sigma * scale,
+        re_mean=re_mean * scale,
+        re_sigma=re_sigma * scale,
+        im_mean=im_mean * scale,
+        im_sigma=im_sigma * scale,
         amplitude=np.hypot(re_mean, im_mean) * scale,
-        angle_deg=angle_deg, re_obs=re * scale, im_obs=im * scale,
-        length_scale=float(ls), noise=nz_report * scale,
+        angle_deg=angle_deg,
+        re_obs=re * scale,
+        im_obs=im * scale,
+        length_scale=float(ls),
+        noise=nz_report * scale,
     )
 
 
@@ -302,12 +317,12 @@ def mac_n_spectrum(
 
 @dataclass(slots=True)
 class ModeTrackResult:
-    kind: str                          # "mode_track"
-    t_ms: NDArray[np.floating]         # slice-center times (ms)
-    mac_to_ref: NDArray[np.floating]   # shape similarity to the reference slice (0–1)
-    n_by_time: NDArray[np.integer]     # toroidal n per slice
-    ref_t_ms: float                    # reference slice time (ms)
-    frequency: float                   # Hz the track was evaluated at
+    kind: str  # "mode_track"
+    t_ms: NDArray[np.floating]  # slice-center times (ms)
+    mac_to_ref: NDArray[np.floating]  # shape similarity to the reference slice (0–1)
+    n_by_time: NDArray[np.integer]  # toroidal n per slice
+    ref_t_ms: float  # reference slice time (ms)
+    frequency: float  # Hz the track was evaluated at
 
 
 def track_mode_shape(
@@ -335,14 +350,18 @@ def track_mode_shape(
     shapes, ns, strength = [], [], []
     for tc in centers:
         mode = extract_mode_at_frequency(
-            signals, angle_deg, time, frequency=frequency, t_range=(tc - half, tc + half))
+            signals, angle_deg, time, frequency=frequency, t_range=(tc - half, tc + half)
+        )
         shapes.append(shape_vector(mode.phase, mode.amplitude))
         ns.append(fit_toroidal_mode(mode, n_range=n_range).n)
         strength.append(float(np.sum(np.abs(mode.amplitude))))
     shapes = np.array(shapes)
 
-    ref_idx = (int(np.argmin(np.abs(centers - ref_time_s))) if ref_time_s is not None
-               else int(np.argmax(strength)))
+    ref_idx = (
+        int(np.argmin(np.abs(centers - ref_time_s)))
+        if ref_time_s is not None
+        else int(np.argmax(strength))
+    )
     macs = np.array([mac(s, shapes[ref_idx]) for s in shapes])
 
     return ModeTrackResult(
@@ -374,7 +393,7 @@ def active_time_window(
     spec = np.asarray(spectrum.spec)
     env = np.zeros(t.size)
     for p in range(spec.shape[0]):
-        env += (np.abs(spec[p]) ** 2).sum(axis=1)        # (n_times,)
+        env += (np.abs(spec[p]) ** 2).sum(axis=1)  # (n_times,)
     peak = float(env.max()) if env.size else 0.0
     if peak <= 0.0:
         return float(t[0]), float(t[-1])
@@ -424,8 +443,11 @@ def track_from_spectrum(
     shapes = np.array(shapes)
     centers = times[idx]
 
-    ref_idx = (int(np.argmin(np.abs(centers - ref_time_s))) if ref_time_s is not None
-               else int(np.argmax(strength)))
+    ref_idx = (
+        int(np.argmin(np.abs(centers - ref_time_s)))
+        if ref_time_s is not None
+        else int(np.argmax(strength))
+    )
     macs = np.array([mac(s, shapes[ref_idx]) for s in shapes])
 
     return ModeTrackResult(
@@ -440,11 +462,11 @@ def track_from_spectrum(
 
 @dataclass(slots=True)
 class ModeRidgeResult:
-    kind: str                          # "mode_ridge"
-    t_ms: NDArray[np.floating]         # slice-center times (ms)
-    n_by_time: NDArray[np.integer]     # best-fit toroidal n of the strongest mode
-    freq_khz: NDArray[np.floating]     # dominant in-band frequency per slice (kHz)
-    amplitude: NDArray[np.floating]    # array amplitude at the ridge
+    kind: str  # "mode_ridge"
+    t_ms: NDArray[np.floating]  # slice-center times (ms)
+    n_by_time: NDArray[np.integer]  # best-fit toroidal n of the strongest mode
+    freq_khz: NDArray[np.floating]  # dominant in-band frequency per slice (kHz)
+    amplitude: NDArray[np.floating]  # array amplitude at the ridge
 
 
 def ridge_track_from_spectrum(
@@ -476,8 +498,8 @@ def ridge_track_from_spectrum(
 
     # band-integrated array power Σ_probes|Z|² at just the sampled (slice, band) cells
     spec = np.asarray(spectrum.spec)
-    sub = spec[np.ix_(np.arange(spec.shape[0]), idx, band)]   # (n_probes, n_idx, n_band)
-    powtf = (np.abs(sub) ** 2).sum(axis=0)                    # (n_idx, n_band)
+    sub = spec[np.ix_(np.arange(spec.shape[0]), idx, band)]  # (n_probes, n_idx, n_band)
+    powtf = (np.abs(sub) ** 2).sum(axis=0)  # (n_idx, n_band)
 
     ns, fkhz, amps = [], [], []
     for j, ti in enumerate(idx):
@@ -511,7 +533,7 @@ def mode_pattern_2d(
 
     Returns (phi_grid_deg, theta_grid_deg, P) with P row-major [i_θ][i_φ] for a contour.
     """
-    t = toroidal.re_mean + 1j * toroidal.im_mean          # (n_phi,)
-    p = poloidal.re_mean + 1j * poloidal.im_mean          # (n_theta,)
-    pattern = np.real(np.outer(p, t))                      # (n_theta, n_phi)
+    t = toroidal.re_mean + 1j * toroidal.im_mean  # (n_phi,)
+    p = poloidal.re_mean + 1j * poloidal.im_mean  # (n_theta,)
+    pattern = np.real(np.outer(p, t))  # (n_theta, n_phi)
     return toroidal.grid_deg, poloidal.grid_deg, pattern

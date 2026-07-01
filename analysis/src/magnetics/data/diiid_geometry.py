@@ -8,6 +8,7 @@ Device specifics (the family/set -> sensor-kind mapping) live HERE; the GUI only
 ever sees generic (r, z, phi, length, delta_phi) numbers, so the Sensors view
 stays device-agnostic. A different machine ships its own ``<name>.json`` file.
 """
+
 from __future__ import annotations
 
 import json
@@ -36,10 +37,10 @@ def _family(channel: str) -> str:
 def _kind(family: str) -> str:
     """Family-prefix fallback when a sensor isn't in a classifying set."""
     if family.startswith("MPI"):
-        return "Bp"          # Mirnov poloidal-field probes (point)
+        return "Bp"  # Mirnov poloidal-field probes (point)
     if family.startswith(("ISL", "ESL")):
-        return "Br"          # internal/external saddle loops
-    return "coil"            # I-coils, C-coils, control/error-field coils
+        return "Br"  # internal/external saddle loops
+    return "coil"  # I-coils, C-coils, control/error-field coils
 
 
 def _kind_from_set_name(set_name: str) -> str | None:
@@ -74,8 +75,12 @@ def _record(name: str, r, z, phi, tilt, length, dphi, kind: str) -> dict:
         "family": _family(name),
         "kind": kind,
         "shape": "loop" if float(dphi) > _LOOP_MIN_DPHI else "point",
-        "phi": float(phi), "r": float(r), "z": float(z),
-        "length": float(length), "delta_phi": float(dphi), "tilt": float(tilt),
+        "phi": float(phi),
+        "r": float(r),
+        "z": float(z),
+        "length": float(length),
+        "delta_phi": float(dphi),
+        "tilt": float(tilt),
     }
 
 
@@ -99,8 +104,14 @@ def _build_sets(raw: dict) -> list[dict]:
     out = []
     for name in raw:
         names = list(dict.fromkeys(_resolve_set(name, raw, set())))  # dedup, ordered
-        out.append({"name": name, "kind": _kind_from_set_name(name) or "coil",
-                    "count": len(names), "sensors": names})
+        out.append(
+            {
+                "name": name,
+                "kind": _kind_from_set_name(name) or "coil",
+                "count": len(names),
+                "sensors": names,
+            }
+        )
     return out
 
 
@@ -124,19 +135,26 @@ def device_geometry(name: str = "diiid") -> dict:
     sensors: list[dict] = []
     for ch, v in doc.get("sensors", {}).items():
         try:
-            sensors.append(_record(
-                ch, v["r"], v["z"], v["phi"], v.get("tilt", 0.0),
-                v.get("length", 0.0), v.get("delta_phi", 1.0),
-                kind=kind_by_name.get(ch) or _kind(_family(ch))))
-        except (KeyError, TypeError, ValueError):
+            sensors.append(
+                _record(
+                    ch,
+                    v["r"],
+                    v["z"],
+                    v["phi"],
+                    v.get("tilt", 0.0),
+                    v.get("length", 0.0),
+                    v.get("delta_phi", 1.0),
+                    kind=kind_by_name.get(ch) or _kind(_family(ch)),
+                )
+            )
+        except KeyError, TypeError, ValueError:
             continue  # skip malformed rows
     wall = doc.get("wall") or {}
     device = doc.get("name", name)
     return {
         "device": device,
         "sensors": sensors,
-        "wall": {"r": wall.get("r", []), "z": wall.get("z", []),
-                 "label": f"{device} first wall"},
+        "wall": {"r": wall.get("r", []), "z": wall.get("z", []), "label": f"{device} first wall"},
         "arrays": _arrays(sensors),
         "sensor_sets": _build_sets(sets_raw),
     }

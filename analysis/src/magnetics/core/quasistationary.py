@@ -6,6 +6,7 @@ sinusoidal-integral bases for cylindrical (phi, theta) geometry.
 
 Reference: E. Strait et al., DIII-D magnetics analysis (SLCONTOUR).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ import numpy as np
 
 # ── angular helpers ───────────────────────────────────────────────────────────
 
+
 def _delta_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Signed angular arc a→b wrapped to (−180, +180]."""
     d = b - a
@@ -22,6 +24,7 @@ def _delta_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 # ── basis function ────────────────────────────────────────────────────────────
+
 
 def form_basis_function(
     n: int,
@@ -52,13 +55,13 @@ def form_basis_function(
         if n == 0 and m == 0:
             return np.ones(len(np.atleast_1d(x1)), dtype=complex)
         if n == 0:
-            return (
-                np.exp(1j * m * np.deg2rad(y2)) - np.exp(1j * m * np.deg2rad(y1))
-            ) / (np.deg2rad(dy) * 1j * m)
+            return (np.exp(1j * m * np.deg2rad(y2)) - np.exp(1j * m * np.deg2rad(y1))) / (
+                np.deg2rad(dy) * 1j * m
+            )
         if m == 0:
-            return (
-                np.exp(1j * n * np.deg2rad(x2)) - np.exp(1j * n * np.deg2rad(x1))
-            ) / (np.deg2rad(dx) * 1j * n)
+            return (np.exp(1j * n * np.deg2rad(x2)) - np.exp(1j * n * np.deg2rad(x1))) / (
+                np.deg2rad(dx) * 1j * n
+            )
         return (
             (np.exp(1j * m * np.deg2rad(y2)) - np.exp(1j * m * np.deg2rad(y1)))
             * (np.exp(1j * n * np.deg2rad(x2)) - np.exp(1j * n * np.deg2rad(x1)))
@@ -71,20 +74,22 @@ def form_basis_function(
 
 # ── result ────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class FitResult:
-    time_ms: np.ndarray      # [n_time]
-    ns: np.ndarray           # [n_modes] toroidal mode numbers
-    ms: np.ndarray           # [n_modes] poloidal mode numbers
-    coeffs: np.ndarray       # complex [n_modes, n_time]
-    sigmas: np.ndarray       # complex [n_modes] — Re/Im sigma per mode (time-independent)
-    chi_sq: np.ndarray       # [n_time]
-    red_chi_sq: np.ndarray   # [n_time]
+    time_ms: np.ndarray  # [n_time]
+    ns: np.ndarray  # [n_modes] toroidal mode numbers
+    ms: np.ndarray  # [n_modes] poloidal mode numbers
+    coeffs: np.ndarray  # complex [n_modes, n_time]
+    sigmas: np.ndarray  # complex [n_modes] — Re/Im sigma per mode (time-independent)
+    chi_sq: np.ndarray  # [n_time]
+    red_chi_sq: np.ndarray  # [n_time]
     condition_number: float
     n_sensors: int
 
 
 # ── fit ───────────────────────────────────────────────────────────────────────
+
 
 def fit(
     time_ms: np.ndarray,
@@ -140,7 +145,9 @@ def fit(
     ncomp: list[int] = []
 
     for n, m in nms:
-        fmn = form_basis_function(n, m, phi_end1, phi_end2, theta_end1, theta_end2, fit_basis) / sigma
+        fmn = (
+            form_basis_function(n, m, phi_end1, phi_end2, theta_end1, theta_end2, fit_basis) / sigma
+        )
         if np.allclose(fmn.imag, 0):
             A_cols.append(fmn.real)
             ncomp.append(1)
@@ -158,7 +165,7 @@ def fit(
     valid = c_a <= fit_cond
 
     # ── lstsq across all time slices (vectorised) ─────────────────────────────
-    b = signal / sigma[:, None]                                  # [n_ch, n_time]
+    b = signal / sigma[:, None]  # [n_ch, n_time]
     x, _, rank_fit, _ = np.linalg.lstsq(A, b, rcond=1.0 / fit_cond)  # [n_cols, n_time]
 
     # Per-coeff uncertainty from SVD pseudo-inverse
@@ -178,13 +185,13 @@ def fit(
             sigmas_c.append(complex(fit_sigmas[j], fit_sigmas[j + 1]))
         j += nc
 
-    coeffs = np.array(coeffs_c)            # [n_modes, n_time]
-    sigmas_out = np.array(sigmas_c)         # [n_modes] complex
+    coeffs = np.array(coeffs_c)  # [n_modes, n_time]
+    sigmas_out = np.array(sigmas_c)  # [n_modes] complex
 
     # ── χ² ───────────────────────────────────────────────────────────────────
     fit_signal = (A @ x).real * sigma[:, None]
     residual = signal - fit_signal
-    chi_sq = np.sum((residual / sigma[:, None]) ** 2, axis=0)   # [n_time]
+    chi_sq = np.sum((residual / sigma[:, None]) ** 2, axis=0)  # [n_time]
     nu = max(n_ch - rank_fit, 1)
     red_chi_sq = chi_sq / nu
 
@@ -203,6 +210,7 @@ def fit(
 
 # ── amplitude / phase extraction ──────────────────────────────────────────────
 
+
 def amp_phase_with_errors(
     coeff: np.ndarray, sigma: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -215,16 +223,17 @@ def amp_phase_with_errors(
     """
     c, s = coeff.real, coeff.imag
     ec, es = sigma.real, sigma.imag
-    amp = np.sqrt(c ** 2 + s ** 2)
+    amp = np.sqrt(c**2 + s**2)
     denom = np.where(amp == 0, np.nan, amp)
     amp_err = np.sqrt((c * ec) ** 2 + (s * es) ** 2) / denom
     phase = np.rad2deg(np.arctan2(s, c))
-    p2 = np.where((c ** 2 + s ** 2) == 0, np.nan, c ** 2 + s ** 2)
+    p2 = np.where((c**2 + s**2) == 0, np.nan, c**2 + s**2)
     phase_err = np.rad2deg(np.sqrt((c * es) ** 2 + (s * ec) ** 2) / p2)
     return amp, np.nan_to_num(amp_err), phase, np.nan_to_num(phase_err)
 
 
 # ── spatial reconstruction ────────────────────────────────────────────────────
+
 
 def reconstruct_grid(
     result: FitResult,
@@ -236,7 +245,7 @@ def reconstruct_grid(
 
     Returns z[n_theta, n_phi] — units match the input signal.
     """
-    phi_rad = np.deg2rad(phi_grid)      # [n_phi]
+    phi_rad = np.deg2rad(phi_grid)  # [n_phi]
     theta_rad = np.deg2rad(theta_grid)  # [n_theta]
     z = np.zeros((len(theta_grid), len(phi_grid)))
     for i, (n, m) in enumerate(zip(result.ns, result.ms)):
