@@ -167,6 +167,34 @@ def resolve_sensor_set(dev: dict, name: str, _seen=None) -> list[str]:
     return _dedup(out)
 
 
+def split_custom_signals(dev: dict, names):
+    """Split GUI custom-signal names into (ptdata_pointnames, tree_signals).
+
+    Most custom names are PTDATA pointnames (``ip``, ``bt``, …). Some — the EFIT
+    scalars like ``betan``/``li``/``q95`` — are NOT in PTDATA; they live in an
+    MDSplus tree (``\\top.results.aeqdsk:<name>``, same place ``kappa`` comes from),
+    so ``ptdata2`` returns nothing and they'd read back "missing". The device file's
+    ``derived signals`` block ({"tree": <tree>, "names": [...]}) names those; any
+    listed name (case-insensitive) is routed to the tree-fetch path with the usual
+    bare-node + AEQDSK-fallback candidates. Unknown names stay PTDATA.
+    """
+    derived = dev.get("derived signals", {}) or {}
+    dtree = derived.get("tree")
+    dnames = {n.lower() for n in derived.get("names", [])} if dtree else set()
+    pointnames: list[str] = []
+    tree_signals: dict[str, list[tuple[str, str]]] = {}
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            continue
+        if name.lower() in dnames:
+            _, cands = _plasma_signal({"name": name, "tree": dtree})
+            tree_signals[name] = cands
+        else:
+            pointnames.append(name)
+    return _dedup(pointnames), tree_signals
+
+
 # A progress callback: (fraction_done in [0,1], human message) -> None.
 Progress = Callable[[float, str], None]
 
@@ -1147,13 +1175,13 @@ def fetch_shot(
             )
 
     # Signal selection. An explicit `raw_pointnames` list (GUI custom-signal panel:
-    # Ip, dalpha, …) wins over everything and is fetched verbatim as PTDATA — no
-    # device sensor map, no plasma extras — so it merges cleanly into an existing
-    # shot file. A device sensor set is next; the analysis groups are the default.
+    # Ip, betan, …) wins over everything — no device sensor map, no plasma extras —
+    # so it merges cleanly into an existing shot file. Names are split into PTDATA
+    # pointnames vs EFIT/derived tree signals (betan, li, …) so tree-only quantities
+    # actually fetch. A device sensor set is next; the analysis groups are the default.
     stride = max(1, int(decimate))
     if raw_pointnames:
-        pointnames = _dedup([p.strip() for p in raw_pointnames if p and p.strip()])
-        tree_signals = {}
+        pointnames, tree_signals = split_custom_signals(dev, raw_pointnames)
         label = "custom"
         # bdot / raw dB/dt probes end in "D"; never decimate them (corrupts FFTs).
         if stride > 1 and any(p.endswith("D") for p in pointnames):

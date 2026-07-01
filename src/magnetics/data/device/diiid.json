@@ -550,6 +550,24 @@
       "tree": "efit01"
     }
   },
+  "derived signals": {
+    "tree": "efit01",
+    "names": [
+      "betan",
+      "betap",
+      "li",
+      "q95",
+      "qmin",
+      "wmhd",
+      "kappa",
+      "tribot",
+      "tritop",
+      "aminor",
+      "rout",
+      "volume",
+      "area"
+    ]
+  },
   "sensors": {
     "MPI66M020D": {
       "segments": [

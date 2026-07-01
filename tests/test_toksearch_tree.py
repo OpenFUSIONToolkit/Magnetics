@@ -284,3 +284,28 @@ def test_window_trim_is_applied_to_tree_signal():
     assert len(out) == 1 and out[0].ok
     np.testing.assert_allclose(out[0].time, [2500.0, 3000.0])
     np.testing.assert_allclose(out[0].data, [1.4, 1.5])
+
+
+def test_split_custom_signals_routes_efit_scalars_to_the_tree():
+    """GUI custom signals: PTDATA pointnames stay PTDATA, but EFIT scalars named in
+    the device's `derived signals` (betan, q95, …) route to the tree-fetch path with
+    the AEQDSK-fallback node — otherwise ptdata2 returns nothing and they read back
+    'missing' (the betan bug)."""
+    from magnetics.data.devices import load_device
+    from magnetics.data.fetch.toksearch import split_custom_signals
+
+    dev = load_device("diiid")
+    pts, trees = split_custom_signals(dev, ["Ip", "betan", "bt", "BETAN"])
+
+    assert pts == ["Ip", "bt"]  # PTDATA, order-preserving + deduped
+    assert "betan" in trees and "BETAN" in trees  # case-insensitive membership
+    # the real node lives under the AEQDSK results path — must be a candidate
+    assert ("efit01", r"\top.results.aeqdsk:betan") in trees["betan"]
+
+
+def test_split_custom_signals_no_catalog_is_all_ptdata():
+    """A device without a `derived signals` block routes everything to PTDATA."""
+    from magnetics.data.fetch.toksearch import split_custom_signals
+
+    pts, trees = split_custom_signals({}, ["ip", "betan"])
+    assert pts == ["ip", "betan"] and trees == {}

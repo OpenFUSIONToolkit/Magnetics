@@ -843,15 +843,15 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         {customOpen && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div className="note" style={{ fontSize: 10, opacity: 0.75 }}>
-              Enter one or more <strong>PTDATA pointnames</strong> — comma- or
-              space-separated (e.g. <code>Ip, betan, bt</code>). Names are letters,
-              digits and underscores only; each is fetched via the same
-              backend/credentials as the left-rail pull and merged into this shot.
+              Enter one or more <strong>signal names</strong> — PTDATA pointnames or
+              EFIT scalars — comma- or space-separated (e.g. <code>Ip, betan, bt</code>).
+              Names are letters, digits and underscores only; each is fetched via the
+              same backend/credentials as the left-rail pull and merged into this shot.
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
               <input value={customText} onChange={e => setCustomText(e.target.value)}
                 placeholder="Ip, betan, bt"
-                title="Comma- or space-separated PTDATA pointnames (letters, digits, underscore). Example: Ip, betan, bt"
+                title="Comma- or space-separated signal names — PTDATA pointnames or EFIT scalars (letters, digits, underscore). Example: Ip, betan, bt"
                 aria-label="custom PTDATA pointnames"
                 aria-invalid={invalidTokens.length > 0}
                 onKeyDown={e => { if (e.key === "Enter") plotCustomSignals(); }}
