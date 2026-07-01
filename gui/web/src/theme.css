@@ -56,12 +56,12 @@ body {
 }
 code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 
-/* ── app shell: header / left rail / main / right rail ── */
+/* ── app shell: header / left rail / main ── */
 .app {
   display: grid;
-  grid-template-columns: 220px 1fr 280px;
+  grid-template-columns: 220px 1fr;
   grid-template-rows: 48px 1fr;
-  grid-template-areas: "header header header" "left main right";
+  grid-template-areas: "header header" "left main";
   height: 100vh;
 }
 .app-header {
@@ -93,7 +93,6 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .theme-toggle:hover svg { transform: rotate(25deg); }
 
 .rail-left { grid-area: left; border-right: 1px solid var(--border); background: var(--panel); overflow-y: auto; }
-.rail-right { grid-area: right; border-left: 1px solid var(--border); background: var(--panel); overflow-y: auto; }
 .main { grid-area: main; overflow-y: auto; padding: 16px; }
 
 .rail-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
