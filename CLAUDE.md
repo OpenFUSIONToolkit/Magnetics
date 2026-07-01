@@ -102,6 +102,10 @@ frontend (its `dist/` is staged into `service/webapp/` for the wheel).
 - Analysis results use a self-describing `kind` contract so the GUI renders them generically.
 - Python via **`uv`** (pinned to 3.14, standard GIL build); commit `uv.lock`, never `.venv/`. Always use uv venv to run python.
 - Paths in committed docs must be **repo-relative** — no machine-specific absolute paths.
+- **Never commit real tokamak data** (DIII-D/NSTX/… measured signals or shot files — `*.h5`
+  is gitignored). Tests use **synthetic fixtures generated at test time** (`tests/synthetic_shot.py`,
+  wired via `tests/conftest.py`): real channel *names* and the committed device *geometry* are fine,
+  but fabricate the *signals*. This keeps the suite deterministic and the repo data-free.
 
 ## Git Workflow
 
