@@ -800,9 +800,10 @@ def fit_toroidal_mode(
     best_n, best_R, best_c = candidates[best_j], float(rmag[best_j]), float(inter[best_j])
 
     # Uncertainty (eigspec-style): propagate per-probe phase σ from the cross-spectral
-    # statistics into (a) the intercept's 1σ via inverse-variance combination and
-    # (b) a posterior over candidate n from each hypothesis's weighted χ². Falls back
-    # to unit σ when phase_error is absent so older callers still get sane numbers.
+    # statistics into (a) the intercept's 1σ by propagating σ through the SAME weights w
+    # that produced the intercept, and (b) a posterior over candidate n from each
+    # hypothesis's weighted χ². Falls back to unit σ when phase_error is absent so older
+    # callers still get sane numbers.
     sigma = np.asarray(
         mode_result.phase_error
         if mode_result.phase_error is not None
@@ -825,7 +826,10 @@ def fit_toroidal_mode(
     post = np.exp(-(chi2 - chi2.min()) / 2.0)
     post /= post.sum()
     n_confidence = float(post[best_j])
-    phase_sigma = float(np.sqrt(1.0 / np.sum(1.0 / sigma**2)))
+    # 1σ of the ACTUALLY-returned intercept — the w-weighted circular mean, not the
+    # inverse-variance-optimal one: Var(c) = Σ(w_k·σ_k)² / (Σ w_k)². (Σw > 0: w is
+    # replaced by ones above if every weight was zero.)
+    phase_sigma = float(np.sqrt(np.sum((w * sigma) ** 2)) / w.sum())
 
     return ToroidalFitResult(
         kind="toroidal_fit",

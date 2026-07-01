@@ -170,7 +170,10 @@ def fit(
 
     # Per-coeff uncertainty from SVD pseudo-inverse
     w_inv = np.where(valid, 1.0 / np.where(w_a != 0, w_a, 1.0), 0.0)
-    fit_sigmas = np.sqrt(np.sum((Vh_a.T * w_inv) ** 2, axis=0))  # [n_cols]
+    # diag(cov) = diag(V W^-2 V^H) = Σ_k V[j,k]^2 w_inv[k]^2 — sum over the singular
+    # index k (axis=1 of Vh_a.T, shape [n_cols, k]). axis=1 also yields length n_cols
+    # for an underdetermined fit (k = n_ch < n_cols), so the reform loop can't overrun.
+    fit_sigmas = np.sqrt(np.sum((Vh_a.T * w_inv) ** 2, axis=1))  # [n_cols]
 
     # ── reform complex coefficients (one complex number per mode) ─────────────
     coeffs_c: list[np.ndarray] = []
@@ -250,7 +253,9 @@ def reconstruct_grid(
     z = np.zeros((len(theta_grid), len(phi_grid)))
     for i, (n, m) in enumerate(zip(result.ns, result.ms)):
         c = result.coeffs[i, t_idx]
-        # outer product: [n_theta, n_phi]
+        # The fit's forward model is A@x = x_r·cos ψ + x_i·sin ψ = Re(conj(c)·e^{iψ})
+        # with c = x_r + i·x_i and ψ = mθ + nφ, so the reconstruction must use conj(c)
+        # (matching qs_bridge._reconstruct_grid); using c mirrors the map toroidally.
         basis = np.exp(1j * m * theta_rad)[:, None] * np.exp(1j * n * phi_rad)[None, :]
-        z += (c * basis).real
+        z += (np.conj(c) * basis).real
     return z

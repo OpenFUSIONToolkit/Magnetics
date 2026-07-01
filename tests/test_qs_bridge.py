@@ -45,6 +45,16 @@ def test_dropping_a_required_variable_raises_not_silently_misserves(fit_ds):
         qs_bridge.fit_to_qs_fit_node(broken)
 
 
+def test_fit_quality_statuses_use_the_contract_vocabulary(fit_ds):
+    """The traffic-light status must be one of the GUI's Quality values
+    (good/warn/bad = contracts.quality_for_k), not the old 'ok'/'error' strings
+    which NodeView's QCOLOR can't color."""
+    node = qs_bridge.fit_to_fit_quality_node(fit_ds)
+    statuses = [f["status"] for f in node["fields"] if "status" in f]
+    assert statuses  # the K (raw)/K (eff) rows carry a status
+    assert all(s in {"good", "warn", "bad"} for s in statuses)
+
+
 def test_amplitude_sigma_is_finite(fit_ds):
     node = qs_bridge.fit_to_amplitude_node(fit_ds)
     sigma = np.asarray(node["meta"]["sigma"], dtype=float)
