@@ -23,7 +23,7 @@ _ASKPASS = (
 )
 
 
-def askpass_env(password: str, duo: str | None = None):
+def askpass_env(password: str | None, duo: str | None = None):
     """Return (env, cleanup): an environment that makes ssh answer prompts from
     `password`/`duo` with no terminal interaction. `duo` defaults to "1" (Duo
     Push). Call cleanup() when done to remove the temp helper."""

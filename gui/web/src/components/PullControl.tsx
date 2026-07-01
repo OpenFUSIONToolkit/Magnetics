@@ -45,12 +45,31 @@ export default function PullControl() {
   // fire setState on an unmounted component.
   const esRef = useRef<EventSource | null>(null);
 
-  // load supported devices; default the picker to the first one
+  // Snap backend / sensor-set / window / shot to sensible per-device defaults. A
+  // tree device (NSTX) has no cluster and no analysis→signal map, so it must use
+  // mdsthin + a sensor set, over a NARROW window (its raw signals are ~15 MHz and
+  // seconds long — a wide window is gigabytes). Called from event handlers (device
+  // change, initial load) — NOT a synchronous effect (react-hooks/set-state-in-effect).
+  function snapDeviceDefaults(dev: DeviceInfo) {
+    const tree = dev.access === "mdsplus_tree";
+    setBackend(dev.remote_capable ? "remote" : "mdsthin");
+    setSensorSet(tree ? (dev.sensor_sets[0] ?? "") : "");
+    setTmin(tree ? "250" : "1000");
+    setTmax(tree ? "350" : "5000");
+    if (dev.default_shot != null) setShot(String(dev.default_shot));
+  }
+
+  // load supported devices; default the picker to the first one + its defaults (the
+  // setState calls run in an async .then callback, not synchronously in the effect)
   useEffect(() => {
     void fetchDevices().then((ds) => {
       setDevices(ds);
-      if (ds[0]) setDeviceId((cur) => cur || ds[0].id);
+      if (ds[0] && !deviceId) {
+        setDeviceId(ds[0].id);
+        snapDeviceDefaults(ds[0]);
+      }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // close any open pull stream when the component unmounts
@@ -60,23 +79,6 @@ export default function PullControl() {
   // device with a cluster block can use the fast `remote` backend (DIII-D).
   const isTree = device?.access === "mdsplus_tree";
   const remoteCapable = device?.remote_capable ?? false;
-
-  // When the device changes, snap backend / sensor-set / window to sensible
-  // per-device defaults. A tree device has no cluster and no analysis→signal map, so
-  // it must use mdsthin + a sensor set, over a NARROW window (its raw signals are
-  // ~15 MHz and seconds long — a wide window is gigabytes).
-  useEffect(() => {
-    if (!device) return;
-    const tree = device.access === "mdsplus_tree";
-    setBackend(device.remote_capable ? "remote" : "mdsthin");
-    setSensorSet(tree ? (device.sensor_sets[0] ?? "") : "");
-    setTmin(tree ? "250" : "1000");
-    setTmax(tree ? "350" : "5000");
-    // snap the shot to this device's example (a DIII-D shot number isn't valid on
-    // NSTX's fastmag tree, and vice-versa)
-    if (device.default_shot != null) setShot(String(device.default_shot));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceId, devices]);
 
   if (!usingLiveBackend()) return null;
   const needsCreds = backend === "remote" || backend === "mdsthin";
@@ -138,7 +140,11 @@ export default function PullControl() {
       <h3>Pull a shot (live)</h3>
       {devices.length > 0 && (
         <select className="pull-input" value={deviceId} aria-label="device"
-          onChange={(e) => setDeviceId(e.target.value)}>
+          onChange={(e) => {
+            const d = devices.find((x) => x.id === e.target.value);
+            setDeviceId(e.target.value);
+            if (d) snapDeviceDefaults(d);
+          }}>
           {devices.map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
