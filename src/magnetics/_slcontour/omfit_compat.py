@@ -170,6 +170,26 @@ def _to_float(s):
         return float("nan")
 
 
+def _segment_fields(rec, shot=None):
+    """The geometry fields of a sensor record active at ``shot``.
+
+    The device JSON is shot-segmented (each sensor is ``{"segments": [{since_shot,
+    r, z, ...}]}``); a segment is valid from its ``since_shot`` until the next.
+    Returns the segment active at ``shot`` (the latest whose ``since_shot`` ≤ shot),
+    falling back to the earliest segment for a ``shot`` before any campaign (a
+    layout fallback, since sensors move little between eras) or when ``shot`` is
+    None. Tolerates a legacy flat record (returned as-is)."""
+    segs = rec.get("segments") if isinstance(rec, dict) else None
+    if not segs:
+        return rec  # legacy flat record → fields live at the top level
+    segs = sorted(segs, key=lambda s: s.get("since_shot", 0))
+    active = segs[0]
+    for s in segs:
+        if shot is not None and s.get("since_shot", 0) <= shot:
+            active = s
+    return active
+
+
 def _device_slug(device):
     """JSON filename for ``device`` (e.g. ``'DIII-D'`` -> ``'diiid.json'``)."""
     if device in _DEVICE_FILE:
@@ -263,7 +283,7 @@ def resolve_channel_filter(channel_filter, device="DIII-D"):
     return out
 
 
-def sensor_geometry(device="DIII-D"):
+def sensor_geometry(device="DIII-D", shot=None):
     """Per-sensor geometry as an ``xarray.Dataset`` indexed by ``channel``.
 
     Carries the base fields from the device JSON (``r, z, phi, tilt, length,
@@ -282,9 +302,13 @@ def sensor_geometry(device="DIII-D"):
     sensors = dev["sensors"]
     channels = list(sensors)
 
+    # Each sensor is shot-segmented; resolve the segment active at `shot` before
+    # reading its geometry (the flat `sensors[c]["r"]` lookup returns NaN now that
+    # the fields live under `segments`).
+    recs = {c: _segment_fields(sensors[c], shot) for c in channels}
     base = ["r", "z", "phi", "tilt", "length", "delta_phi", "na"]
-    cols = {k: np.array([_to_float(sensors[c].get(k, np.nan)) for c in channels]) for k in base}
-    pairs = np.array([sensors[c].get("pair", "None") for c in channels], dtype=object)
+    cols = {k: np.array([_to_float(recs[c].get(k, np.nan)) for c in channels]) for k in base}
+    pairs = np.array([recs[c].get("pair", "None") for c in channels], dtype=object)
 
     r, z, phi = cols["r"], cols["z"], cols["phi"]
     tilt, length, delta_phi = cols["tilt"], cols["length"], cols["delta_phi"]

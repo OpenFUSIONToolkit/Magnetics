@@ -1118,6 +1118,32 @@ def _qs_run(
     return r
 
 
+def _num_attr(val):
+    """An HDF5 attr as a float, or None when it's absent or a non-numeric sentinel
+    (a whole-shot pull writes ``tmin``/``tmax`` as the string ``'*'``)."""
+    try:
+        return float(val)
+    except TypeError, ValueError:
+        return None
+
+
+def _shot_window_ms(f):
+    """The stored analysis window (ms) for an open shot file. Falls back to the span
+    of a channel's (hard-linked) time axis when ``tmin``/``tmax`` are absent or the
+    ``'*'`` whole-shot sentinel — otherwise ``float('*')`` blows up the whole QS path."""
+    import h5py
+
+    lo, hi = _num_attr(f.attrs.get("tmin")), _num_attr(f.attrs.get("tmax"))
+    if lo is not None and hi is not None and hi > lo:
+        return lo, hi
+    for key in f:
+        g = f[key]
+        if isinstance(g, h5py.Group) and "time" in g:
+            t = g["time"]
+            return float(t[0]), float(t[-1])
+    return 0.0, 0.0
+
+
 def _prep_qs_ds(shot, params):
     """Parse GUI query params and return the full MagneticsRun object."""
     import h5py
@@ -1145,8 +1171,9 @@ def _prep_qs_ds(shot, params):
     # Time trim: read shot-window defaults from HDF5, then apply any user override.
     path = h5source.shot_file(str(shot))
     with h5py.File(str(path), "r") as f:
-        tmin_s_auto = float(f.attrs.get("tmin", 0)) / 1e3
-        tmax_s_auto = float(f.attrs.get("tmax", 0)) / 1e3
+        tmin_ms_auto, tmax_ms_auto = _shot_window_ms(f)
+    tmin_s_auto = tmin_ms_auto / 1e3
+    tmax_s_auto = tmax_ms_auto / 1e3
     tmin_ms_str = params.get("tmin_ms") if params else None
     tmax_ms_str = params.get("tmax_ms") if params else None
     tmin_s = float(tmin_ms_str) / 1e3 if tmin_ms_str else tmin_s_auto

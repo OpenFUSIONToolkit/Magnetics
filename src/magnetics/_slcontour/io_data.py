@@ -94,7 +94,7 @@ def load_shot(shot, data_root=DATAFILE_ROOT, helicity=-1):
         device = _attr_str(fh.attrs.get("device", "DIII-D"))
         shot_no = int(np.atleast_1d(fh.attrs.get("shot", _shot_from_path(path)))[0])
 
-        geo = sensor_geometry(device)
+        geo = sensor_geometry(device, shot=shot_no)
         geo_channels = set(str(c) for c in geo["channel"].values)
 
         sensor_sigs, sensor_times, sensor_names = {}, {}, []
