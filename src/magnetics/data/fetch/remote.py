@@ -16,11 +16,13 @@ Why this beats the laptop mdsthin pull: only the *compressed* .h5 crosses the tu
 (~80 MB) instead of ~370 MB of raw float over mdsip. Measured end-to-end ~21-24s
 cold (vs ~60s laptop) -- after which all fitting is local and instant.
 
-Connection: `host` is normally an ~/.ssh/config Host alias (default "omega") that
-already carries User, port, key, and a ProxyJump through the gateway, so nothing
-else need be passed. The alias's ProxyJump handles the cybele hop -- do NOT also
-pass `jump` for an alias (that would double-jump). For setups WITHOUT an alias, pass
-an explicit `username` and `jump` (e.g. jump="cybele.gat.com:2039").
+Connection: the cluster login is EXPLICIT by default -- the real host and the
+gateway ProxyJump come from the device file's `cluster` block (DIII-D:
+host="omega.gat.com", jump="cybele.gat.com:2039"), so a fresh laptop needs no
+~/.ssh/config Host alias, only a GA `username` + key (or password/Duo). Pass an
+explicit `host`/`jump` to override the device file (e.g. to use a personal
+ssh-config alias that bakes in User/port/key/ProxyJump -- in which case leave
+`jump` unset so the alias's own ProxyJump handles the cybele hop, no double-jump).
 
 Environment: we do NOT `module load` or `conda activate` on the cluster. The env's
 activate.d scripts set nothing the fetch needs, so we invoke the env interpreter
@@ -40,6 +42,7 @@ import sys
 from pathlib import Path
 
 from .. import h5source
+from ..devices import load_device
 from ..sshauth import askpass_env
 
 # The importable package root (…/src/magnetics). We rsync it to the cluster so the
@@ -49,13 +52,28 @@ PKG_ROOT = Path(__file__).resolve().parents[2]  # …/src/magnetics
 PKG_NAME = PKG_ROOT.name  # "magnetics"
 LOCAL_OUT = h5source.data_dir() / "datafile"  # where pulled .h5 land locally
 
-# Cluster defaults (override via args / CLI flags).
-DEFAULT_HOST = "omega"  # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
-DEFAULT_JUMP = None  # alias carries the gateway hop; set only for a raw host
+# Cluster connection: resolved from the device file's `cluster` block (the source of
+# truth, so this is device-agnostic); these module-level values are the fallback when
+# the device omits a field. Explicit args / CLI flags override both.
+DEFAULT_HOST = "omega.gat.com"  # real cluster host (no ~/.ssh/config alias needed)
+DEFAULT_JUMP = "cybele.gat.com:2039"  # gateway ProxyJump to reach the cluster
 DEFAULT_DIR = "~/magnetics_fetch"
 # Invoke the cluster env's interpreter DIRECTLY -- no `module load` / `conda activate`
 # (its activate.d scripts set nothing PTDATA needs; direct is ~4-5s faster per pull).
 DEFAULT_PYTHON = "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
+
+
+def _cluster_defaults(device: str) -> dict:
+    """The device file's `cluster` block (host / jump / python), if any.
+
+    The device config is the single source of truth for a machine's SSH addresses
+    (like `gateway`/`server` for mdsip), so the cluster login address lives there
+    too -- keeping the fetcher device-agnostic and independent of ~/.ssh/config.
+    """
+    try:
+        return load_device(device).get("cluster", {}) or {}
+    except Exception:
+        return {}
 
 
 def _log(msg: str) -> None:
@@ -67,13 +85,13 @@ def run_remote(
     shot,
     analysis="both",
     *,
-    host=DEFAULT_HOST,
-    jump=DEFAULT_JUMP,
+    host=None,
+    jump=None,
     username=None,
     password=None,
     duo=None,
     remote_dir=DEFAULT_DIR,
-    python=DEFAULT_PYTHON,
+    python=None,
     tmin=None,
     tmax=None,
     decimate=1,
@@ -83,7 +101,16 @@ def run_remote(
     progress=None,
 ) -> str:
     """Sync code → run the pull on the cluster → copy the .h5 back. Returns the
-    local path of the fetched file."""
+    local path of the fetched file.
+
+    `host`/`jump`/`python` default to the device file's `cluster` block (then the
+    module fallbacks) when not passed, so the cluster address is explicit in config
+    rather than a user's ~/.ssh/config alias."""
+    cluster = _cluster_defaults(device)
+    host = host or cluster.get("host") or DEFAULT_HOST
+    jump = jump if jump is not None else cluster.get("jump", DEFAULT_JUMP)
+    python = python or cluster.get("python") or DEFAULT_PYTHON
+
     env, cleanup = askpass_env(password, duo) if password else (None, lambda: None)
 
     # host/jump may be ~/.ssh/config aliases (User/port/key/ProxyJump from config) or

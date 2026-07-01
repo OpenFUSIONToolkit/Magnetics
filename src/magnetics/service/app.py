@@ -134,7 +134,8 @@ class FetchRequest(BaseModel):
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
     device: str | None = None  # data/device/<device>.json
     sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
-    # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
+    # remote backend overrides (None → device file's cluster block: explicit
+    # omega.gat.com host + cybele ProxyJump + env python — no ssh-config alias)
     remote_host: str | None = None
     ssh_jump: str | None = None
     remote_dir: str | None = None
@@ -208,6 +209,10 @@ def post_fetch(req: FetchRequest) -> dict:
                 tmin=req.tmin,
                 tmax=req.tmax,
                 decimate=req.decimate,
+                # GUI pulls run mdsthin off-cluster, where getMany reliably fails
+                # and wastes a first-batch round trip per worker before falling
+                # back — go straight to the per-channel path.
+                per_channel=True,
                 progress=on_progress,
                 **fetch_kw,  # ty: ignore[invalid-argument-type]
             )

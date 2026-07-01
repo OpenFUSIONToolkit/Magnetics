@@ -330,6 +330,7 @@ def _fetch_mdsthin(
     progress,
     tree_signals=None,
     ssh_env=None,
+    per_channel=False,
 ):
     """Pull pointnames concurrently over a pool of mdsthin connections.
 
@@ -342,6 +343,12 @@ def _fetch_mdsthin(
     is a single password/Duo prompt; on-network (--tcp) each worker connects to
     mdsip directly. Reduction (window + stride) is pushed server-side via a TDI
     subscript so only the reduced samples cross the wire.
+
+    By default each worker tries `getMany` (one round trip per batch) and only
+    drops to the per-channel path if that fails. `per_channel=True` skips the
+    batch attempt entirely and fetches one pointname at a time from the start --
+    for servers where getMany reliably fails, this avoids the wasted first-batch
+    round trip (and its stderr warning) per worker.
     """
     try:
         from mdsthin import Connection
@@ -453,7 +460,7 @@ def _fetch_mdsthin(
 
     def run_worker(connect, my_batches):
         conn = connect()
-        use_many = True
+        use_many = not per_channel
         out: list[Channel] = []
         for batch in my_batches:
             got, use_many = fetch_batch(conn, batch, use_many)
@@ -809,10 +816,11 @@ def fetch_shot(
     decimate: int = 1,
     workers: int = 4,
     batch_size: int = 40,
+    per_channel: bool = False,
     out: str | None = None,
     compression: str = "lzf",
     force: bool = False,
-    remote_host: str = "omega",
+    remote_host: str | None = None,
     ssh_jump: str | None = None,
     remote_dir: str = "~/magnetics_fetch",
     remote_python: str | None = None,
@@ -835,9 +843,9 @@ def fetch_shot(
     Incremental by default: if a shot file already exists with the SAME window +
     decimation, signals already in it (fetched or previously missing) are skipped
     and the newly-pulled ones are merged in. `force=True` re-pulls everything.
-    `remote_host`/`ssh_jump` are normally ~/.ssh/config aliases (default host "omega"
-    carries its own ProxyJump, so ssh_jump stays None). `remote_python` overrides the
-    cluster env interpreter run_remote invokes directly.
+    `remote_host`/`ssh_jump`/`remote_python` default (when None) to the device file's
+    `cluster` block — the explicit cluster host + gateway ProxyJump — so no
+    ~/.ssh/config alias is needed; pass them to override (e.g. a personal alias).
     GUI callers pass `username` and a `progress` callback instead of relying on the
     CLI prompt/stderr bar.
     """
@@ -996,6 +1004,7 @@ def fetch_shot(
                 progress=progress,
                 tree_signals=tree_signals,
                 ssh_env=ssh_env,
+                per_channel=per_channel,
             )
         finally:
             _ssh_cleanup()
@@ -1088,6 +1097,12 @@ def main(argv=None) -> int:
         help="mdsthin: channels per getMany round trip (bigger=fewer "
         "round trips; smaller=finer progress/less memory)",
     )
+    ap.add_argument(
+        "--per-channel",
+        action="store_true",
+        help="mdsthin: skip the getMany batch attempt and fetch one channel "
+        "at a time from the start (use when getMany reliably fails on the server)",
+    )
     ap.add_argument("--compression", choices=("none", "lzf", "gzip"), default="lzf")
     ap.add_argument(
         "--device",
@@ -1132,15 +1147,15 @@ def main(argv=None) -> int:
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument(
         "--remote-host",
-        default="omega",
-        help="remote: cluster host — normally an ssh-config alias whose "
-        "ProxyJump handles the gateway (default 'omega')",
+        default=None,
+        help="remote: cluster host; defaults to the device file's cluster.host "
+        "(DIII-D: omega.gat.com). Pass to override (e.g. an ssh-config alias)",
     )
     ap.add_argument(
         "--ssh-jump",
         default=None,
-        help="remote: explicit SSH jump host[:port] for a RAW host; leave "
-        "unset when --remote-host is an alias (its ProxyJump applies)",
+        help="remote: SSH jump host[:port]; defaults to the device file's "
+        "cluster.jump (DIII-D: cybele.gat.com:2039). Overrides the device file",
     )
     ap.add_argument(
         "--remote-dir",
@@ -1170,6 +1185,7 @@ def main(argv=None) -> int:
         decimate=args.decimate,
         workers=args.workers,
         batch_size=args.batch_size,
+        per_channel=args.per_channel,
         out=args.out,
         force=args.force,
         compression=args.compression,
