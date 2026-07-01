@@ -13,6 +13,8 @@ venv/
 # Node / web
 node_modules/
 dist/
+# built GUI staged into the package for wheel bundling (run.sh --prod)
+src/magnetics/service/webapp/
 .vite/
 *.local
 *.log

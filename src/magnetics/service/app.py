@@ -20,6 +20,7 @@ import logging
 import threading
 import time
 import uuid
+from importlib import resources
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -313,10 +314,24 @@ async def stream(machine: str, result: str, request: Request):
 
 
 # ── single-origin (cluster) deploy: serve the built GUI at / if it exists ──
+def _webapp_dir() -> Path | None:
+    """Locate the built GUI to serve, or None if it hasn't been built.
+
+    Prefers the copy bundled as package data (``magnetics/service/webapp/``,
+    staged from gui/web/dist at build time) so an installed wheel serves the app;
+    falls back to the repo's gui/web/dist for a source checkout (run.sh --prod).
+    """
+    bundled = resources.files("magnetics.service") / "webapp"
+    if (bundled / "index.html").is_file():
+        return Path(str(bundled))
+    dev = Path(__file__).resolve().parents[3] / "gui" / "web" / "dist"
+    return dev if (dev / "index.html").is_file() else None
+
+
 # Mounted LAST so the /api/* routes above take precedence. Present only after a
-# `npm run build` (the `run.sh --prod` path); harmless in dev.
-_DIST = Path(__file__).resolve().parents[3] / "gui" / "web" / "dist"
-if _DIST.is_dir():
+# frontend build (bundled into the wheel, or gui/web/dist in a source checkout).
+_DIST = _webapp_dir()
+if _DIST is not None:
     app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="gui")
 
 

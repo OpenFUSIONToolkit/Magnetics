@@ -46,13 +46,15 @@ case "$MODE" in
 
   --prod|prod)
     echo "▶ syncing Python deps (uv)…"
-    ( cd analysis && uv sync --extra service --quiet )
+    uv sync --extra service --quiet
     echo "▶ building GUI…"
     ( cd gui/web && npm run build )
+    echo "▶ staging built GUI into the package (magnetics/service/webapp)…"
+    rm -rf src/magnetics/service/webapp
+    cp -r gui/web/dist src/magnetics/service/webapp
     echo ""
     echo "  ✓ open  http://127.0.0.1:8000   (single origin — GUI served on one port)"
     echo ""
-    cd analysis
     exec uv run --extra service magnetics-service
     ;;
 
