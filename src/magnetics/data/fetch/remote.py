@@ -16,11 +16,14 @@ Why this beats the laptop mdsthin pull: only the *compressed* .h5 crosses the tu
 (~80 MB) instead of ~370 MB of raw float over mdsip. Measured end-to-end ~21-24s
 cold (vs ~60s laptop) -- after which all fitting is local and instant.
 
-Connection: `host` is normally an ~/.ssh/config Host alias (default "omega") that
-already carries User, port, key, and a ProxyJump through the gateway, so nothing
-else need be passed. The alias's ProxyJump handles the cybele hop -- do NOT also
-pass `jump` for an alias (that would double-jump). For setups WITHOUT an alias, pass
-an explicit `username` and `jump` (e.g. jump="cybele.gat.com:2039").
+Connection: the cluster login is EXPLICIT and device-resolved -- the real host,
+port, and env interpreter come from the device file's `network.cluster` block
+(DIII-D: omega.gat.com), so a fresh laptop needs no ~/.ssh/config Host alias, only
+a GA `username` + key (or password/Duo). The gateway hop is chosen automatically:
+off-site we ProxyJump through `network.jump` (cybele.gat.com:2039); on-site (an
+FQDN under `network.domain`) we go straight in with no jump. To use a personal
+ssh-config alias that bakes in its own ProxyJump, pass `host=<alias>` AND an empty
+`jump=""` so the alias's ProxyJump is used without a double-jump.
 
 Environment: we do NOT `module load` or `conda activate` on the cluster. The env's
 activate.d scripts set nothing the fetch needs, so we invoke the env interpreter
@@ -40,6 +43,7 @@ import sys
 from pathlib import Path
 
 from .. import h5source
+from .network import cluster_login, gateway_address, on_site_network
 from ..sshauth import askpass_env
 
 # The importable package root (…/src/magnetics). We rsync it to the cluster so the
@@ -49,9 +53,11 @@ PKG_ROOT = Path(__file__).resolve().parents[2]  # …/src/magnetics
 PKG_NAME = PKG_ROOT.name  # "magnetics"
 LOCAL_OUT = h5source.data_dir() / "datafile"  # where pulled .h5 land locally
 
-# Cluster defaults (override via args / CLI flags).
-DEFAULT_HOST = "omega"  # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
-DEFAULT_JUMP = None  # alias carries the gateway hop; set only for a raw host
+# Cluster connection: resolved from the device file's `network.cluster` block (the
+# source of truth, so this is device-agnostic); these module-level values are the
+# fallback when the device omits a field. Explicit args / CLI flags override both.
+DEFAULT_HOST = "omega.gat.com"  # real cluster host (no ~/.ssh/config alias needed)
+DEFAULT_JUMP = "cybele.gat.com:2039"  # gateway ProxyJump to reach the cluster
 DEFAULT_DIR = "~/magnetics_fetch"
 # Invoke the cluster env's interpreter DIRECTLY -- no `module load` / `conda activate`
 # (its activate.d scripts set nothing PTDATA needs; direct is ~4-5s faster per pull).
@@ -67,13 +73,13 @@ def run_remote(
     shot,
     analysis="both",
     *,
-    host=DEFAULT_HOST,
-    jump=DEFAULT_JUMP,
+    host=None,
+    jump=None,
     username=None,
     password=None,
     duo=None,
     remote_dir=DEFAULT_DIR,
-    python=DEFAULT_PYTHON,
+    python=None,
     tmin=None,
     tmax=None,
     decimate=1,
@@ -83,7 +89,22 @@ def run_remote(
     progress=None,
 ) -> str:
     """Sync code → run the pull on the cluster → copy the .h5 back. Returns the
-    local path of the fetched file."""
+    local path of the fetched file.
+
+    `host`/`python` default to the device file's `network.cluster` block (then the
+    module fallbacks) when not passed, so the cluster address is explicit in config
+    rather than a user's ~/.ssh/config alias. `jump` (None → auto) is the site
+    gateway from `network.jump` off-site and dropped when on-site (already inside
+    the network, no hop needed); pass an explicit host[:port] to force one, or an
+    empty string to force none (e.g. an ssh-config alias that carries its own
+    ProxyJump)."""
+    login = cluster_login(device)
+    host = host or login["host"] or DEFAULT_HOST
+    port = login["port"]  # cluster SSH port (22 unless the device overrides it)
+    python = python or login["python"] or DEFAULT_PYTHON
+    if jump is None:  # not explicitly set → auto: gateway off-site, none on-site
+        jump = None if on_site_network(device) else (gateway_address(device) or DEFAULT_JUMP)
+
     env, cleanup = askpass_env(password, duo) if password else (None, lambda: None)
 
     # host/jump may be ~/.ssh/config aliases (User/port/key/ProxyJump from config) or
@@ -91,6 +112,9 @@ def run_remote(
     target = f"{username}@{host}" if username else host
     tag = (f"{username}-" if username else "") + host.replace("/", "_")
     sock = f"/tmp/ms-{tag}.sock"  # short ControlPath (macOS length limit)
+    # A non-standard cluster SSH port only needs to be set on the master connect;
+    # reuse/rsync attach to the same ControlPath socket regardless of port.
+    port_opt = ["-p", str(port)] if port and port != 22 else []
     ctl = ["-o", "ControlMaster=auto", "-o", f"ControlPath={sock}", "-o", "ControlPersist=300"]
     reuse = ["ssh", "-o", f"ControlPath={sock}"]  # subsequent hops reuse the master
 
@@ -99,7 +123,7 @@ def run_remote(
 
     try:
         # 1) establish ONE authenticated master connection (alias supplies the jump).
-        master = ["ssh", *ctl]
+        master = ["ssh", *ctl, *port_opt]
         if jump:
             master += ["-J", f"{username}@{jump}" if username else jump]
         master += [target, "true"]
