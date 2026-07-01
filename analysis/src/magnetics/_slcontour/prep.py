@@ -24,7 +24,7 @@ import numpy as np
 import xarray as xr
 from scipy.integrate import cumulative_trapezoid
 
-from omfit_compat import is_device, printe, printv, printw, resolve_channel_filter
+from .omfit_compat import is_device, printe, printv, printw, resolve_channel_filter
 
 
 def causal_gaussian(values, sigma, truncate=4.0):

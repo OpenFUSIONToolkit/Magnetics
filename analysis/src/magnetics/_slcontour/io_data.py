@@ -34,12 +34,13 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
-from omfit_compat import list_sensor_subsets, printw, resolve_channel_filter, sensor_geometry
+from .omfit_compat import list_sensor_subsets, printw, resolve_channel_filter, sensor_geometry
 
-#: Default location of the per-shot HDF5 files (repo ``data/datafile/``; this
-#: file lives in ``analysis/magnetics-code/``, so it is two levels up).
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-DATAFILE_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", "data", "datafile"))
+#: Default location of the per-shot HDF5 files — the runtime data dir the fetcher
+#: writes and h5source reads ($MAGNETICS_DATA_DIR or the repo's data/datafile/).
+from ..data import h5source as _h5source
+
+DATAFILE_ROOT = str(_h5source.data_dir() / "datafile")
 
 #: Groups in the HDF5 file that are not geometry-bearing sensor channels.
 _NON_SENSOR_GROUPS = {"_timebases"}

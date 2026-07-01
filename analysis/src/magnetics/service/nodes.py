@@ -13,22 +13,13 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import sys as _sys
 import threading
 from functools import lru_cache
-from pathlib import Path as _Path
 
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
 from ..data import diiid, h5source
-
-# magnetics-code/ is not an installed package — add it to sys.path so run_steps and
-# the other scripts (lazy-imported inside _qs_run) are importable. This runs at
-# module load, before any _qs_run call. parents[3] = analysis/ from service/nodes.py
-_MAGNETICS_CODE = str(_Path(__file__).parents[3] / "magnetics-code")
-if _MAGNETICS_CODE not in _sys.path:
-    _sys.path.insert(0, _MAGNETICS_CODE)
 
 logger = logging.getLogger(__name__)
 
@@ -1094,7 +1085,7 @@ def _qs_run(
     that share the same settings. tmin_s/tmax_s are in seconds and come from
     _prep_qs_ds (which reads HDF5 defaults and applies any user override).
     """
-    from run import run_steps  # magnetics-code/run.py on sys.path
+    from .._slcontour.run import run_steps
 
     # detrend_band is in ms from the GUI; (0, 0) = auto → first 10ms of shot window
     if detrend_band == (0.0, 0.0):
@@ -1207,7 +1198,7 @@ def _sensor_map_rz(shot, params=None) -> dict:
     channels = list(run.prepared["channel"].values)
     device = str(raw.attrs.get("device", "DIII-D"))
 
-    from omfit_compat import load_wall  # magnetics-code/ on sys.path
+    from .._slcontour.omfit_compat import load_wall
 
     r_wall, z_wall = load_wall(device)
 

@@ -32,7 +32,7 @@ import re
 import numpy as np
 import xarray as xr
 
-from omfit_compat import OMFITexception, delta_degrees, is_device, printe, printv, printw
+from .omfit_compat import OMFITexception, delta_degrees, is_device, printe, printv, printw
 
 
 def form_basis_function(

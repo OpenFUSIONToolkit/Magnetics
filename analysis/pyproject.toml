@@ -47,10 +47,13 @@ magnetics-service = "magnetics.service.app:main"
 
 [tool.ruff]
 line-length = 100  # target version is inferred from requires-python
-# magnetics-code/ is Slow Rollers' standalone SLCONTOUR translation (reference
-# code), not part of the package — it gets reworked into core/quasistationary
-# during cleanup, so it's excluded from package lint until then.
-extend-exclude = ["magnetics-code"]
+# _slcontour/ is the reference SLCONTOUR translation (a self-contained OMFIT
+# port), pending rework into core/quasistationary (issue #40); excluded from
+# lint/typecheck until then.
+extend-exclude = ["src/magnetics/_slcontour"]
+
+[tool.ty.src]
+exclude = ["src/magnetics/_slcontour"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -20,7 +20,7 @@ import re
 import matplotlib.pyplot as plt
 import numpy as np
 
-from omfit_compat import cornernote, load_wall, printe, uband
+from .omfit_compat import cornernote, load_wall, printe, uband
 
 
 # --------------------------------------------------------------------------- #

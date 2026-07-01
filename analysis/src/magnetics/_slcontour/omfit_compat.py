@@ -151,10 +151,11 @@ def uband(x, y, yerr, ax=None, label=None, color=None, **kwargs):
 
 import json
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-#: Root of the canonical device files (repo ``data/device/``; this file lives in
-#: ``analysis/magnetics-code/``, so it is two levels up).
-DEVICE_DIR = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", "data", "device"))
+#: Root of the canonical device files — the package's single source of truth
+#: (``magnetics/data/device/``), resolved through the data layer.
+from ..data import devices as _devices
+
+DEVICE_DIR = str(_devices.DEVICE_DIR)
 
 #: Explicit device-name -> json-filename overrides; otherwise slugified.
 _DEVICE_FILE = {"DIII-D": "diiid.json"}
