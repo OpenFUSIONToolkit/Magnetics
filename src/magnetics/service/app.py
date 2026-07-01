@@ -74,6 +74,28 @@ def machines():
     return real if real else mock.MACHINES
 
 
+@app.delete("/api/machines/{shot}")
+def delete_machine(shot: str) -> dict:
+    """Delete one shot's underlying HDF5 data and drop its cached analysis state.
+    Returns the removed file paths + the refreshed machine list. 404 if the shot
+    has no data files (e.g. a mock machine, which has nothing on disk)."""
+    removed = h5source.delete_shot(shot)
+    if not removed:
+        raise HTTPException(404, f"no data files for shot {shot}")
+    nodes.refresh()  # forget the shot's cached STFT / QS state now its data is gone
+    return {"shot": shot, "removed": removed, "machines": nodes.machines()}
+
+
+@app.delete("/api/machines")
+def delete_all_machines() -> dict:
+    """Delete ALL fetched shot data (the "clear all") and drop cached state.
+    Returns the removed paths + the (now real-shot-free) machine list."""
+    removed = h5source.delete_all_shots()
+    nodes.refresh()
+    real = nodes.machines()
+    return {"removed": removed, "machines": real if real else mock.MACHINES}
+
+
 @app.get("/api/devices")
 def devices():
     """List device configs (data/device/*.json) + their sensor-set names, so the GUI

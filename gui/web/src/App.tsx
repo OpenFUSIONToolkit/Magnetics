@@ -23,8 +23,33 @@ const TABS: { id: TabId; label: string }[] = [
 
 export default function App() {
   const { machines, machine, tab, loadingMachines, init, setMachine, setTab } = useStore();
+  const removeMachine = useStore((s) => s.removeMachine);
+  const clearMachines = useStore((s) => s.clearMachines);
 
   useEffect(() => { void init(); }, [init]);
+
+  // Deletable = real fetched shots (mock demo machines have nothing on disk). Only
+  // offer delete controls against a live backend.
+  const deletable = usingLiveBackend() ? machines.filter((m) => !m.mock) : [];
+
+  async function onDelete(id: string, label: string) {
+    if (!window.confirm(`Delete ${label} and all its underlying data? This cannot be undone.`)) return;
+    try {
+      await removeMachine(id);
+    } catch (e) {
+      window.alert(`Delete failed: ${String(e)}`);
+    }
+  }
+
+  async function onClearAll() {
+    if (!window.confirm(`Delete ALL ${deletable.length} fetched shot(s) and their data? This cannot be undone.`))
+      return;
+    try {
+      await clearMachines();
+    } catch (e) {
+      window.alert(`Clear all failed: ${String(e)}`);
+    }
+  }
 
   return (
     <div className="app">
@@ -39,7 +64,15 @@ export default function App() {
       <aside className="rail-left">
         <PullControl />
         <div className="rail-section">
-          <h3>Shot / machine</h3>
+          <div className="rail-head">
+            <h3>Shot / machine</h3>
+            {deletable.length > 0 && (
+              <button className="rail-clear" title="Delete all fetched shots and their data"
+                onClick={() => void onClearAll()}>
+                Clear all
+              </button>
+            )}
+          </div>
           {loadingMachines && <div className="placeholder">loading…</div>}
           {machines.map((m) => (
             <div
@@ -47,8 +80,17 @@ export default function App() {
               className={`machine-item${m.id === machine ? " active" : ""}`}
               onClick={() => setMachine(m.id)}
             >
-              <div className="id">{m.label}</div>
-              {m.note && <div className="note">{m.note}</div>}
+              <div className="machine-main">
+                <div className="id">{m.label}</div>
+                {m.note && <div className="note">{m.note}</div>}
+              </div>
+              {!m.mock && usingLiveBackend() && (
+                <button className="machine-del" title={`Delete ${m.label} and its data`}
+                  aria-label={`Delete ${m.label}`}
+                  onClick={(e) => { e.stopPropagation(); void onDelete(m.id, m.label); }}>
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
