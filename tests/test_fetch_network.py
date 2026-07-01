@@ -90,3 +90,20 @@ def test_on_site_domain_is_device_specific(monkeypatch):
     monkeypatch.setattr(network.socket, "getfqdn", lambda: "portal.pppl.gov")
     assert network.on_site_network("nstx") is True
     assert network.on_site_network("diiid") is False
+
+
+@pytest.mark.skip(
+    reason="Needs to run on a real GA host (cybele/omega) — can't be exercised "
+    "off-site. Implement once we're running this on-site. Tracked in #48."
+)
+def test_on_site_detection_on_real_ga_host():
+    """STUB — to implement when running on-site.
+
+    Everything above mocks socket.getfqdn(), so it only tests the branch logic,
+    never the real assumption: that an actual cybele/omega node reports a
+    ``*.gat.com`` FQDN (fast, no reverse-DNS stall) and that the auto direct-TCP
+    mdsip + no-ProxyJump paths connect. Those can only be validated by executing
+    on the GA cluster; unskip and fill in when we have a real on-site test run.
+    See issue #48.
+    """
+    raise NotImplementedError("validate on_site_network on a real cybele/omega host (#48)")
