@@ -24,8 +24,8 @@ from typing import NamedTuple
 
 import numpy as np
 
-from magnetics.data import diiid, signals
-from magnetics.data.fetch.toksearch import Channel, _write_h5
+from magnetics.data import device_geom, devices, diiid, signals
+from magnetics.data.fetch.toksearch import Channel, _write_h5, resolve_sensor_set
 
 
 class _Mode(NamedTuple):
@@ -186,5 +186,66 @@ def write_synthetic_shot(path, shot: int = 990000, *, include_qs: bool = True) -
         tmin=None,  # '*' sentinel
         tmax=None,
         stride=1,
+    )
+    return str(path)
+
+
+# ── NSTX / NSTX-U synthetic shot ─────────────────────────────────────────────
+#: NSTX-U shot ≥ 204718 so the post-upgrade fastmag Mirnov segments resolve.
+NSTX_SHOT = 204718
+#: The HN toroidal set is the rotating n-fit array (distinct φ per probe).
+_NSTX_TOROIDAL_SET = "HN toroidal array"
+
+
+def _nstx_channels(shot: int) -> list[Channel]:
+    """Fabricated δB(t) for the NSTX HN + HF Mirnov arrays valid at ``shot``,
+    plus ip/bt0/kappa. Signals are the same two ground-truth rotating modes;
+    φ/θ come from the real ``nstx.json`` device table (fabricated *values*, real
+    *geometry* — no measured samples)."""
+    n = int(_FS * _DURATION)
+    t_ms = np.linspace(0.0, _DURATION * 1e3, n, endpoint=False)
+    t_s = t_ms * 1e-3
+
+    dg = device_geom.get("nstx")
+    dev = devices.load_device("nstx")
+    # HN toroidal (rotating array) + HF all (adds a poloidal spread), deduped.
+    names: list[str] = []
+    for set_name in (_NSTX_TOROIDAL_SET, "HF all"):
+        for nm in resolve_sensor_set(dev, set_name):
+            if nm not in names:
+                names.append(nm)
+
+    chans: list[Channel] = []
+    for nm in names:
+        if not devices.valid_at(dev, nm, shot):
+            continue  # NotAvailable / out-of-range at this shot → fetcher would skip
+        phi = dg.phi_of(nm, shot)
+        theta = dg.real_theta_of(nm, shot) or 0.0
+        if phi is None:
+            continue
+        chans.append(Channel(nm, t_ms.copy(), _sensor_signal(t_s, phi, theta), ok=True))
+
+    ip = (0.9e6 * t_s / t_s[-1]).astype(np.float32)  # NSTX-U-scale ramp
+    chans.append(Channel("ip", t_ms.copy(), ip, ok=True))
+    chans.append(Channel("bt0", t_ms.copy(), np.full(n, 1.0, np.float32), ok=True))
+    chans.append(Channel("kappa", t_ms.copy(), np.full(n, 2.2, np.float32), ok=True))
+    return chans
+
+
+def write_synthetic_nstx_shot(path, shot: int = NSTX_SHOT) -> str:
+    """Write a synthetic NSTX-U ``shot_<n>.h5`` at ``path`` (real fastmag channel
+    names + ``device_id='nstx'``, fabricated signals) and return the path (str)."""
+    _write_h5(
+        str(path),
+        shot,
+        "rotating",
+        "test",
+        _nstx_channels(shot),
+        compression="lzf",
+        tmin=None,  # '*' sentinel
+        tmax=None,
+        stride=1,
+        device="NSTX/NSTX-U",
+        device_id="nstx",
     )
     return str(path)

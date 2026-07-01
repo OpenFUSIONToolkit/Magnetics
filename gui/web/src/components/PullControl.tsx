@@ -7,7 +7,7 @@
 // refresh the shot list and select the new shot. Set a window (tmin/tmax) +
 // decimation to make a pull seconds instead of minutes.
 import { useEffect, useRef, useState } from "react";
-import { apiBase, startFetch, usingLiveBackend } from "../lib/api";
+import { apiBase, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
 import { useStore } from "../store";
 
 export default function PullControl() {
@@ -51,9 +51,32 @@ export default function PullControl() {
   // fire setState on an unmounted component.
   const esRef = useRef<EventSource | null>(null);
 
+  // Snap backend / sensor-set / window / shot to sensible per-device defaults on a
+  // device change. A tree device (NSTX/KSTAR) has no cluster and no analysis→signal
+  // map, so it uses mdsthin over a NARROW window (its raw signals are ~15 MHz and
+  // seconds long — a wide window is gigabytes). An NSTX-style tree device requires a
+  // named sensor set; KSTAR's transport defaults to its declared arrays when none is
+  // chosen. Called from the device onChange handler — NOT a synchronous effect
+  // (react-hooks/set-state-in-effect).
+  function snapDeviceDefaults(d: DeviceInfo) {
+    const tree = d.access === "mdsplus_tree";
+    setBackend(d.remote_capable ? "remote" : "mdsthin");
+    setSensorSet(tree && !d.needs_ssh_creds ? (d.sensor_sets[0] ?? "") : "");
+    setTmin(tree ? "250" : "1000");
+    setTmax(tree ? "350" : "5000");
+    if (d.default_shot != null) setShot(String(d.default_shot));
+  }
+
   // close any open pull stream when the component unmounts
   useEffect(() => () => esRef.current?.close(), []);
+  // Device is owned by the store; derive its capabilities. A tree device (NSTX/KSTAR)
+  // pulls via mdsthin/its own transport; only a device with a network.cluster block
+  // can use the fast `remote` backend (DIII-D); a `connection` block means a
+  // device-specific VPN+SSH transport (KSTAR).
   const dev = devices.find((d) => d.id === device);
+  const isTree = dev?.access === "mdsplus_tree";
+  const remoteCapable = dev?.remote_capable ?? false;
+  const needsSshCreds = dev?.needs_ssh_creds ?? false;
 
   if (!usingLiveBackend()) return null;
   const needsCreds = backend === "remote" || backend === "mdsthin";
@@ -117,7 +140,11 @@ export default function PullControl() {
       <h3>Pull a shot (live)</h3>
       {devices.length > 0 && (
         <select className="pull-input" value={device} aria-label="device"
-          onChange={(e) => { setDevice(e.target.value); setSensorSet(""); }}>
+          onChange={(e) => {
+            const d = devices.find((x) => x.id === e.target.value);
+            setDevice(e.target.value);
+            if (d) snapDeviceDefaults(d);
+          }}>
           {devices.map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
@@ -135,7 +162,10 @@ export default function PullControl() {
         <>
           <select className="pull-input" value={sensorSet}
             onChange={(e) => setSensorSet(e.target.value)}>
-            <option value="">— by analysis (above) —</option>
+            {/* NSTX-style tree devices have no analysis→signal map, so a sensor set
+                is required; other devices (incl. KSTAR, which defaults to its declared
+                arrays) can pull "by analysis". */}
+            {!(isTree && !needsSshCreds) && <option value="">— by analysis (above) —</option>}
             <optgroup label={`${dev.name} sensor sets`}>
               {dev.sensor_sets.map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -151,15 +181,18 @@ export default function PullControl() {
         </>
       )}
       {/* Transport devices (KSTAR) reach MDS over their own VPN tunnel, so the
-          cluster/mdsthin backend choice doesn't apply — hide it to avoid confusion. */}
-      {dev?.needs_ssh_creds ? (
-        <div className="note pull-hint">via the {dev.name} VPN tunnel</div>
+          cluster/mdsthin backend choice doesn't apply — hide it. Otherwise offer the
+          backends the device supports: remote/auto only when it has a cluster block. */}
+      {needsSshCreds ? (
+        <div className="note pull-hint">via the {dev?.name} VPN tunnel</div>
       ) : (
         <select className="pull-input" value={backend}
           onChange={(e) => setBackend(e.target.value)}>
-          <option value="remote">remote (cluster · fast)</option>
-          <option value="mdsthin">mdsthin (laptop · slow, no cluster)</option>
-          <option value="auto">auto</option>
+          {remoteCapable && <option value="remote">remote (cluster · fast)</option>}
+          <option value="mdsthin">
+            mdsthin ({isTree ? "MDSplus tree · direct" : "laptop · slow, no cluster"})
+          </option>
+          {remoteCapable && <option value="auto">auto</option>}
         </select>
       )}
 
@@ -173,23 +206,25 @@ export default function PullControl() {
           onChange={(e) => setDecimate(e.target.value)} placeholder="decim." />
       </div>
       <div className="note pull-hint">
-        window (ms) prefilled to flat-top — clear tmin/tmax for the whole shot
+        {isTree
+          ? "window (ms) — keep it NARROW: raw signals are ~15 MHz, so a wide window pulls gigabytes"
+          : "window (ms) prefilled to flat-top — clear tmin/tmax for the whole shot"}
       </div>
 
       {needsCreds && (
         <>
           <div className="note pull-hint">
-            {dev?.needs_ssh_creds
+            {needsSshCreds
               ? "KFE VPN login — username, password, and a 2FA passcode (never push)"
-              : "cluster address is built in — just your GA username; leave password blank if your SSH key is set up (else password + Duo)"}
+              : `the data host + gateway are built in — enter your ${dev ? dev.name : "site"} username; leave password blank if key/Duo auth is set up (else password + Duo)`}
           </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder={dev?.needs_ssh_creds ? "KFE VPN username" : "GA username"}
+            placeholder={needsSshCreds ? "KFE VPN username" : "username"}
             autoComplete="username" />
           <input className="pull-input" type="password" value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={dev?.needs_ssh_creds ? "KFE VPN password" : "GA password (blank if key auth)"}
+            placeholder={needsSshCreds ? "KFE VPN password" : "password (blank if key/Duo auth)"}
             autoComplete="current-password" />
           <input className="pull-input" value={duoPasscode}
             onChange={(e) => setDuoPasscode(e.target.value)}

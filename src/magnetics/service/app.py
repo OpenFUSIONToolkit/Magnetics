@@ -93,9 +93,18 @@ def devices():
             {
                 "id": path.stem,  # e.g. "diiid" → --device diiid
                 "name": d.get("name", path.stem),  # e.g. "DIII-D"
+                "default_shot": d.get("default_shot"),  # per-device example shot
                 "sensor_sets": list(d.get("sensor_sets", {}).keys()),
-                "access": d.get("access"),  # e.g. "mdsplus_tree"
-                "needs_ssh_creds": bool(d.get("connection")),  # KSTAR: VPN+SSH transport
+                # `access` = "mdsplus_tree" for NSTX/KSTAR-style devices whose sensors
+                # live in an MDSplus tree: those pull ONLY via mdsthin + a named
+                # sensor_set (no cluster/remote path, no analysis→signal map).
+                "access": d.get("access", "ptdata"),
+                # remote (cluster) backend is available only when the device file has
+                # a network.cluster block (DIII-D omega); NSTX/KSTAR have none.
+                "remote_capable": bool((d.get("network", {}) or {}).get("cluster")),
+                # a `connection` block means a device-specific VPN+SSH transport
+                # (KSTAR): the GUI collects creds + shows the site note.
+                "needs_ssh_creds": bool(d.get("connection")),
                 "connect_note": conn.get("note"),
             }
         )

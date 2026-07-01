@@ -3,8 +3,8 @@
 Covers the three code changes that bring KSTAR toward DIII-D parity:
   * ``_set_channels`` derives θ from (r, z) when a sensor has no explicit ``theta``
     (so supplying r/z alone unblocks the poloidal array);
-  * ``_prep_qs_ds`` picks the device's ``qs_default_set`` for the SLCONTOUR fit
-    instead of DIII-D's ``Bp_LFS_midplane``;
+  * ``_prep_qs_ds`` is DIII-D-only after the develop merge (raises 422 for KSTAR);
+    the DIII-D shot still resolves the legacy ``Bp_LFS_midplane`` filter;
   * the rotating spectral nodes run against a synthetic KSTAR shot (device=kstar)
     using the committed MC1T toroidal geometry.
 """
@@ -53,11 +53,14 @@ def test_set_channels_phi_unaffected_by_theta_fallback(monkeypatch):
     assert out == {"D": pytest.approx(12.0)}
 
 
-# ── device-aware QS channel_filter in _prep_qs_ds ────────────────────────────
-def test_qs_default_filter_is_device_specific(monkeypatch, kstar_shot, synthetic_shot):
-    """KSTAR resolves to its ``quasi_stationary`` composite; DIII-D keeps the
-    legacy ``Bp_LFS_midplane`` literal. We capture the channel_filter that
-    ``_prep_qs_ds`` hands to ``_qs_run`` without running the (geometry-dependent) fit."""
+# ── QS is DIII-D-only for now (SLCONTOUR needs the DIII-D device file + Bp arrays)
+def test_qs_is_diiid_only(monkeypatch, kstar_shot, synthetic_shot):
+    """After the develop merge the SLCONTOUR quasi-stationary fit is DIII-D-only:
+    ``_prep_qs_ds`` raises (→ 422) for KSTAR — matching the "QS/poloidal nodes still
+    return 422 for KSTAR" follow-up in PR #55 — while a DIII-D shot still resolves the
+    legacy ``Bp_LFS_midplane`` filter and reaches ``_qs_run``. (KSTAR's device-specific
+    ``qs_default_set`` selection is staged in ``_prep_qs_ds`` for when QS support lands,
+    but is gated off by the DIII-D-only guard today.)"""
 
     class _StopFit(Exception):
         pass
@@ -70,10 +73,14 @@ def test_qs_default_filter_is_device_specific(monkeypatch, kstar_shot, synthetic
 
     monkeypatch.setattr(nodes, "_qs_run", fake_qs_run)
 
-    for shot, expect in ((kstar_shot, "quasi_stationary"), (synthetic_shot, "Bp_LFS_midplane")):
-        with pytest.raises(_StopFit):
-            nodes._prep_qs_ds(shot, None)
-        assert captured["cf"] == expect, f"{shot} → {captured['cf']}"
+    # KSTAR: QS is not supported yet → a clean ValueError (422), never reaching _qs_run.
+    with pytest.raises(ValueError, match="DIII-D-only"):
+        nodes._prep_qs_ds(kstar_shot, None)
+
+    # DIII-D: resolves the legacy filter and hands it to the fit.
+    with pytest.raises(_StopFit):
+        nodes._prep_qs_ds(synthetic_shot, None)
+    assert captured["cf"] == "Bp_LFS_midplane"
 
 
 # ── rotating spectral nodes on the synthetic KSTAR shot ──────────────────────
