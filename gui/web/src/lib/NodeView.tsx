@@ -8,11 +8,24 @@ import type * as Plotly from "plotly.js";
 import type { Node, Quality } from "./contract";
 import Plot from "./Plot";
 import { FIELD_DIVERGING, POWER_SEQUENTIAL, MODE_PALETTE, plotChrome } from "./colormaps";
+import { nodeDownloadUrl } from "./api";
 import { useStore } from "../store";
 
 const QCOLOR: Record<Quality, string> = { good: "#54e08a", warn: "#ffb454", bad: "#ff5c5c" };
 
-export default function NodeView({ node, height }: { node: Node; height?: number }) {
+export default function NodeView({
+  node,
+  height,
+  exportName,
+  download,
+}: {
+  node: Node;
+  height?: number;
+  /** Base filename for image exports, forwarded to the inner Plot. */
+  exportName?: string;
+  /** Enables the per-plot HDF5 "Data" download, forwarded to the inner Plot. */
+  download?: { machine: string; nodeId: string; params?: Record<string, string | number> };
+}) {
   const dark = useStore((s) => s.theme === "dark");
   // Foreground ink that flips with the theme so white markers/labels/error bars
   // don't disappear on the light plot background.
@@ -20,11 +33,28 @@ export default function NodeView({ node, height }: { node: Node; height?: number
   const inkSubtle = dark ? "rgba(255,255,255,0.45)" : "rgba(20,34,46,0.5)";
   const inkEdge = dark ? "#000" : "#ffffff";
   const knockout = plotChrome(dark ? "dark" : "light").plot_bgcolor; // marker ring = bg
+  // Metrics is a scalar panel (no plot) — offer just a data download when available.
+  const metricsDataUrl = download
+    ? nodeDownloadUrl(download.machine, download.nodeId, download.params)
+    : null;
   switch (node.kind) {
     case "metrics":
       return (
         <div className="metrics">
-          <div className="metrics-title">{node.title}</div>
+          <div className="metrics-title">
+            {node.title}
+            {metricsDataUrl && (
+              <a
+                className="metrics-download"
+                title="Download these values as HDF5"
+                href={metricsDataUrl}
+                download
+                style={{ float: "right", fontSize: 10, color: "var(--text-dim)", textDecoration: "none" }}
+              >
+                ⬇ data
+              </a>
+            )}
+          </div>
           {node.fields.map((f, i) => (
             <div className="metric-row" key={i}>
               <span className="metric-label">{f.label}</span>
@@ -47,15 +77,24 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         } as Partial<Plotly.PlotData>,
       ];
       if (node.overlay) {
+        const pts = node.overlay.points;
+        // Per-point hover text: a labelled point (sensor dot) shows its pointname above
+        // the coordinates; an unlabelled one shows coordinates alone. Building the text
+        // per point keeps mixed overlays correct (no empty line on the unlabelled ones).
+        const hovertext = pts.map((p) => {
+          const coords = `(${p.x.toFixed(0)}, ${p.y.toFixed(0)})`;
+          return p.label ? `${p.label}<br>${coords}` : coords;
+        });
         traces.push({
           type: "scatter", mode: "markers",
-          x: node.overlay.points.map((p) => p.x),
-          y: node.overlay.points.map((p) => p.y),
+          x: pts.map((p) => p.x),
+          y: pts.map((p) => p.y),
+          text: hovertext,
           marker: { symbol: node.overlay.symbol ?? "square", size: 6, color: ink, line: { color: inkEdge, width: 0.5 } },
-          hoverinfo: "x+y",
+          hovertemplate: "%{text}<extra></extra>",
         } as Partial<Plotly.PlotData>);
       }
-      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
+      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} exportName={exportName} download={download} />;
     }
 
     case "heatmap": {
@@ -76,6 +115,8 @@ export default function NodeView({ node, height }: { node: Node; height?: number
       return (
         <Plot
           height={height}
+          exportName={exportName}
+          download={download}
           layout={axisLayout(node.axes)}
           data={[{
             type: "heatmap", x: node.x, y: node.y, z: node.z,
@@ -133,7 +174,29 @@ export default function NodeView({ node, height }: { node: Node; height?: number
           connectgaps: false,  // null entries = wrap breaks; don't bridge them
         } as Partial<Plotly.PlotData>);
       }
-      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
+      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} exportName={exportName} download={download} />;
+    }
+
+    case "equilibrium": {
+      const levels = node.levels ?? [0.2, 0.4, 0.6, 0.8, 1.0];
+      const flux = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
+      const base = axisLayout(node.axes);
+      const traces: Partial<Plotly.PlotData>[] = [
+        {
+          type: "contour", x: node.r, y: node.z, z: node.psi_n, autocontour: false,
+          contours: { coloring: "lines", start: Math.min(...levels), end: 1.0, size: levels.length > 1 ? levels[1] - levels[0] : 0.2 },
+          colorscale: [[0, flux], [1, flux]], showscale: false, hoverinfo: "skip",
+        } as Partial<Plotly.PlotData>,
+        {
+          type: "scatter", mode: "lines", name: "LCFS", x: node.boundary.r, y: node.boundary.z,
+          line: { color: "#2ee6cf", width: 2 }, hoverinfo: "skip",
+        } as Partial<Plotly.PlotData>,
+        {
+          type: "scatter", mode: "markers", x: [node.axis.r], y: [node.axis.z],
+          marker: { symbol: "cross", size: 8, color: "#2ee6cf" }, hoverinfo: "skip", showlegend: false,
+        } as Partial<Plotly.PlotData>,
+      ];
+      return <Plot data={traces} height={height} exportName={exportName} download={download} layout={{ ...base, yaxis: { ...base.yaxis, scaleanchor: "x", scaleratio: 1 } } as Partial<Plotly.Layout>} />;
     }
 
     case "line": {
@@ -169,9 +232,23 @@ export default function NodeView({ node, height }: { node: Node; height?: number
       return (
         <Plot
           height={height}
+          exportName={exportName}
+          download={download}
           layout={{ ...axisLayout(node.axes), showlegend: true, legend: { font: { size: 10 }, orientation: "h", y: 1.12 } }}
           data={traces}
         />
+      );
+    }
+
+    default: {
+      // A kind outside the known union (backend shipped a new node before the
+      // contract was updated, or a malformed payload). Render a placeholder —
+      // returning nothing here makes React throw "nothing was returned".
+      const unknownKind = (node as { kind?: string }).kind ?? "unknown";
+      return (
+        <div className="placeholder" style={{ padding: 16 }}>
+          Unsupported node kind: <code>{unknownKind}</code>
+        </div>
       );
     }
   }

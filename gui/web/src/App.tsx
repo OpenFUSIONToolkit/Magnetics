@@ -10,16 +10,15 @@ import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
 import ThemeToggle from "./components/ThemeToggle";
 import PullControl from "./components/PullControl";
+import ErrorBoundary from "./components/ErrorBoundary";
 import SensorsTab from "./components/tabs/SensorsTab";
 import QuasiStationaryTab from "./components/tabs/QuasiStationaryTab";
 import RotatingTab from "./components/tabs/RotatingTab";
-import FitsTab from "./components/tabs/FitsTab";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "sensors", label: "Sensors" },
   { id: "qs", label: "Quasi-stationary" },
   { id: "rotating", label: "Rotating modes" },
-  { id: "fits", label: "Fits" },
 ];
 
 export default function App() {
@@ -33,7 +32,7 @@ export default function App() {
         <span className="title">Magnetics</span>
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
-        <span className="badge">{usingLiveBackend() ? "● live backend" : "○ mock data"}</span>
+        <span className="badge">{usingLiveBackend() ? "● live backend" : "○ offline / demo"}</span>
         <ThemeToggle />
       </header>
 
@@ -65,14 +64,16 @@ export default function App() {
         </div>
         {!machine ? (
           <div className="placeholder">No machine selected.</div>
-        ) : tab === "sensors" ? (
-          <SensorsTab machine={machine} />
-        ) : tab === "qs" ? (
-          <QuasiStationaryTab machine={machine} />
-        ) : tab === "rotating" ? (
-          <RotatingTab machine={machine} />
         ) : (
-          <FitsTab machine={machine} />
+          <ErrorBoundary resetKeys={[machine, tab]} label={`The ${tab} view`}>
+            {tab === "sensors" ? (
+              <SensorsTab machine={machine} />
+            ) : tab === "qs" ? (
+              <QuasiStationaryTab machine={machine} />
+            ) : (
+              <RotatingTab machine={machine} />
+            )}
+          </ErrorBoundary>
         )}
       </main>
 

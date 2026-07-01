@@ -25,20 +25,21 @@ jobs:
         with:
           filters: |
             python:
-              - 'analysis/**'
+              - 'src/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.python-version'
               - '.github/workflows/ci.yml'
             web:
               - 'gui/web/**'
               - '.github/workflows/ci.yml'
 
   python:
-    name: Python (analysis)
+    name: Python
     needs: changes
     if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: analysis
     steps:
       - uses: actions/checkout@v4
 
@@ -48,10 +49,13 @@ jobs:
           enable-cache: true
 
       - name: Install project + deps
-        run: uv sync
+        run: uv sync --extra service
 
       - name: Lint (ruff)
         run: uvx ruff check .
+
+      - name: Format check (ruff format)
+        run: uvx ruff format --check .
 
       - name: Tests (pytest; tolerate "no tests collected" while skeletal)
         run: |
@@ -61,6 +65,25 @@ jobs:
           set -e
           # exit 5 = no tests collected yet (skeleton); treat as success
           if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+
+  typecheck:
+    name: Typecheck (ty)
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (Python 3.14 from .python-version)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install project + deps
+        run: uv sync --extra service
+
+      - name: Typecheck (ty)
+        run: uv run ty check src/magnetics
 
   web:
     name: Web (gui)
@@ -84,6 +107,9 @@ jobs:
 
       - name: Lint (eslint)
         run: npm run lint
+
+      - name: Typecheck (tsc --strict)
+        run: npm run typecheck
 
       - name: Tests (vitest)
         run: npm test

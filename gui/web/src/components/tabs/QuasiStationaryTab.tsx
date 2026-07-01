@@ -5,24 +5,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type Plotly from "plotly.js-dist-min";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
-import { usingLiveBackend } from "../../lib/api";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
-import type { ContourNode, LineNode, MetricsNode, Scatter2DNode } from "../../lib/contract";
-import { qualityForK } from "../../lib/contract";
+import type { ContourNode, LineNode, MetricsNode } from "../../lib/contract";
+import { phiPeak as phiPeakFn, phiRms as phiRmsFn } from "../../lib/qsTransforms";
 
-// ── Colorblind-safe palette (Wong 2011) ──────────────────────────────
-// Blue + orange are distinguishable across deuteranopia, protanopia, tritanopia.
-const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7"];
+// ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
+const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
 
-// Diverging colorscale for signed field: blue → neutral → orange.
-// Avoids red-green confusion; center adapts to background lightness.
-const CB_DIV_DARK:  [number, string][] = [
-  [0.0, "#2166ac"], [0.25, "#74acd5"], [0.5, "#f7f7f7"], [0.75, "#f4a460"], [1.0, "#b35900"],
-];
-const CB_DIV_LIGHT: [number, string][] = [
-  [0.0, "#2166ac"], [0.25, "#74acd5"], [0.5, "#9e9e9e"], [0.75, "#f4a460"], [1.0, "#b35900"],
-];
+// ── Mode-number palette — green/purple/red for n=1,2,3,… ─────────────
+// Clearly distinct hues so each mode reads immediately, not blue/orange.
+const MODE_PALETTE = ["#2ca02c", "#9467bd", "#d62728", "#8c564b", "#e377c2", "#bcbd22", "#17becf"];
 
 // ── Light-mode Plotly overrides ───────────────────────────────────────
 const LT_AXIS = {
@@ -35,8 +28,6 @@ const LT_BASE: Partial<Plotly.Layout> = {
 };
 
 // ── Hooks & helpers ───────────────────────────────────────────────────
-// Follows the app-wide theme toggle (store), not the OS setting, so the
-// in-app light/dark switch re-skins this tab's plots along with everything else.
 function useDarkMode(): boolean {
   return useStore((s) => s.theme === "dark");
 }
@@ -61,180 +52,78 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-function lineTraces(node: LineNode): Partial<Plotly.PlotData>[] {
+// Build Plotly traces from a LineNode, optionally with per-series visibility overrides.
+function lineTraces(
+  node: LineNode,
+  opts?: { visible?: boolean[]; opacity?: number[]; palette?: string[] },
+): Partial<Plotly.PlotData>[] {
   const sigma = node.meta?.sigma as number[][] | undefined;
+  const pal = opts?.palette ?? LINE_PALETTE;
   const traces: Partial<Plotly.PlotData>[] = [];
 
   node.series.forEach((s, i) => {
-    const color = LINE_PALETTE[i % LINE_PALETTE.length];
+    const color = pal[i % pal.length];
     const sig = sigma?.[i];
+    const vis = opts?.visible?.[i] !== false;
+    const opacity = opts?.opacity?.[i] ?? 1;
 
-    if (sig) {
-      // Upper bound then lower with fill tonexty → shaded band
+    if (sig && vis) {
       traces.push({
         type: "scatter", mode: "lines", x: s.x,
         y: s.y.map((v, j) => v + sig[j]),
         line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
+        opacity,
       } as Partial<Plotly.PlotData>);
       traces.push({
         type: "scatter", mode: "lines", x: s.x,
         y: s.y.map((v, j) => v - sig[j]),
-        fill: "tonexty", fillcolor: hexToRgba(color, 0.45),
+        fill: "tonexty", fillcolor: hexToRgba(color, 0.45 * opacity),
         line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
+        opacity,
       } as Partial<Plotly.PlotData>);
     }
 
     traces.push({
       type: "scatter", mode: "lines", name: s.name, x: s.x, y: s.y,
       line: { color, width: 1.5 },
+      visible: vis ? true : "legendonly",
+      opacity,
     } as Partial<Plotly.PlotData>);
   });
 
   return traces;
 }
 
-// ── Standalone CSS color scale bar ───────────────────────────────────
-function ColorScale({ zrange, dark }: { zrange: [number, number]; dark: boolean }) {
-  const stops = (dark ? CB_DIV_DARK : CB_DIV_LIGHT)
-    .map(([pos, color]) => `${color} ${pos * 100}%`).join(", ");
-  const [lo, hi] = zrange;
+// ── Sensor arrays most useful for QS analysis ────────────────────────
+const CHANNEL_FILTERS = [
+  "Bp LFS midplane",
+  "Bp LFS midplane bdot",
+  "Bp LFS R+1",
+  "Bp LFS R-1",
+  "Bp LFS R+2",
+  "Bp LFS R-2",
+  "All LFS Bp Arrays",
+  "Bp HFS +midplane",
+  "Bp HFS -midplane",
+];
+
+// ── Collapsible section header ────────────────────────────────────────
+function CollapseHeader({
+  open, onToggle, children,
+}: { open: boolean; onToggle: () => void; children: React.ReactNode }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px 4px", fontSize: 10, color: "var(--text-dim)" }}>
-      <span style={{ minWidth: 32, textAlign: "right" }}>{lo} G</span>
-      <div style={{ flex: 1, height: 10, background: `linear-gradient(to right, ${stops})`, borderRadius: 2 }} />
-      <span style={{ minWidth: 32 }}>+{hi} G</span>
-      <span style={{ marginLeft: 4 }}>δB<sub>p</sub></span>
+    <div
+      onClick={onToggle}
+      style={{
+        display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+        userSelect: "none", marginBottom: open ? 6 : 0,
+      }}
+      className="metrics-title"
+    >
+      <span style={{ fontSize: 9 }}>{open ? "▼" : "▶"}</span>
+      {children}
     </div>
   );
-}
-
-// ── -180→180 angle remapping ─────────────────────────────────────────
-// Shifts a sorted 0-360 angle array to -180-180 and reorders the
-// corresponding z dimension so the grid stays consistent.
-function remapAxis180(
-  vals: number[], z: number[][], axis: "x" | "y",
-): { vals: number[]; z: number[][] } {
-  const split = vals.findIndex(v => v > 180);
-  if (split === -1) return { vals, z };
-  const newVals = [...vals.slice(split).map(v => v - 360), ...vals.slice(0, split)];
-  const newZ = axis === "x"
-    ? z.map(row => [...row.slice(split), ...row.slice(0, split)])
-    : [...z.slice(split), ...z.slice(0, split)];
-  return { vals: newVals, z: newZ };
-}
-function remapOverlay(ov: ContourNode["overlay"]): ContourNode["overlay"] {
-  if (!ov) return ov;
-  return { ...ov, points: ov.points.map(p => ({ ...p, x: p.x > 180 ? p.x - 360 : p.x, y: p.y > 180 ? p.y - 360 : p.y })) };
-}
-
-// ── Live API types (frame envelope from /api/{machine}/qs_fit/stream) ─
-interface QsFitFrame {
-  progress: number;
-  final: boolean;
-  data: {
-    contour: { phi: number[]; theta: number[]; z: number[][]; units: string };
-    sensors: { phi: number; theta: number }[];
-    modes: { n: number; m: number; amp: number; phase_deg: number }[];
-    quality: { K: number; chi2: number; n_channels: number; m_max: number };
-  };
-}
-
-// ── useQsFit ──────────────────────────────────────────────────────────
-// Mock mode:  reads individual mock JSON files via useNode (existing contract).
-// Live mode:  opens an SSE stream to /api/{machine}/qs_fit/stream and builds
-//             ContourNode + MetricsNode from each progressive coarse→fine frame.
-function useQsFit(machine: string, fetchCursor: number) {
-  const isLive = usingLiveBackend();
-
-  // Pass empty string in live mode so useNode skips fetching (it guards on !machine).
-  const mockMachine = isLive ? "" : machine;
-  const { node: rawContour, loading: mockLoading, error: mockError } =
-    useNode(mockMachine, "contour", { t: fetchCursor });
-  const { node: rawQuality } = useNode(mockMachine, "fit_quality");
-  const { node: rawPhaseFit } = useNode(mockMachine, "phase_fit");
-
-  const [liveContour,  setLiveContour]  = useState<ContourNode | null>(null);
-  const [liveQuality,  setLiveQuality]  = useState<MetricsNode | null>(null);
-  const [liveProgress, setLiveProgress] = useState(0);
-  const [liveLoading,  setLiveLoading]  = useState(isLive);
-  const [liveError,    setLiveError]    = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isLive || !machine) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset before live stream; Meg's hookup, revisit later */
-    setLiveLoading(true);
-    setLiveError(null);
-    setLiveContour(null);
-    setLiveProgress(0);
-    /* eslint-enable react-hooks/set-state-in-effect */
-
-    const base = import.meta.env.VITE_API_BASE as string;
-    const es = new EventSource(`${base}/api/${machine}/qs_fit/stream`);
-
-    es.onmessage = (e: MessageEvent) => {
-      const frame = JSON.parse(e.data as string) as QsFitFrame;
-      const d = frame.data;
-
-      const absMax = Math.max(...d.contour.z.flat().map(Math.abs), 1);
-
-      setLiveContour({
-        kind: "contour",
-        x: d.contour.phi,
-        y: d.contour.theta,
-        z: d.contour.z,
-        axes: { x: "φ (deg)", y: "θ (deg)", z: `δB<sub>p</sub> (${d.contour.units})` },
-        zrange: [-absMax, absMax],
-        overlay: {
-          points: d.sensors.map(s => ({ x: s.phi, y: s.theta })),
-          symbol: "square",
-        },
-        meta: { m: d.modes[0]?.m, n: d.modes[0]?.n },
-      });
-
-      const q = d.quality;
-      setLiveQuality({
-        kind: "metrics",
-        title: "fit quality",
-        fields: [
-          { label: "K (cond.)",  value: q.K.toFixed(1),    status: qualityForK(q.K) },
-          { label: "χ²",         value: q.chi2.toFixed(2) },
-          { label: "channels",   value: q.n_channels },
-          { label: "m max",      value: q.m_max },
-        ],
-      });
-
-      setLiveProgress(frame.progress);
-      if (frame.final) { setLiveLoading(false); es.close(); }
-    };
-
-    es.onerror = () => {
-      setLiveError("connection to backend failed");
-      setLiveLoading(false);
-      es.close();
-    };
-
-    return () => es.close();
-  }, [machine, isLive]);
-
-  if (isLive) {
-    return {
-      contourNode: liveContour,
-      qualityNode:  liveQuality,
-      phaseFitNode: null as Scatter2DNode | null,
-      loading:      liveLoading,
-      error:        liveError,
-      progress:     liveProgress,
-    };
-  }
-
-  return {
-    contourNode:  rawContour?.kind  === "contour"   ? rawContour  : null,
-    qualityNode:  rawQuality?.kind  === "metrics"   ? rawQuality  : null,
-    phaseFitNode: rawPhaseFit?.kind === "scatter2d" ? rawPhaseFit : null,
-    loading:      mockLoading,
-    error:        mockError ?? null,
-    progress:     1,
-  };
 }
 
 // ── Component ─────────────────────────────────────────────────────────
@@ -242,293 +131,648 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
   const { cursorMs, setCursorMs } = useStore();
 
-  // localCursor: updates on every slider tick for smooth visuals.
-  // cursorMs (store): only updated on pointer-up / chart click, so useNode
-  // doesn't re-fetch (and Plotly doesn't purge/re-init) on every tick.
-  const [localCursor, setLocalCursor] = useState(() => cursorMs === 0 ? 3140 : cursorMs);
+  // ── Analysis settings ─────────────────────────────────────────────
+  const [ns, setNs]               = useState("1,2,3");
+  const [ms, setMs]               = useState("0");
+  const [channelFilter, setChannelFilter] = useState("Bp LFS midplane");
+  const [detrendType, setDetrendType]     = useState("baseline");
+  const [detrendLo, setDetrendLo] = useState("");
+  const [detrendHi, setDetrendHi] = useState("");
+  const [tminMs, setTminMs]       = useState("");  // "" = auto (read from HDF5)
+  const [tmaxMs, setTmaxMs]       = useState("");
+  const [colormapChoice, setColormapChoice] = useState<"rdbu" | "cividis" | "viridis">("rdbu");
+
+  // ── Section collapse state ────────────────────────────────────────
+  const [fitQualityOpen, setFitQualityOpen] = useState(false);
+  const [sensorMapOpen, setSensorMapOpen]   = useState(false);
+
+  // ── Deferred fetch: only compute when user clicks Plot ────────────
+  const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
+
+  const qsParams = useMemo(() => {
+    const p: Record<string, string> = {
+      ns, ms,
+      channel_filter: channelFilter,
+      detrend_type: detrendType,
+    };
+    if (detrendLo && detrendHi) {
+      p.detrend_lo = detrendLo;
+      p.detrend_hi = detrendHi;
+    }
+    if (tminMs) p.tmin_ms = tminMs;
+    if (tmaxMs) p.tmax_ms = tmaxMs;
+    return p;
+  }, [ns, ms, channelFilter, detrendType, detrendLo, detrendHi, tminMs, tmaxMs]);
 
   useEffect(() => {
     if (cursorMs === 0) setCursorMs(3140);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep localCursor in sync when store changes (e.g. other tab seeks)
+  // Linked time-axis zoom (declared here so the trim-window effect below can reset it).
+  const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
+
+  // When the trim window changes, clear any user zoom so the axis re-fits to the new data.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror external cursor; revisit later
-    if (cursorMs !== 0) setLocalCursor(cursorMs);
-  }, [cursorMs]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom to refit the axis on a new trim window
+    setTimeRange(null);
+  }, [tminMs, tmaxMs]);
 
-  // fetchCursor: stable during drag (only updates on pointer-up / chart click).
-  const fetchCursor = cursorMs === 0 ? 3140 : cursorMs;
+  // Auto-commit on mount so plots load immediately without requiring a click.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial commit to trigger fetch on mount
+    setCommittedParams(qsParams);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount only
+  }, []);
 
-  const { contourNode, qualityNode, phaseFitNode, loading: contourLoading, error: contourError, progress } =
-    useQsFit(machine, fetchCursor);
+  // When Plot is clicked (committedParams changes), reset zoom to fit new data.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom when new computation is triggered
+    setTimeRange(null);
+  }, [committedParams]);
 
-  // Time-series nodes — useNode; live API doesn't provide these yet.
-  const { node: phiTimeNode }   = useNode(machine, "phi_t");
-  const { node: ampNode }       = useNode(machine, "amplitude");
-  const { node: phaseTimeNode } = useNode(machine, "phase_t");
+  // null fetchMachine suppresses all useNode fetches until initial commit fires.
+  const fetchMachine = committedParams !== null ? machine : null;
+  // Highlight the Plot button when settings have drifted from the last commit.
+  const paramsDirty = committedParams !== null && committedParams !== qsParams;
 
-  // ── Remap phi/theta from 0-360 → -180-180 ──────────────────────────
-  const heroContour = useMemo((): ContourNode | null => {
-    if (!contourNode) return null;
-    const rx = remapAxis180(contourNode.x, contourNode.z, "x");
-    const ry = remapAxis180(contourNode.y, rx.z, "y");
-    return { ...contourNode, x: rx.vals, y: ry.vals, z: ry.z, overlay: remapOverlay(contourNode.overlay) };
-  }, [contourNode]);
+  // Per-plot export helpers: a stable filename + the download descriptor (node id +
+  // the params that produced it) so each figure exports its own image + HDF5 data.
+  const dl = useCallback(
+    (nodeId: string) => ({ machine, nodeId, params: committedParams ?? {} }),
+    [machine, committedParams],
+  );
+  const xn = useCallback((nodeId: string) => `shot_${machine}_${nodeId}`, [machine]);
 
-  const phiTimeRemapped = useMemo((): ContourNode | null => {
-    if (phiTimeNode?.kind !== "contour") return null;
-    const ry = remapAxis180(phiTimeNode.y, phiTimeNode.z, "y");
-    return { ...phiTimeNode, y: ry.vals, z: ry.z };
-  }, [phiTimeNode]);
+  // ── Node fetches — gated by fetchMachine (null until Plot is clicked) ──
+  const { node: qualityRaw } = useNode(fetchMachine, "fit_quality", committedParams ?? {});
+  const qualityNode = qualityRaw?.kind === "metrics" ? (qualityRaw as MetricsNode) : null;
 
-  const phaseFitRemapped = useMemo((): Scatter2DNode | null => {
-    if (phaseFitNode?.kind !== "scatter2d") return null;
-    const pts = phaseFitNode.points.map(p => ({
-      ...p,
-      x: p.x > 180 ? p.x - 360 : p.x,
-      y: p.y > 180 ? p.y - 360 : p.y,
-    }));
-    // Rebuild the fit as a straight ramp over [-180, 180]. Use the node's n_estimate
-    // for the slope (= −n) when present (robust to the wrapped, null-broken fit the
-    // rotating node now emits); fall back to the first/last non-null fit points.
-    let fit = phaseFitNode.fit;
-    if (fit) {
-      const meta = phaseFitNode.meta as Record<string, unknown> | undefined;
-      const xv = fit.x.filter((v): v is number => v != null);
-      const yv = fit.y.filter((v): v is number => v != null);
-      if (xv.length >= 2) {
-        const c = yv[0];                                   // phase at φ = 0 (intercept)
-        const slope = typeof meta?.n_estimate === "number"
-          ? -meta.n_estimate
-          : (yv[yv.length - 1] - yv[0]) / (xv[xv.length - 1] - xv[0]);
-        fit = { x: [-180, 180], y: [c + slope * -180, c + slope * 180] };
-      }
+  // Time-series nodes
+  const { node: phiTimeNode }                   = useNode(fetchMachine, "phi_t",      committedParams ?? {});
+  const { node: ampNode, error: ampError }       = useNode(fetchMachine, "amplitude",   committedParams ?? {});
+  const { node: phaseTimeNode }                 = useNode(fetchMachine, "phase_t",     committedParams ?? {});
+
+  // Sensor maps, signal conditioning, fit quality time series
+  const { node: sensorRzRaw }    = useNode(fetchMachine, "sensor_map_rz",         committedParams ?? {});
+  const { node: sensorCylRaw }   = useNode(fetchMachine, "sensor_map_cylindrical", committedParams ?? {});
+  const { node: signalRaw }      = useNode(fetchMachine, "signal_conditioning",    committedParams ?? {});
+  const { node: chiSqRaw }       = useNode(fetchMachine, "chi_sq_t",               committedParams ?? {});
+  const { node: fitResRaw }      = useNode(fetchMachine, "fit_residuals",          committedParams ?? {});
+
+  // No-data guard: 404 means the shot's HDF5 file hasn't been pulled yet.
+  const noData = committedParams !== null && ampError?.includes("fetch failed (404)") === true;
+  // Fit-unavailable guard: a non-404 error means the SLCONTOUR fit couldn't run
+  // (most often the shot was pulled for rotating-mode analysis and lacks the Bp
+  // LFS midplane array). Show the reason instead of a perpetual "loading…".
+  const fitUnavailable = committedParams !== null && !noData && ampError != null;
+  const fitError = ampError?.replace(/^Error:\s*fetch failed \(\d+\):\s*/, "") ?? "";
+
+  const sensorRzNode  = sensorRzRaw?.kind  === "line" ? (sensorRzRaw  as LineNode) : null;
+  const sensorCylNode = sensorCylRaw?.kind === "line" ? (sensorCylRaw as LineNode) : null;
+  const signalNode    = signalRaw?.kind    === "line" ? (signalRaw    as LineNode) : null;
+  const chiSqNode     = chiSqRaw?.kind     === "line" ? (chiSqRaw     as LineNode) : null;
+  const fitResNode    = fitResRaw?.kind    === "line" ? (fitResRaw    as LineNode) : null;
+
+  // ── Channel checkboxes for signal conditioning ────────────────────
+  const [enabledChannels, setEnabledChannels] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!signalNode) return;
+    const pairs = signalNode.meta?.pairs as { channel: string }[] | undefined;
+    if (pairs && enabledChannels.size === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init of the channel set when the node first loads
+      setEnabledChannels(new Set(pairs.map(p => p.channel)));
     }
-    return { ...phaseFitNode, points: pts, fit };
-  }, [phaseFitNode]);
+  // Only populate when channel list first loads.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signalNode]);
 
-  // ── φ-space Plot props (own Plot calls so we can set dtick: 90) ──────
-  const heroData = useMemo((): Partial<Plotly.PlotData>[] => {
-    if (!heroContour) return [];
-    const [zmin, zmax] = heroContour.zrange ?? [-42, 42];
-    const traces: Partial<Plotly.PlotData>[] = [{
-      type: "contour" as const, x: heroContour.x, y: heroContour.y, z: heroContour.z,
-      colorscale: dark ? CB_DIV_DARK : CB_DIV_LIGHT, zmin, zmax,
-      contours: { coloring: "fill" as const },
-      colorbar: { title: { text: heroContour.axes.z ?? "" }, thickness: 12, outlinewidth: 0 },
-    } as Partial<Plotly.PlotData>];
-    if (heroContour.overlay) {
-      traces.push({
-        type: "scatter" as const, mode: "markers" as const,
-        x: heroContour.overlay.points.map(p => p.x),
-        y: heroContour.overlay.points.map(p => p.y),
-        marker: { symbol: (heroContour.overlay.symbol ?? "square") as string, size: 6, color: "rgba(255,255,255,0.85)", line: { color: "#000", width: 0.5 } },
-        hoverinfo: "x+y" as const,
-      } as Partial<Plotly.PlotData>);
-    }
-    return traces;
-  }, [dark, heroContour]);
+  const toggleChannel = useCallback((ch: string) => {
+    setEnabledChannels(prev => {
+      const next = new Set(prev);
+      if (next.has(ch)) next.delete(ch); else next.add(ch);
+      return next;
+    });
+  }, []);
 
-  const heroLayout = useMemo(() =>
-    heroContour ? themedLayout(dark, {
-      xaxis: { title: { text: heroContour.axes.x }, dtick: 90, range:[-180,180] },
-      yaxis: { title: { text: heroContour.axes.y }, dtick: 90, range:[-180,180] },
-    } as Partial<Plotly.Layout>) : {},
-  [dark, heroContour]);
+  const phiTimePlot = phiTimeNode?.kind === "contour" ? (phiTimeNode as ContourNode) : null;
 
-  const phaseFitData = useMemo((): Partial<Plotly.PlotData>[] => {
-    if (!phaseFitRemapped) return [];
-    const traces: Partial<Plotly.PlotData>[] = [{
-      type: "scatter" as const, mode: "markers" as const,
-      x: phaseFitRemapped.points.map(p => p.x),
-      y: phaseFitRemapped.points.map(p => p.y),
-      text: phaseFitRemapped.points.map(p => p.label ?? ""),
-      marker: { size: 7, color: "#4aa3ff", line: { color: "#0a0f16", width: 0.5 } },
-      hoverinfo: "x+y+text" as const,
-    } as Partial<Plotly.PlotData>];
-    if (phaseFitRemapped.fit) {
-      traces.push({
-        type: "scatter" as const, mode: "lines" as const,
-        x: phaseFitRemapped.fit.x, y: phaseFitRemapped.fit.y,
-        line: { color: "#54e08a", width: 1.5, dash: "dot" as const },
-        hoverinfo: "skip" as const,
-      } as Partial<Plotly.PlotData>);
-    }
-    return traces;
-  }, [phaseFitRemapped]);
+  const phiPeak = useMemo(
+    () => (phiTimePlot ? phiPeakFn(phiTimePlot.z, phiTimePlot.y) : null),
+    [phiTimePlot],
+  );
 
-  const phaseFitLayout = useMemo(() =>
-    phaseFitRemapped ? themedLayout(dark, {
-      xaxis: { title: { text: phaseFitRemapped.axes.x }, dtick: 90, range:[-180,180] },
-      yaxis: { title: { text: phaseFitRemapped.axes.y }, dtick: 90, range:[-180,180] },
-    } as Partial<Plotly.Layout>) : {},
-  [dark, phaseFitRemapped]);
+  const phiRms = useMemo(
+    () => (phiTimePlot ? phiRmsFn(phiTimePlot.z) : null),
+    [phiTimePlot],
+  );
 
-  const modeTag = contourNode?.meta?.m != null
-    ? `m/n = ${contourNode.meta.m}/${contourNode.meta.n} locked mode`
-    : null;
-
-  // seekTo: stable ref so Plot.tsx's onClick dep never changes during drag.
   const seekTo = useCallback((e: Plotly.PlotMouseEvent) => {
     const x = e.points?.[0]?.x;
-    if (x != null) {
-      const t = Math.round(Number(x));
-      setLocalCursor(t);
-      setCursorMs(t);
-    }
+    if (x != null) setCursorMs(Math.round(Number(x)));
   }, [setCursorMs]);
 
-  // ── Memoized Plot props ─────────────────────────────────────────────
-  // Every data/layout object is memoized so its reference only changes when
-  // the underlying node data or color scheme changes — NOT on every slider tick.
-  // Without this, Plot.tsx sees new object refs every render and calls
-  // Plotly.react on every tick → '_redrawFromAutoMarginCount' crash.
+  // ── Linked time-axis zoom (state declared above) ──────────────────
+  const handleTimeRelayout = useCallback((e: Record<string, unknown>) => {
+    if (e["xaxis.autorange"] === true) {
+      setTimeRange(null);
+    } else if (e["xaxis.range[0]"] != null) {
+      setTimeRange([Number(e["xaxis.range[0]"]), Number(e["xaxis.range[1]"])]);
+    }
+  }, []);
 
-  const cursorLine = useMemo(() => ({
-    type: "line" as const, x0: fetchCursor, x1: fetchCursor, y0: 0, y1: 1,
-    yref: "paper" as const,
-    line: {
-      color: dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)",
-      width: 1.5, dash: "dot" as const,
-    },
-  }), [fetchCursor, dark]);
-
-  const phiTimeData = useMemo(() =>
-    phiTimeRemapped ? [{
-      type: "contour" as const,
-      x: phiTimeRemapped.x, y: phiTimeRemapped.y, z: phiTimeRemapped.z,
-      colorscale: dark ? CB_DIV_DARK : CB_DIV_LIGHT,
-      zmin: (phiTimeRemapped.zrange ?? [-42, 42])[0],
-      zmax: (phiTimeRemapped.zrange ?? [-42, 42])[1],
-      contours: { coloring: "fill" as const },
-      showscale: false,
-    } as Partial<Plotly.PlotData>] : [],
-  [dark, phiTimeRemapped]);
-
-  // Slider / shared axis bounds — derived from loaded data
+  // ── Shared time axis ──────────────────────────────────────────────
   const tMin = useMemo(() =>
-    ampNode?.kind === "line" ? Math.round(ampNode.series[0]?.x[0] ?? 800) : 800,
+    ampNode?.kind === "line" ? Math.round((ampNode as LineNode).series[0]?.x[0] ?? 800) : 800,
   [ampNode]);
   const tMax = useMemo(() =>
-    ampNode?.kind === "line" ? Math.round(ampNode.series[0]?.x.at(-1) ?? 6100) : 6100,
+    ampNode?.kind === "line" ? Math.round((ampNode as LineNode).series[0]?.x.at(-1) ?? 6100) : 6100,
   [ampNode]);
+  const timeXAxis = useMemo(
+    () => ({ range: timeRange ?? [tMin, tMax] }),
+    [timeRange, tMin, tMax],
+  );
 
-  // Shared xaxis range keeps all three time plots visually aligned
-  const timeXAxis = useMemo(() => ({ range: [tMin, tMax] }), [tMin, tMax]);
+  // ── Sensor map plots ──────────────────────────────────────────────
+  const sensorRzData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!sensorRzNode) return [];
+    const traces: Partial<Plotly.PlotData>[] = sensorRzNode.series.map((s, i) => ({
+      type: "scatter" as const, mode: "lines" as const,
+      name: s.name, x: s.x, y: s.y,
+      line: { color: LINE_PALETTE[i % LINE_PALETTE.length], width: 2 },
+    } as Partial<Plotly.PlotData>));
+    const wall = sensorRzNode.meta?.wall as { x: number[]; y: number[] } | null;
+    if (wall) {
+      traces.unshift({
+        type: "scatter" as const, mode: "lines" as const,
+        name: "wall", x: wall.x, y: wall.y,
+        line: { color: dark ? "#888" : "#555", width: 1 },
+        showlegend: false,
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [sensorRzNode, dark]);
+
+  const sensorRzLayout = useMemo(() =>
+    themedLayout(dark, {
+      xaxis: { title: { text: sensorRzNode?.axes.x ?? "R (m)" }, scaleanchor: "y" as const },
+      yaxis: { title: { text: sensorRzNode?.axes.y ?? "z (m)" } },
+      showlegend: false,
+      margin: { t: 4, b: 40, l: 48, r: 8 },
+    } as Partial<Plotly.Layout>),
+  [dark, sensorRzNode]);
+
+  // Remap phi values from 0–360 to –180–180 for the unrolled plot.
+  const sensorCylData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!sensorCylNode) return [];
+    return sensorCylNode.series.map((s, i) => ({
+      type: "scatter" as const, mode: "lines" as const,
+      name: s.name,
+      x: (s.x as number[]).map(v => v > 180 ? v - 360 : v),
+      y: s.y,
+      line: { color: LINE_PALETTE[i % LINE_PALETTE.length], width: 2 },
+    } as Partial<Plotly.PlotData>));
+  }, [sensorCylNode]);
+
+  const sensorCylLayout = useMemo(() =>
+    themedLayout(dark, {
+      xaxis: { title: { text: sensorCylNode?.axes.x ?? "φ (deg)" }, range: [-180, 180], dtick: 90 },
+      yaxis: { title: { text: sensorCylNode?.axes.y ?? "θ (deg)" }, range: [-180, 180], dtick: 90 },
+      showlegend: false,
+      margin: { t: 4, b: 40, l: 48, r: 8 },
+    } as Partial<Plotly.Layout>),
+  [dark, sensorCylNode]);
+
+  // ── Shared y-range: signal conditioning + residuals ───────────────
+  const signalYRange = useMemo(() => {
+    if (!signalNode) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const s of signalNode.series)
+      for (const v of s.y as number[]) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    return [lo, hi] as [number, number];
+  }, [signalNode]);
+
+  const sharedSigResRange = useMemo(() => {
+    if (!signalYRange && !fitResNode) return null;
+    let lo = signalYRange?.[0] ?? Infinity;
+    let hi = signalYRange?.[1] ?? -Infinity;
+    for (const s of fitResNode?.series ?? [])
+      for (const v of s.y as number[]) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    return [lo, hi] as [number, number];
+  }, [signalYRange, fitResNode]);
+
+  // ── Signal conditioning plots ─────────────────────────────────────
+  const signalData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!signalNode) return [];
+    const pairs = signalNode.meta?.pairs as { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
+    if (!pairs) return lineTraces(signalNode);
+
+    const traces: Partial<Plotly.PlotData>[] = [];
+    pairs.forEach((pair, pIdx) => {
+      const isEnabled = enabledChannels.has(pair.channel);
+      const color = LINE_PALETTE[pIdx % LINE_PALETTE.length];
+      const prep = signalNode.series[pair.prepared_idx];
+      const raw  = signalNode.series[pair.raw_idx];
+      if (prep) {
+        traces.push({
+          type: "scatter" as const, mode: "lines" as const,
+          name: prep.name, x: prep.x, y: prep.y,
+          line: { color, width: 1.5 },
+          visible: isEnabled ? true : "legendonly",
+        } as Partial<Plotly.PlotData>);
+      }
+      if (raw) {
+        traces.push({
+          type: "scatter" as const, mode: "lines" as const,
+          name: raw.name, x: raw.x, y: raw.y,
+          line: { color, width: 1, dash: "dot" as const },
+          opacity: 0.55,
+          visible: isEnabled ? true : "legendonly",
+          showlegend: false,
+        } as Partial<Plotly.PlotData>);
+      }
+    });
+    return traces;
+  }, [signalNode, enabledChannels]);
+
+  const signalLayout = useMemo(() =>
+    signalNode ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: signalNode.axes.x }, showticklabels: false },
+      yaxis: {
+        title: { text: signalNode.axes.y },
+        ...(sharedSigResRange ? { range: sharedSigResRange } : {}),
+      },
+      showlegend: false,
+      margin: { t: 4, b: 4, l: 60, r: 20 },
+    } as Partial<Plotly.Layout>) : {},
+  [dark, signalNode, timeXAxis, sharedSigResRange]);
+
+  // ── Dynamic chi² y-range ──────────────────────────────────────────
+  const chiSqYRange = useMemo(() => {
+    if (!chiSqNode) return null;
+    const vals = (chiSqNode.series[0].y as number[]).filter((v: number) => v > 0);
+    if (!vals.length) return null;
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    return [Math.floor(Math.log10(lo * 0.5)), Math.ceil(Math.log10(hi * 2))];
+  }, [chiSqNode]);
+
+  // ── Chi-squared plot ──────────────────────────────────────────────
+  const chiSqData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!chiSqNode) return [];
+    return [{
+      type: "scatter" as const, mode: "lines" as const,
+      name: "χ²", x: chiSqNode.series[0].x, y: chiSqNode.series[0].y,
+      line: { color: LINE_PALETTE[0], width: 1.5 },
+    } as Partial<Plotly.PlotData>];
+  }, [chiSqNode]);
+
+  const chiSqLayout = useMemo(() =>
+    chiSqNode ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: chiSqNode.axes.x } },
+      yaxis: {
+        title: { text: "χ²" }, type: "log" as const,
+        ...(chiSqYRange ? { range: chiSqYRange } : {}),
+      },
+      shapes: [
+        { type: "line" as const, x0: 0, x1: 1, xref: "paper" as const,
+          y0: 0, y1: 0, yref: "y" as const,
+          line: { color: dark ? "#aaa" : "#555", width: 1, dash: "dash" as const } },
+      ],
+      showlegend: false,
+      margin: { t: 4, b: 40, l: 60, r: 20 },
+    } as Partial<Plotly.Layout>) : {},
+  [dark, chiSqNode, timeXAxis, chiSqYRange]);
+
+  // ── Fit residuals plot ────────────────────────────────────────────
+  const worstChannels = useMemo(() => {
+    if (!fitResNode) return new Set<string>();
+    const ptps = fitResNode.series.map(s => {
+      const lo = Math.min(...s.y), hi = Math.max(...s.y);
+      return { name: s.name, ptp: hi - lo };
+    });
+    ptps.sort((a, b) => b.ptp - a.ptp);
+    return new Set(ptps.slice(0, 6).map(p => p.name));
+  }, [fitResNode]);
+
+  const fitResData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!fitResNode) return [];
+    return fitResNode.series.map((s, i) => {
+      const isWorst = worstChannels.has(s.name);
+      return {
+        type: "scatter" as const, mode: "lines" as const,
+        name: s.name, x: s.x, y: s.y,
+        line: {
+          color: LINE_PALETTE[i % LINE_PALETTE.length],
+          width: isWorst ? 2 : 1,
+        },
+        opacity: isWorst ? 1 : 0.4,
+      } as Partial<Plotly.PlotData>;
+    });
+  }, [fitResNode, worstChannels]);
+
+  const fitResLayout = useMemo(() =>
+    fitResNode ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: fitResNode.axes.x }, showticklabels: false },
+      yaxis: {
+        title: { text: "residual (T)" },
+        ...(sharedSigResRange ? { range: sharedSigResRange } : {}),
+      },
+      showlegend: false,
+      margin: { t: 4, b: 4, l: 60, r: 20 },
+    } as Partial<Plotly.Layout>) : {},
+  [dark, fitResNode, sharedSigResRange, timeXAxis]);
+
+  // ── Section 8: phi_t waterfall ────────────────────────────────────
+  const cmapProps = useMemo(() => {
+    if (colormapChoice === "cividis") return { colorscale: "Cividis", reversescale: false };
+    if (colormapChoice === "viridis") return { colorscale: "Viridis", reversescale: false };
+    return { colorscale: "RdBu", reversescale: true };  // RdBu_r ≈ notebook matplotlib
+  }, [colormapChoice]);
+
+  const phiTimeData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!phiTimePlot) return [];
+    const [zmin, zmax] = phiTimePlot.zrange ?? [-42, 42];
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "heatmap" as const,
+      x: phiTimePlot.x, y: phiTimePlot.y, z: phiTimePlot.z,
+      ...cmapProps,
+      zmin, zmax,
+      zsmooth: false,
+      showscale: true,
+      colorbar: { title: { text: "Fit" }, thickness: 12, outlinewidth: 0 },
+    } as Partial<Plotly.PlotData>];
+    if (phiPeak) {
+      traces.push({
+        type: "scatter" as const, mode: "markers" as const,
+        x: phiTimePlot.x, y: phiPeak,
+        marker: { symbol: "circle-open" as const, size: 4, color: "white", line: { width: 1, color: "white" } },
+        hoverinfo: "skip" as const, showlegend: false,
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [phiTimePlot, phiPeak, cmapProps]);
 
   const phiTimeLayout = useMemo(() =>
-    phiTimeRemapped ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: phiTimeRemapped.axes.x } },
-      yaxis: { title: { text: phiTimeRemapped.axes.y }, dtick: 90, range:[-180,180] },
-      shapes: [cursorLine],
+    phiTimePlot ? themedLayout(dark, {
+      xaxis: { ...timeXAxis, title: { text: phiTimePlot.axes.x } },
+      yaxis: { title: { text: phiTimePlot.axes.y }, range: [0, 360], dtick: 90, tickvals: [0, 90, 180, 270, 360] },
+      margin: { t: 4, b: 40, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, phiTimeRemapped, cursorLine, timeXAxis]);
+  [dark, phiTimePlot, timeXAxis]);
 
+  // ── Section 7: amplitude & phase ─────────────────────────────────
   const ampData = useMemo(() =>
-    ampNode?.kind === "line" ? lineTraces(ampNode) : [],
+    ampNode?.kind === "line" ? lineTraces(ampNode as LineNode, { palette: MODE_PALETTE }) : [],
   [ampNode]);
 
   const ampLayout = useMemo(() =>
     ampNode?.kind === "line" ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: ampNode.axes.x } },
-      yaxis: { title: { text: ampNode.axes.y } },
+      xaxis: { ...timeXAxis, title: { text: (ampNode as LineNode).axes.x } },
+      yaxis: { title: { text: (ampNode as LineNode).axes.y }, rangemode: "tozero" as const },
       showlegend: true,
-      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
-      shapes: [cursorLine],
+      legend: {
+        orientation: "h" as const, y: 1.18, font: { size: 10 },
+        title: { text: String((ampNode as LineNode).meta?.legend_title ?? "n"), font: { size: 10 } },
+      },
+      margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, ampNode, cursorLine, timeXAxis]);
+  [dark, ampNode, timeXAxis]);
 
-  const phaseTimeData = useMemo(() =>
-    phaseTimeNode?.kind === "line" ? lineTraces(phaseTimeNode) : [],
-  [phaseTimeNode]);
+  const phaseTimeData = useMemo(() => {
+    if (phaseTimeNode?.kind !== "line") return [];
+    const phaseVisible = (phaseTimeNode as LineNode).meta?.phase_visible as boolean[] | undefined;
+    return lineTraces(phaseTimeNode as LineNode, { visible: phaseVisible, palette: MODE_PALETTE });
+  }, [phaseTimeNode]);
 
   const phaseTimeLayout = useMemo(() =>
     phaseTimeNode?.kind === "line" ? themedLayout(dark, {
-      xaxis: { ...timeXAxis, title: { text: phaseTimeNode.axes.x } },
-      yaxis: { title: { text: phaseTimeNode.axes.y } },
+      xaxis: { ...timeXAxis, title: { text: (phaseTimeNode as LineNode).axes.x } },
+      yaxis: {
+        title: { text: (phaseTimeNode as LineNode).axes.y },
+        range: [-180, 180],
+        tickvals: [-180, -90, 0, 90, 180],
+      },
       showlegend: true,
       legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
-      shapes: [cursorLine],
+      margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, phaseTimeNode, cursorLine, timeXAxis]);
+  [dark, phaseTimeNode, timeXAxis]);
+
+  // ── Signal conditioning channel pairs ─────────────────────────────
+  const signalPairs = signalNode?.meta?.pairs as { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
 
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
         <h2>Quasi-stationary — spatial fit δB<sub>p</sub>(φ, θ)</h2>
-        <p className="desc" style={{ margin: 0 }}>shot {machine}{modeTag ? ` · ${modeTag}` : ""}</p>
+        <p className="desc" style={{ margin: 0 }}>shot {machine}</p>
       </div>
 
-      {/* Streaming progress bar — visible while live frames arrive */}
-      {progress < 1 && (
-        <div style={{ height: 2, background: "var(--border)", borderRadius: 1, overflow: "hidden" }}>
-          <div style={{
-            height: "100%", background: "var(--accent)",
-            width: `${Math.round(progress * 100)}%`,
-            transition: "width 0.3s ease",
-          }} />
+      {/* ── Settings bar ──────────────────────────────────────────────── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          Array
+          <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
+            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            {CHANNEL_FILTERS.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          n modes
+          <input value={ns} onChange={e => setNs(e.target.value)}
+            style={{ width: 60, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          m modes
+          <input value={ms} onChange={e => setMs(e.target.value)}
+            style={{ width: 40, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          Detrend
+          <select value={detrendType} onChange={e => setDetrendType(e.target.value)}
+            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            <option value="baseline">baseline</option>
+            <option value="none">none</option>
+            <option value="linear">linear</option>
+            <option value="endpoints">endpoints</option>
+          </select>
+        </label>
+        {detrendType !== "none" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            band (ms)
+            <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
+              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            –
+            <input placeholder="auto" value={detrendHi} onChange={e => setDetrendHi(e.target.value)}
+              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          </label>
+        )}
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          t trim (ms)
+          <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
+            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          –
+          <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
+            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          {paramsDirty && (
+            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
+          )}
+          <button
+            onClick={() => setCommittedParams(qsParams)}
+            style={{
+              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              background: paramsDirty ? "var(--accent)" : "var(--panel)",
+              color: paramsDirty ? "#fff" : "var(--text-dim)",
+              border: "1px solid var(--border)",
+              fontWeight: paramsDirty ? 600 : 400,
+            }}
+          >
+            Plot
+          </button>
         </div>
-      )}
+      </div>
 
-      {/* Two-column body: left = vs-φ  ·  right = vs-time */}
-      <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 10 }}>
+      {/* ── Plot content — show immediately; message only if data unavailable ── */}
+      {noData ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <strong>No data for shot {machine}.</strong><br />
+          The HDF5 file for this shot has not been fetched yet.<br />
+          Use the <strong>pull panel</strong> in the left sidebar to fetch the data, then click Plot.
+        </div>
+      ) : fitUnavailable ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <strong>No quasi-stationary fit for shot {machine}.</strong><br />
+          The SLCONTOUR fit needs the Bp LFS midplane array; this shot was most likely
+          fetched for rotating-mode analysis only. Re-fetch it with the quasi-stationary
+          channels, or choose a QS-capable shot.<br />
+          <span style={{ opacity: 0.7 }}>reason: {fitError}</span>
+        </div>
+      ) : (<>
 
-        {/* LEFT — φ-space plots stacked */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {qualityNode?.kind === "metrics" && <NodeView node={qualityNode} />}
-
-          {contourLoading && <div className="placeholder">loading contour…</div>}
-          {contourError && <div className="placeholder" style={{ color: "var(--bad)" }}>{contourError}</div>}
-          {heroContour && <Plot height={280} data={heroData} layout={heroLayout} />}
-
-          {phaseFitRemapped && (
-            <div>
-              <div className="metrics-title">phase vs φ · n = {String(phaseFitRemapped.meta?.n_fit ?? "?")}</div>
-              <Plot height={175} data={phaseFitData} layout={phaseFitLayout} />
+      {/* ── Section D+E: Time-series results — PRIMARY, at top ────────── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* Section 8: Contour φ–t heatmap */}
+        {phiTimePlot && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+              <div className="metrics-title">δB<sub>p</sub>(φ, t) · Contour — θ = 0°</div>
+              {(["rdbu", "cividis", "viridis"] as const).map(cm => (
+                <button key={cm} onClick={() => setColormapChoice(cm)}
+                  style={{
+                    fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
+                    background: colormapChoice === cm ? "var(--accent)" : "var(--panel)",
+                    color: colormapChoice === cm ? "#fff" : "var(--text-dim)",
+                    border: "1px solid var(--border)",
+                  }}>
+                  {cm === "rdbu" ? "default" : cm}
+                </button>
+              ))}
             </div>
-          )}
-        </div>
+            {phiRms && (
+              <Plot height={70} data={[{
+                type: "scatter" as const, mode: "lines" as const,
+                x: phiTimePlot.x, y: phiRms,
+                line: { color: LINE_PALETTE[0], width: 1.5 },
+                showlegend: false,
+              } as Partial<Plotly.PlotData>]} layout={themedLayout(dark, {
+                xaxis: { ...timeXAxis, showticklabels: false },
+                yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
+                margin: { t: 4, b: 4, l: 60, r: 80 },
+              } as Partial<Plotly.Layout>)} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_rms")} download={dl("phi_t")} />
+            )}
+            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
+          </div>
+        )}
 
-        {/* RIGHT — time-series plots stacked, all sharing the same x range */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {phiTimeRemapped && (
-            <div>
-              <div className="metrics-title">δB<sub>p</sub> vs time — toroidal array</div>
-              <Plot height={200} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} />
-              <ColorScale zrange={(phiTimeRemapped.zrange ?? [-42, 42]) as [number, number]} dark={dark} />
+        {/* Section 7: Mode amplitude & phase */}
+        {ampNode?.kind === "line" && (
+          <Plot height={200} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("amplitude")} download={dl("amplitude")} />
+        )}
+        {phaseTimeNode?.kind === "line" && (
+          <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phase_t")} download={dl("phase_t")} />
+        )}
+      </div>
+
+      {/* ── Section C: Fit Quality — collapsible, collapsed by default ── */}
+      <div>
+        <CollapseHeader open={fitQualityOpen} onToggle={() => setFitQualityOpen(o => !o)}>
+          fit quality
+        </CollapseHeader>
+        {fitQualityOpen && (
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {/* Signal conditioning — top of stack, full width */}
+              {signalNode
+                ? <Plot height={200} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("signal_conditioning")} download={dl("signal_conditioning")} />
+                : <div className="placeholder" style={{ height: 200 }}>loading signals…</div>
+              }
+              {/* Residuals — middle */}
+              {fitResNode
+                ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("fit_residuals")} download={dl("fit_residuals")} />
+                : <div className="placeholder" style={{ height: 150 }}>loading residuals…</div>
+              }
+              {/* Chi² — bottom */}
+              {chiSqNode
+                ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("chi_sq_t")} download={dl("chi_sq_t")} />
+                : <div className="placeholder" style={{ height: 130 }}>loading χ²…</div>
+              }
             </div>
-          )}
-
-          {ampNode?.kind === "line" && (
-            <Plot height={145} data={ampData} layout={ampLayout} onClick={seekTo} />
-          )}
-
-          {phaseTimeNode?.kind === "line" && (
-            <Plot height={145} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} />
-          )}
-        </div>
+            <div style={{ width: 190, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+              {signalPairs && (
+                <div style={{
+                  display: "flex", flexDirection: "column", gap: 3,
+                  fontSize: 10, color: "var(--text-dim)",
+                  overflowY: "auto", maxHeight: 220,
+                  paddingBottom: 4, borderBottom: "1px solid var(--border)",
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: 2 }}>channels</div>
+                  {signalPairs.map((pair, i) => (
+                    <label key={pair.channel} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                      <input type="checkbox"
+                        checked={enabledChannels.has(pair.channel)}
+                        onChange={() => toggleChannel(pair.channel)}
+                        style={{ accentColor: LINE_PALETTE[i % LINE_PALETTE.length] }}
+                      />
+                      <span style={{ color: LINE_PALETTE[i % LINE_PALETTE.length] }}>{pair.channel}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {qualityNode && <NodeView node={qualityNode} download={dl("fit_quality")} />}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Time scrubber — sticky so it's always reachable */}
-      <div style={{
-        position: "sticky", bottom: 0,
-        display: "flex", alignItems: "center", gap: 12,
-        padding: "8px 0 2px",
-        borderTop: "1px solid var(--border)",
-        background: "var(--panel)",
-      }}>
-        <span className="mono" style={{ fontSize: 12, minWidth: 90, color: "var(--text-dim)" }}>
-          t = {localCursor} ms
-        </span>
-        <input
-          type="range" min={tMin} max={tMax} step={10} value={localCursor}
-          onChange={(e) => setLocalCursor(Number(e.target.value))}
-          onPointerUp={() => setCursorMs(localCursor)}
-          style={{ flex: 1 }}
-        />
+      {/* ── Section A: Sensor Map — collapsible, at bottom ────────────── */}
+      <div>
+        <CollapseHeader open={sensorMapOpen} onToggle={() => setSensorMapOpen(o => !o)}>
+          sensor map · {channelFilter}
+        </CollapseHeader>
+        {sensorMapOpen && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
+              {sensorRzNode
+                ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} exportName={xn("sensor_map_rz")} download={dl("sensor_map_rz")} />
+                : <div className="placeholder">loading…</div>
+              }
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
+              {sensorCylNode
+                ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
+                : <div className="placeholder">loading…</div>
+              }
+            </div>
+          </div>
+        )}
       </div>
+      </>)}
     </div>
   );
 }
