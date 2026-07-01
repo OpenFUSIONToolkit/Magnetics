@@ -348,8 +348,11 @@ def load_sensor_table(device="DIII-D"):
     return sensor_geometry(device)
 
 
-def load_wall(device="DIII-D"):
+def load_wall(device="DIII-D", shot=None):
     """Return the ``(r, z)`` first-wall outline arrays from the device JSON.
+
+    The ``wall`` entry is shot-segmented like sensor records; resolve the
+    segment active at ``shot`` via :func:`_segment_fields`.
 
     Returns ``(None, None)`` if no device file or wall section is found.
     """
@@ -358,6 +361,9 @@ def load_wall(device="DIII-D"):
     except (FileNotFoundError, OSError):
         return None, None
     wall = dev.get("wall")
-    if not wall or "r" not in wall or "z" not in wall:
+    if not wall:
+        return None, None
+    wall = _segment_fields(wall, shot)
+    if "r" not in wall or "z" not in wall:
         return None, None
     return np.array(wall["r"], dtype=float), np.array(wall["z"], dtype=float)

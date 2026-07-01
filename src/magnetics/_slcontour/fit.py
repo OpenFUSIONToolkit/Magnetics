@@ -157,6 +157,7 @@ def fit(
     fit_basis="sinusoidal-integral",
     fit_geometry="cylindrical",
     fit_cond=10.0,
+    sigma_override=None,
     ncenters=6,
     mcenters=1,
     nepsilon=None,
@@ -175,6 +176,9 @@ def fit(
         ``'gaussian-point'``, or ``'gaussian-integral'``.
     :param fit_geometry: ``'cylindrical'`` (phi, theta) or ``'vertical'`` (phi, z).
     :param fit_cond: condition-number cutoff for the lstsq inversion (= 1/rcond).
+    :param sigma_override: when given, use this uniform measurement uncertainty
+        for every channel instead of the per-channel ``signal_sigma`` baked into
+        the dataset at load time.
     :param ncenters: **Gaussian only** — number of phi RBF centres.
     :param mcenters: **Gaussian only** — number of theta/z RBF centres.
     :param nepsilon: **Gaussian only** — phi RBF width in degrees; ``None`` =
@@ -220,12 +224,15 @@ def fit(
     y2 = ds[f"{ykey}_end2"].values
 
     sigma = ds["signal_sigma"].values.astype(float)
-    bad = ~np.isfinite(sigma)
-    if bad.any():
-        fill = ds.attrs.get("sigma_type", np.nan)
-        if not np.isfinite(fill):
-            fill = np.nanmean(sigma) if np.isfinite(np.nanmean(sigma)) else 1.0
-        sigma[bad] = fill
+    if sigma_override is not None:
+        sigma = np.full_like(sigma, float(sigma_override))
+    else:
+        bad = ~np.isfinite(sigma)
+        if bad.any():
+            fill = ds.attrs.get("sigma_type", np.nan)
+            if not np.isfinite(fill):
+                fill = np.nanmean(sigma) if np.isfinite(np.nanmean(sigma)) else 1.0
+            sigma[bad] = fill
 
     # ── basis-specific mode / centre setup ────────────────────────────────────
     is_sinusoidal = fit_basis.startswith("sinusoidal")

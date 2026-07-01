@@ -5,6 +5,11 @@ but ``omfit_compat.sensor_geometry`` used to read the flat ``sensors[c]["r"]``,
 which returns NaN under the segmented schema. All-NaN sensor extents make the QS
 fit's basis matrix NaN and the SVD never converges. These tests need only the
 committed device JSON — no fetched HDF5.
+
+``load_wall`` had the identical bug (fixed alongside): the device JSON's ``wall``
+key is segmented the same way, but ``load_wall`` read the flat ``wall["r"]``
+directly, so it silently returned ``(None, None)`` for every shot — dropping the
+tokamak outline from the Sensor Map plot without ever raising an error.
 """
 
 from __future__ import annotations
@@ -60,6 +65,14 @@ def test_sensor_geometry_shot_none_falls_back_to_earliest():
     geo = oc.sensor_geometry("DIII-D")
     sel = geo.sel(channel=_QS_CHANNELS[0])
     assert np.isfinite(float(sel["r_end1"].values))
+
+
+@pytest.mark.parametrize("shot", [None, 124400, 151593, 184928])
+def test_load_wall_returns_outline(shot):
+    r, z = oc.load_wall("DIII-D", shot=shot)
+    assert r is not None and z is not None
+    assert len(r) == len(z) > 0
+    assert np.all(np.isfinite(r)) and np.all(np.isfinite(z))
 
 
 @pytest.mark.parametrize("shot", [124400, 151593, 156014, 184928, 990000])

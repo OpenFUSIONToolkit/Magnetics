@@ -9,6 +9,7 @@ import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
 import type { ContourNode, LineNode, MetricsNode } from "../../lib/contract";
 import { phiPeak as phiPeakFn, phiRms as phiRmsFn } from "../../lib/qsTransforms";
+import { fetchDevices, type DeviceInfo } from "../../lib/api";
 
 // ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
 const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
@@ -94,7 +95,9 @@ function lineTraces(
   return traces;
 }
 
-// ── Sensor arrays most useful for QS analysis ────────────────────────
+// ── Sensor arrays most useful for QS analysis — offline/mock fallback,
+// used when there's no live backend (or no matching device) to supply the
+// full device.sensor_sets list the left sidebar's pull panel uses ────────
 const CHANNEL_FILTERS = [
   "Bp LFS midplane",
   "Bp LFS midplane bdot",
@@ -129,7 +132,7 @@ function CollapseHeader({
 // ── Component ─────────────────────────────────────────────────────────
 export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
-  const { cursorMs, setCursorMs } = useStore();
+  const { cursorMs, setCursorMs, machines } = useStore();
 
   // ── Analysis settings ─────────────────────────────────────────────
   const [ns, setNs]               = useState("1,2,3");
@@ -142,9 +145,25 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [tmaxMs, setTmaxMs]       = useState("");
   const [colormapChoice, setColormapChoice] = useState<"rdbu" | "cividis" | "viridis">("rdbu");
 
+  // ── Advanced fit-tuning settings ───────────────────────────────────
+  const [uncertainty, setUncertainty]   = useState("0.00002");
+  const [energyFraction, setEnergyFraction] = useState("0.98");
+  const [fitBasis, setFitBasis]         = useState("sinusoidal-integral");
+  const [fitCond, setFitCond]           = useState("10.0");
+
+  // ── Devices (for the Array dropdown's sensor-set list) ─────────────
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  useEffect(() => { void fetchDevices().then(setDevices); }, []);
+  const currentDeviceName = machines.find(m => m.id === machine)?.device;
+  const matchedDevice = devices.find(d => d.name === currentDeviceName);
+  const channelFilterOptions = matchedDevice?.sensor_sets.length
+    ? matchedDevice.sensor_sets
+    : CHANNEL_FILTERS;
+
   // ── Section collapse state ────────────────────────────────────────
   const [fitQualityOpen, setFitQualityOpen] = useState(false);
   const [sensorMapOpen, setSensorMapOpen]   = useState(false);
+  const [advancedOpen, setAdvancedOpen]     = useState(false);
 
   // ── Deferred fetch: only compute when user clicks Plot ────────────
   const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
@@ -154,6 +173,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       ns, ms,
       channel_filter: channelFilter,
       detrend_type: detrendType,
+      sigma: uncertainty,
+      energy: energyFraction,
+      fit_basis: fitBasis,
+      fit_cond: fitCond,
     };
     if (detrendLo && detrendHi) {
       p.detrend_lo = detrendLo;
@@ -162,7 +185,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     if (tminMs) p.tmin_ms = tminMs;
     if (tmaxMs) p.tmax_ms = tmaxMs;
     return p;
-  }, [ns, ms, channelFilter, detrendType, detrendLo, detrendHi, tminMs, tmaxMs]);
+  }, [
+    ns, ms, channelFilter, detrendType, detrendLo, detrendHi, tminMs, tmaxMs,
+    uncertainty, energyFraction, fitBasis, fitCond,
+  ]);
 
   useEffect(() => {
     if (cursorMs === 0) setCursorMs(3140);
@@ -566,7 +592,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           Array
           <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
             style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
-            {CHANNEL_FILTERS.map(f => <option key={f} value={f}>{f}</option>)}
+            {channelFilterOptions.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -612,6 +638,18 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
             <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
           )}
           <button
+            onClick={() => setAdvancedOpen(o => !o)}
+            style={{
+              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              background: advancedOpen ? "var(--border)" : "var(--panel)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              fontWeight: 400,
+            }}
+          >
+            Advanced {advancedOpen ? "▲" : "▼"}
+          </button>
+          <button
             onClick={() => setCommittedParams(qsParams)}
             style={{
               fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
@@ -625,6 +663,41 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           </button>
         </div>
       </div>
+
+      {/* ── Advanced options — toggled by the "Advanced" button above, styled ──
+          like the settings bar it belongs to (not the collapsible plot sections) ── */}
+      {advancedOpen && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+            title="Measurement uncertainty (σ, in T) applied uniformly to every sensor channel in the fit.">
+            uncertainty (σ)
+            <input value={uncertainty} onChange={e => setUncertainty(e.target.value)}
+              style={{ width: 70, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+            title="Sets the minimum singular values kept in a SVD filter of the channel-by-time data matrix. This filters the data for the most coherent spatial-temporal combinations of sensors of the selected time window (use 1.0 if the time window includes disparate amplitude scales of interest).">
+            fraction of energy included
+            <input value={energyFraction} onChange={e => setEnergyFraction(e.target.value)}
+              style={{ width: 50, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            basis function
+            <select value={fitBasis} onChange={e => setFitBasis(e.target.value)}
+              style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+              <option value="sinusoidal-integral">sinusoidal-integral</option>
+              <option value="sinusoidal-point">sinusoidal-point</option>
+              <option value="gaussian-integral">gaussian-integral</option>
+              <option value="gaussian-point">gaussian-point</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+            title="Sets the condition number of the basis function matrix used for the lsq fitting. Smaller condition numbers will ignore mode combinations the chosen channels are relatively poor at constraining. Sufficiently larger numbers will blindly fit all modes chosen above.">
+            fit condition
+            <input value={fitCond} onChange={e => setFitCond(e.target.value)}
+              style={{ width: 50, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          </label>
+        </div>
+      )}
 
       {/* ── Plot content — show immediately; message only if data unavailable ── */}
       {noData ? (

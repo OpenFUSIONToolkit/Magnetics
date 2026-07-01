@@ -63,7 +63,7 @@ def plot_sensors(raw, channel_filter=".*", geometry="rz", ax=None, device=None, 
         (line,) = ax.plot(x, y, label=c, **plot_kwargs)
 
     if geometry == "rz":
-        r_wall, z_wall = load_wall(device)
+        r_wall, z_wall = load_wall(device, shot=raw.attrs.get("shot"))
         if r_wall is not None:
             ax.plot(r_wall, z_wall, color="0.4", lw=1, label="wall")
         ax.set_xlabel("R (m)")

@@ -1084,6 +1084,9 @@ def _qs_run(
     energy: float,
     tmin_s: float,
     tmax_s: float,
+    fit_basis: str,
+    fit_cond: float,
+    sigma: float | None,
 ):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
@@ -1112,6 +1115,11 @@ def _qs_run(
             energy=energy,
             detrend_type=detrend_type,
             detrend_band=(db_lo_s, db_hi_s),
+        ),
+        fit_kwargs=dict(
+            fit_basis=fit_basis,
+            fit_cond=fit_cond,
+            sigma_override=sigma,
         ),
         verbose=False,
     )
@@ -1167,6 +1175,10 @@ def _prep_qs_ds(shot, params):
     cutoff_lo = float(params.get("cutoff_lo", 5.0)) if params else 5.0
     cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
     energy = float(params.get("energy", 0.98)) if params else 0.98
+    fit_basis = params.get("fit_basis", "sinusoidal-integral") if params else "sinusoidal-integral"
+    fit_cond = float(params.get("fit_cond", 10.0)) if params else 10.0
+    sigma_str = params.get("sigma") if params else None
+    sigma = float(sigma_str) if sigma_str is not None else None
 
     # Time trim: read shot-window defaults from HDF5, then apply any user override.
     path = h5source.shot_file(str(shot))
@@ -1194,6 +1206,9 @@ def _prep_qs_ds(shot, params):
             energy,
             tmin_s,
             tmax_s,
+            fit_basis,
+            fit_cond,
+            sigma,
         )
 
 
@@ -1234,7 +1249,7 @@ def _sensor_map_rz(shot, params=None) -> dict:
 
     from .._slcontour.omfit_compat import load_wall
 
-    r_wall, z_wall = load_wall(device)
+    r_wall, z_wall = load_wall(device, shot=run.shot)
 
     series = []
     for c in channels:

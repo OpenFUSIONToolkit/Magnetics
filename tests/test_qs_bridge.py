@@ -49,3 +49,21 @@ def test_amplitude_sigma_is_finite(fit_ds):
     node = qs_bridge.fit_to_amplitude_node(fit_ds)
     sigma = np.asarray(node["meta"]["sigma"], dtype=float)
     assert np.all(np.isfinite(sigma))
+
+
+def test_sigma_override_changes_amplitude_uncertainty(synthetic_shot):
+    default_fit = nodes._prep_qs_ds(synthetic_shot, {}).fit
+    overridden_fit = nodes._prep_qs_ds(synthetic_shot, {"sigma": "1.0"}).fit
+    default_sigma = qs_bridge.fit_to_amplitude_node(default_fit)["meta"]["sigma"]
+    overridden_sigma = qs_bridge.fit_to_amplitude_node(overridden_fit)["meta"]["sigma"]
+    assert np.mean(overridden_sigma) > np.mean(default_sigma)
+
+
+def test_fit_basis_param_reaches_fit(synthetic_shot):
+    run = nodes._prep_qs_ds(synthetic_shot, {"fit_basis": "gaussian-point"})
+    assert run.fit.attrs["fit_basis"] == "gaussian-point"
+
+
+def test_fit_cond_param_reaches_fit(synthetic_shot):
+    run = nodes._prep_qs_ds(synthetic_shot, {"fit_cond": "3.0"})
+    assert run.fit.attrs["fit_condition"] == 3.0
