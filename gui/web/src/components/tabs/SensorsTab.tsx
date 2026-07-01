@@ -404,10 +404,10 @@ export default function SensorsTab({ machine }: { machine: string }) {
               time-dependent overlay (equilibrium) is a future backend node (#43). */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} />
+              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} exportName={`shot_${machine}_sensors_2d`} />
             </div>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot height={460} data={traces3d} layout={LAYOUT_3D} />
+              <Plot height={460} data={traces3d} layout={LAYOUT_3D} exportName={`shot_${machine}_sensors_3d`} />
             </div>
           </div>
         </>
