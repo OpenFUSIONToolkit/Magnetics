@@ -257,26 +257,37 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     # asking it to add the forward with `ssh -O forward`. This returns immediately
     # and relies on ControlPersist to keep the forward alive -- no long-running
     # `ssh -N` (which a Host carrying `RemoteCommand`/`RequestTTY` in ssh-config,
-    # like PPPL's `flux`, would tear straight back down) and no fresh Duo. Only when
-    # no explicit creds were supplied (env=None) and a master actually answers.
+    # like PPPL's `flux`, would tear straight back down) and NO fresh Duo. We try it
+    # even when creds/askpass were supplied (`env`): riding an existing master needs
+    # no auth at all, so it beats spawning a fresh Duo login.
+    #
+    # A device `network` block gives a full hostname+port (flux.pppl.gov:22), but the
+    # user's persistent master is usually keyed by the ssh-config ALIAS (`ssh flux`,
+    # whose Host block carries the ControlPath); the full hostname matches a portless
+    # catchall with no ControlPath. So try the short first-label form too.
     fwd_spec = ["-L", f"{lport}:{mds_host}:{mds_port}"]
-    if env is None and not gw_port and _control_master_alive(gw_host):
-        r = subprocess.run(
-            ["ssh", "-O", "forward", *fwd_spec, gw_host], capture_output=True, text=True
-        )
+    cm_targets: list[str] = []
+    short = gw_host.split(".")[0]
+    if short and short != gw_host:
+        cm_targets.append(short)  # network hostname → alias (flux.pppl.gov → flux)
+    if not gw_port:
+        cm_targets.append(gw_host)  # an alias/host passed directly (no :port)
+    for cm in cm_targets:
+        if not _control_master_alive(cm):
+            continue
+        r = subprocess.run(["ssh", "-O", "forward", *fwd_spec, cm], capture_output=True, text=True)
         if r.returncode == 0:
             sys.stderr.write(
-                f"Reusing SSH ControlMaster for {gw_host} -> {mds_host}:{mds_port} "
-                f"(local :{lport}).\n"
+                f"Reusing SSH ControlMaster '{cm}' -> {mds_host}:{mds_port} (local :{lport}).\n"
             )
             try:
                 yield lport
             finally:
                 subprocess.run(
-                    ["ssh", "-O", "cancel", *fwd_spec, gw_host], capture_output=True, text=True
+                    ["ssh", "-O", "cancel", *fwd_spec, cm], capture_output=True, text=True
                 )
             return
-        sys.stderr.write(f"-O forward failed ({r.stderr.strip()[:120]}); spawning a tunnel.\n")
+        sys.stderr.write(f"-O forward via '{cm}' failed ({r.stderr.strip()[:80]}); trying next.\n")
 
     # -C (SSH compression): mdsip ships raw float, but PTDATA waveforms are ~4-5x
     # compressible, and this laptop->cybele->atlas tunnel is the slow off-network
@@ -1050,6 +1061,18 @@ def fetch_shot(
         raise ValueError(f"unknown analysis {analysis!r}; choose from {', '.join(ms.ANALYSES)}")
     progress = progress or _default_progress
 
+    # Tree-access devices (NSTX/NSTX-U `fastmag`) have no cluster/toksearch path, so
+    # a `remote`/`toksearch` request would SSH to a (nonexistent) cluster. Coerce it
+    # to the mdsthin tree fetch BEFORE the remote branch below runs.
+    if backend in ("remote", "toksearch", "auto"):
+        try:
+            if load_device(device).get("access") == "mdsplus_tree":
+                if backend != "mdsthin":
+                    progress(0.0, f"{backend}→mdsthin (tree device)")
+                backend = "mdsthin"
+        except Exception:  # noqa: BLE001 - unknown device falls through to normal handling
+            pass
+
     if backend == "remote":
         # Orchestrate a pull on the cluster from here; remote side runs this same
         # script with --backend toksearch and writes the file we copy back.
@@ -1082,10 +1105,14 @@ def fetch_shot(
     # Devices whose sensors live in an MDSplus tree (NSTX/NSTX-U `fastmag`) rather
     # than DIII-D PTDATA. These take the dedicated tree fetch path (mdsthin only).
     tree_access = dev.get("access") == "mdsplus_tree"
-    if tree_access and backend in ("toksearch", "remote"):
+    # A tree device has no DIII-D-style analysis→signal map (`ms.signals_for`), so a
+    # pull MUST name a sensor_set; otherwise we'd query DIII-D pointnames against the
+    # tree and every one would be "Node Not Found".
+    if tree_access and not sensor_set:
+        sets = ", ".join(dev.get("sensor_sets", {})) or "none"
         raise ValueError(
-            f"device {device!r} (access='mdsplus_tree') supports only backend='mdsthin'; "
-            f"got {backend!r} (cluster/toksearch backends aren't wired for it yet)."
+            f"device {device!r} needs a sensor_set (its sensors live in an MDSplus "
+            f"tree, with no analysis groups). Available sets: {sets}"
         )
     # Connection endpoints come from the device file's `network` block (machine-
     # agnostic); an explicit gateway/server still overrides.
@@ -1191,7 +1218,11 @@ def fetch_shot(
         # NSTX/NSTX-U: sensors are fastmag tree nodes fetched with a value-window
         # subscript + per-sensor gain/na scaling (see _fetch_mdsthin_tree).
         ssh_env, _ssh_cleanup = (None, lambda: None)
-        if password and not tcp:
+        # Set up the SSH_ASKPASS helper whenever we have EITHER a password OR a Duo
+        # answer -- key-based logins that still require an interactive Duo (PPPL flux)
+        # have no password, so gating on password alone left the tunnel prompting on
+        # the service's tty. `duo` defaults to "1" (push) from the GUI.
+        if (password or duo) and not tcp:
             from .. import sshauth
 
             ssh_env, _ssh_cleanup = sshauth.askpass_env(password, duo)
@@ -1231,7 +1262,11 @@ def fetch_shot(
         # GUI-supplied password → answer the SSH tunnel's auth via askpass (no
         # terminal prompt); without it ssh prompts on the tty as before.
         ssh_env, _ssh_cleanup = (None, lambda: None)
-        if password and not tcp:
+        # Set up the SSH_ASKPASS helper whenever we have EITHER a password OR a Duo
+        # answer -- key-based logins that still require an interactive Duo (PPPL flux)
+        # have no password, so gating on password alone left the tunnel prompting on
+        # the service's tty. `duo` defaults to "1" (push) from the GUI.
+        if (password or duo) and not tcp:
             from .. import sshauth
 
             ssh_env, _ssh_cleanup = sshauth.askpass_env(password, duo)

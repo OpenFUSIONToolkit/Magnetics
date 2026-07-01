@@ -185,3 +185,25 @@ def test_fetch_shot_tree_route_writes_device_id_and_geometry(fake_mdsthin, tmp_p
         d = np.asarray(gA["data"][:])
         t = np.asarray(gA["time"][:])
         assert np.allclose(d, 8.0) and abs(t[0] - 200.0) < 1e-3
+
+
+def test_tree_device_requires_sensor_set():
+    """A tree device pulled without a sensor_set fails fast with a clear message
+    (no analysis→signal map) instead of querying DIII-D pointnames at the tree.
+    Uses the real nstx.json; raises before any network access."""
+    from magnetics.data.fetch.toksearch import fetch_shot
+
+    with pytest.raises(ValueError, match="sensor_set"):
+        fetch_shot(204718, device="nstx", backend="mdsthin", tcp=True)
+
+
+def test_tree_device_coerces_remote_to_mdsthin(monkeypatch):
+    """A remote/toksearch request for a tree device is coerced to mdsthin (no
+    cluster path) rather than SSHing to a nonexistent cluster. We stop right after
+    coercion by requiring a sensor_set, so no network is touched."""
+    from magnetics.data.fetch.toksearch import fetch_shot
+
+    # remote would otherwise hit run_remote (cluster SSH); instead it must reach the
+    # tree path's "needs a sensor_set" guard, proving the coercion ran.
+    with pytest.raises(ValueError, match="sensor_set"):
+        fetch_shot(204718, device="nstx", backend="remote", tcp=True)

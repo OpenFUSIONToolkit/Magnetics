@@ -1230,6 +1230,15 @@ def _prep_qs_ds(shot, params):
     """Parse GUI query params and return the full MagneticsRun object."""
     import h5py
 
+    # The quasi-stationary (SLCONTOUR) pipeline is DIII-D-only: it expects DIII-D Bp
+    # arrays + channel filters and the DIII-D device file. Fail cleanly (422) for
+    # other devices instead of crashing deep in the SLCONTOUR shim.
+    if _dev_geom(str(shot)).device_id != "diiid":
+        raise ValueError(
+            "quasi-stationary (SLCONTOUR) analysis is DIII-D-only; "
+            "use the rotating-mode views for this device"
+        )
+
     ns_raw = params.get("ns", "1,2,3") if params else "1,2,3"
     ms_raw = params.get("ms", "0") if params else "0"
     ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())

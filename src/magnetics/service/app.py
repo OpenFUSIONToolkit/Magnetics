@@ -91,6 +91,13 @@ def devices():
                 "id": path.stem,  # e.g. "diiid" → --device diiid
                 "name": d.get("name", path.stem),  # e.g. "DIII-D"
                 "sensor_sets": list(d.get("sensor_sets", {}).keys()),
+                # `access` = "mdsplus_tree" for NSTX-style devices whose sensors live
+                # in an MDSplus tree: those pull ONLY via mdsthin + a named sensor_set
+                # (no cluster/remote path, no analysis→signal map). Lets the GUI adapt.
+                "access": d.get("access", "ptdata"),
+                # remote (cluster) backend is available only when the device file has
+                # a network.cluster block (DIII-D omega); NSTX has none.
+                "remote_capable": bool((d.get("network", {}) or {}).get("cluster")),
             }
         )
     return out
