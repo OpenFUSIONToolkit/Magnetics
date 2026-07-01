@@ -36,6 +36,17 @@ def real_theta_of(name: str, shot) -> float | None:
 def theta_of(name: str, shot=None) -> float:
     return _DIIID.theta_of(name, shot)
 
+def poloidal_group(name: str, shot=None) -> str | None:
+    """'inboard' | 'outboard' from the sensor's REAL poloidal angle (None if unknown).
+
+    Inboard = high-field side (θ within ±90° of 180°); outboard = low-field side
+    (θ within ±90° of 0°). Uses real_theta_of, so it is only meaningful where the
+    device table has physical θ (post-merge: derived from shot-correct r,z)."""
+    th = real_theta_of(name, shot)
+    if th is None:
+        return None
+    d_in = abs(((th - 180.0 + 180.0) % 360.0) - 180.0)   # angular distance to 180°
+    return "inboard" if d_in < 90.0 else "outboard"
 
 def sensor(name: str, shot=None) -> dict:
     return _DIIID.sensor(name, shot)

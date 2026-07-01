@@ -538,6 +538,17 @@ class ArrayModeSpectrogram:
     quality: NDArray[np.floating]  # (n_times, n_band) resultant length ∈ [0,1]
 
 
+@dataclass(slots=True)
+class ArrayModeParityResult:
+    kind: str
+    time: NDArray[np.floating]              # (n_times,)
+    freq_band: NDArray[np.floating]         # (n_band,)
+    mode_number: NDArray[np.integer]        # (T,F) shared dominant n (groups combined)
+    delta_phase_deg: NDArray[np.floating]   # (T,F) ∠(proj_in·conj(proj_out)) ∈ (-180,180]
+    parity: NDArray[np.integer]             # (T,F) 0 = even (in phase), 1 = odd (out)
+    quality: NDArray[np.floating]           # (T,F) min group resultant ∈ [0,1]
+
+
 def array_mode_spectrogram(
     spectrum: ArrayShapeSpectrum,
     angle_deg: NDArray[np.floating],
@@ -580,6 +591,53 @@ def array_mode_spectrogram(
         mode_number=ns[k].astype(np.intp),
         amplitude=peak,
         quality=peak / denom,
+    )
+
+
+def array_mode_parity(
+    spectrum: ArrayShapeSpectrum,
+    angle_deg: NDArray[np.floating],
+    inboard_mask: NDArray[np.bool_],
+    outboard_mask: NDArray[np.bool_],
+    *,
+    n_max: int = 5,
+) -> ArrayModeParityResult:
+    """Poloidal parity (even/odd m) from two poloidal groups of ONE full-array STFT.
+
+    Each mask selects a toroidally-distributed sub-array at a distinct poloidal angle.
+    Both are projected onto exp(-inφ) independently; the dominant |n| is chosen from
+    the *combined* magnitude so both refer to the SAME n. The phase difference
+    Δφ = ∠(proj_in · conj(proj_out)) at that n is the −m·Δθ parity signature:
+    |Δφ| < 90° → even m (in phase), else odd m (out of phase). Both groups share this
+    STFT's clock, so the intrinsic time-oscillation phase cancels in the difference.
+    Same exp(-inφ) sign as array_mode_spectrogram, so the reported n agrees."""
+    z = np.asarray(spectrum.spec)                          # (P, T, F) complex
+    phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
+    ns = np.arange(-int(n_max), int(n_max) + 1)
+
+    def _proj(mask):
+        basis = np.exp(-1j * ns[:, None] * phi[None, mask])   # (M, P_sub)
+        return np.einsum("mp,ptf->mtf", basis, z[mask])       # (M, T, F)
+
+    p_in, p_out = _proj(inboard_mask), _proj(outboard_mask)
+    amp = np.abs(p_in) + np.abs(p_out)                     # combined → shared n
+    k = np.argmax(amp, axis=0)                             # (T, F)
+    take = lambda P: np.take_along_axis(P, k[None], axis=0)[0]
+    c_in, c_out = take(p_in), take(p_out)                  # complex (T,F) at dominant n
+
+    dphi = np.rad2deg(np.angle(c_in * np.conj(c_out)))     # (-180, 180]
+    parity = np.where(np.abs(dphi) < 90.0, 0, 1).astype(np.intp)
+    q_in  = np.abs(c_in)  / (np.abs(z[inboard_mask]).sum(axis=0)  + 1e-30)
+    q_out = np.abs(c_out) / (np.abs(z[outboard_mask]).sum(axis=0) + 1e-30)
+
+    return ArrayModeParityResult(
+        kind="array_mode_parity",
+        time=np.asarray(spectrum.time),
+        freq_band=np.asarray(spectrum.freq_band),
+        mode_number=ns[k].astype(np.intp),
+        delta_phase_deg=dphi,
+        parity=parity,
+        quality=np.minimum(q_in, q_out),
     )
 
 
