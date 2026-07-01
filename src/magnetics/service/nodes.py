@@ -45,6 +45,20 @@ def _flag(params, key) -> bool:
     return bool(params) and str(params.get(key, "")).lower() in ("1", "true", "yes", "on")
 
 
+def _smooth_sigma_bins(params) -> tuple[float, float]:
+    """Read the GUI's 2-D pre-smoothing widths, expressed directly as Gaussian σ in *grid
+    cells* (STFT bins) along (time, frequency). Cells are resolution-relative — one cell is
+    one (t, f) bin at whatever resolution knob is in effect — so the blur always spans the
+    same number of neighbours, and a "smoothing on" request can't silently round to a sub-bin
+    no-op the way physical ms/kHz widths did. Returns (0.0, 0.0) when ``smooth`` is off, so
+    callers skip the core op."""
+    if not _flag(params, "smooth"):
+        return 0.0, 0.0
+    st = _f(params, "smooth_t_cells", 0.0) or 0.0
+    sf = _f(params, "smooth_f_cells", 0.0) or 0.0
+    return max(0.0, st), max(0.0, sf)
+
+
 def machines() -> list[dict]:
     return h5source.list_shots()
 
@@ -244,8 +258,24 @@ def _prep_spec(shot, params):
         cs = _i(params, "smoothing", 5)
     mc = _i(params, "max_columns", 4000)
     res, probes, dphi = _spec_result(str(shot), sd, max(2, cs), max(2, mc))
+    # Optional 2-D Gaussian pre-smoothing on the FULL band, BEFORE the gates, so contiguous
+    # coherent structure survives gating (and the display + gate share one smoothed field).
+    # σ is in grid cells (resolution-relative); smooth_spectrogram returns a copy — the cached
+    # _spec_result is never mutated.
+    st, sf = _smooth_sigma_bins(params)
+    if st > 0 or sf > 0:
+        res = spectral.smooth_spectrogram(res, sigma_time_bins=st, sigma_freq_bins=sf)
     if _flag(params, "denoise"):
-        res = spectral.denoise_spectrogram(res, coherence_min=_f(params, "coherence_min", 0.5))
+        # power_floor_k=None (or ≤0) skips the per-frequency power floor; the GUI sends it
+        # only when the Power Gate is engaged. floor_percentile sets which percentile over
+        # time defines each frequency's floor (50 = median).
+        pfk = _f(params, "power_floor_k", None)
+        res = spectral.denoise_spectrogram(
+            res,
+            coherence_min=_f(params, "coherence_min", 0.0),
+            power_floor_k=pfk if (pfk is not None and pfk > 0) else None,
+            floor_percentile=_f(params, "floor_percentile", 50.0),
+        )
     f_khz = np.asarray(res.frequency) / 1e3
     mask = np.ones(f_khz.size, dtype=bool)
     fmin, fmax = _f(params, "fmin"), _f(params, "fmax")
@@ -260,11 +290,21 @@ def _spectrogram(shot, params=None) -> dict:
     res, mask, probes, dphi = _prep_spec(shot, params)
     f = np.asarray(res.frequency)[mask] / 1e3
     # power is [n_times, n_freqs]; heatmap z is [i_y=freq][i_x=time] → transpose.
-    z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
+    power = np.asarray(res.power, dtype=float)[:, mask].T
+    z = np.log10(np.maximum(power, 1e-30))
+    # denoise_spectrogram zeroes gated cells; emit them as JSON null (not log10→-30, a
+    # solid floor block) so the heatmap renders them transparent, matching the old
+    # client-side blanking. Real cross-power is essentially never exactly 0, so this
+    # only fires on gated cells.
+    z_list = z.tolist()
+    if _flag(params, "denoise"):
+        gated = z.astype(object)
+        gated[power == 0.0] = None
+        z_list = gated.tolist()
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(),
         f.tolist(),
-        z.tolist(),
+        z_list,
         {"x": "time (ms)", "y": "f (kHz)", "z": "log<sub>10</sub> power"},
         discrete=False,
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)},
@@ -304,9 +344,10 @@ def _mode_number(shot, params=None) -> dict:
 
     Two knobs control the blanking, both separate from the spectrogram's coherence
     slider so the n-map stays clean regardless of the power view's gate: ``n_gate``
-    (mode-coherence, default 0.65) hides cells whose fit isn't a clean single-n, and
-    ``n_amp_pct`` (amplitude percentile, default 80) keeps only the strongest cells —
-    lower it to reveal weaker/broadband modes, raise it to show only the dominant one."""
+    (mode-coherence = harmonic energy fraction ∈ [1/M, 1], default 0.3) hides cells whose
+    fit isn't a clean single-n, and ``n_amp_pct`` (amplitude percentile, default 80) keeps
+    only the strongest cells — lower it to reveal weaker/broadband modes, raise it to show
+    only the dominant one."""
     try:
         arr = _toroidal_arr(str(shot))
     except ValueError:
@@ -315,6 +356,13 @@ def _mode_number(shot, params=None) -> dict:
     phis = tuple(float(p) for _, p in arr)
     sd = _f(params, "slice_duration", 0.002)  # honor the resolution knob (500 Hz default)
     ms = _array_mode_spec(str(shot), names, phis, sd)
+
+    # Optional 2-D Gaussian pre-smoothing on the NATIVE n-map grid (before the display-time
+    # decimation below). σ is in grid cells, so a coherent mode survives the gate across its
+    # neighborhood at any resolution. Returns a copy — the cache isn't mutated.
+    st, sf = _smooth_sigma_bins(params)
+    if st > 0 or sf > 0:
+        ms = spectral.smooth_mode_spectrogram(ms, sigma_time_bins=st, sigma_freq_bins=sf)
 
     f_khz = np.asarray(ms.freq_band) / 1e3
     mask = np.ones(f_khz.size, dtype=bool)
@@ -332,7 +380,7 @@ def _mode_number(shot, params=None) -> dict:
     q = np.asarray(ms.quality)[np.ix_(ti, mask)]
     amp = np.asarray(ms.amplitude)[np.ix_(ti, mask)]
 
-    gate = _f(params, "n_gate", 0.65)
+    gate = _f(params, "n_gate", 0.3)
     amp_pct = min(100.0, max(0.0, _f(params, "n_amp_pct", 80.0)))
     floor = float(np.percentile(amp, amp_pct)) if amp.size else 0.0
     show = (q >= gate) & (amp >= floor)

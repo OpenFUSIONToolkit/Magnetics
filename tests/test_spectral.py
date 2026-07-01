@@ -14,6 +14,7 @@ from magnetics.core.spectral import (
     extract_mode_at_frequency,
     fit_toroidal_mode,
     integrate_bdot,
+    smooth_spectrogram,
 )
 
 
@@ -266,6 +267,14 @@ class TestDenoiseSpectrogram:
         dn = denoise_spectrogram(spec, coherence_min=0.5, power_floor_k=None)
         assert np.all(dn.power[spec.coherence < 0.5] == 0.0)
 
+    def test_disabled_gates_are_a_noop(self, synthetic_n2):
+        # coherence_min=0 keeps every cell (coherence ≥ 0 always) and power_floor_k=None
+        # skips the floor, so the result must reproduce the input power and rms exactly.
+        spec = self._spec(synthetic_n2)
+        dn = denoise_spectrogram(spec, coherence_min=0.0, power_floor_k=None)
+        np.testing.assert_array_equal(dn.power, spec.power)
+        np.testing.assert_allclose(dn.rms_by_mode, spec.rms_by_mode)
+
     def test_passes_through_coherence_and_mode(self, synthetic_n2):
         spec = self._spec(synthetic_n2)
         dn = denoise_spectrogram(spec)
@@ -300,6 +309,67 @@ class TestDenoiseSpectrogram:
         assert np.count_nonzero(dn.power) < np.count_nonzero(spec.power)
         assert dn.power.sum() > 0.8 * spec.power.sum()
         assert np.all(np.isfinite(dn.rms_by_mode))
+
+
+# -----------------------------------------------------------------------
+# smooth_spectrogram (2-D Gaussian pre-smoothing)
+# -----------------------------------------------------------------------
+
+
+class TestSmoothSpectrogram:
+    def _spec(self, synthetic_n2):
+        d = synthetic_n2
+        return compute_spectrogram(
+            d["time"], d["sig1"], d["sig2"], d["delta_phi"], slice_duration=0.01
+        )
+
+    def test_zero_sigma_is_exact_noop(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        sm = smooth_spectrogram(spec, sigma_time_bins=0.0, sigma_freq_bins=0.0)
+        np.testing.assert_array_equal(sm.power, spec.power)
+        np.testing.assert_array_equal(sm.coherence, spec.coherence)
+
+    def test_shapes_kind_and_mode_number_preserved(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        sm = smooth_spectrogram(spec, sigma_time_bins=2.0, sigma_freq_bins=1.0)
+        assert sm.kind == "spectrogram" and isinstance(sm, SpectrogramResult)
+        assert sm.power.shape == spec.power.shape
+        # the discrete mode-number field must never be blurred
+        np.testing.assert_array_equal(sm.mode_number, spec.mode_number)
+
+    def test_coherence_stays_in_unit_interval(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        sm = smooth_spectrogram(spec, sigma_time_bins=3.0, sigma_freq_bins=2.0)
+        assert np.all((sm.coherence >= 0.0) & (sm.coherence <= 1.0))
+
+    def test_does_not_mutate_input(self, synthetic_n2):
+        spec = self._spec(synthetic_n2)
+        before = spec.power.copy()
+        smooth_spectrogram(spec, sigma_time_bins=3.0, sigma_freq_bins=2.0)
+        np.testing.assert_array_equal(spec.power, before)
+
+    def test_ridge_gap_is_reinforced(self):
+        # A coherent ridge (one frequency row, all times) with a punched-out gap cell: after
+        # blurring along time the gap fills toward the ridge, so it can survive a gate that
+        # the raw gap would fail — the behaviour the feature is meant to buy.
+        n_t, n_f = 40, 8
+        power = np.full((n_t, n_f), 0.01)
+        power[:, 3] = 1.0  # bright ridge at freq bin 3
+        power[20, 3] = 0.0  # a dropout in the ridge
+        spec = SpectrogramResult(
+            kind="spectrogram",
+            time=np.arange(n_t, dtype=float),
+            frequency=np.arange(n_f, dtype=float),
+            power=power,
+            coherence=np.zeros((n_t, n_f)),
+            mode_number=np.zeros((n_t, n_f), dtype=np.intp),
+            rms_by_mode=np.zeros((n_t, 1)),
+            mode_indices=np.array([0], dtype=np.intp),
+        )
+        sm = smooth_spectrogram(spec, sigma_time_bins=2.0, sigma_freq_bins=0.0)
+        # the gap recovers most of the ridge power; an isolated background cell does not
+        assert sm.power[20, 3] > 0.5
+        assert sm.power[20, 0] < 0.1
 
 
 # -----------------------------------------------------------------------
@@ -567,4 +637,22 @@ class TestArrayModeSpectrogram:
         phi = np.linspace(0, 330, 16)
         sigs = rng.standard_normal((phi.size, t.size))  # pure noise, no mode
         ms = array_mode_spectrogram(array_shape_spectrum(sigs, t), phi)
-        assert np.median(ms.quality) < 0.6  # resultant length stays low
+        assert np.median(ms.quality) < 0.6  # energy fraction stays low (floor ≈ 1/M)
+
+    def test_smooth_mode_spectrogram(self):
+        from magnetics.core.spectral import (
+            array_mode_spectrogram,
+            array_shape_spectrum,
+            smooth_mode_spectrogram,
+        )
+
+        sigs, phi, t = self._array(n_true=2)
+        ms = array_mode_spectrogram(array_shape_spectrum(sigs, t), phi)
+        # σ=0 is an exact no-op
+        noop = smooth_mode_spectrogram(ms, sigma_time_bins=0.0, sigma_freq_bins=0.0)
+        np.testing.assert_array_equal(noop.quality, ms.quality)
+        # blurring keeps quality in-range and never touches the discrete mode number
+        sm = smooth_mode_spectrogram(ms, sigma_time_bins=2.0, sigma_freq_bins=1.0)
+        assert sm.quality.shape == ms.quality.shape
+        assert np.all((sm.quality >= 0.0) & (sm.quality <= 1.0 + 1e-6))
+        np.testing.assert_array_equal(sm.mode_number, ms.mode_number)

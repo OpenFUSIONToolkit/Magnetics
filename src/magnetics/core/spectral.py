@@ -6,13 +6,13 @@ Pure functions over numpy arrays — no device-specific data access, no GUI conc
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.fft import next_fast_len, rfft, rfftfreq
 from scipy.integrate import cumulative_trapezoid
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import gaussian_filter, uniform_filter1d
 from scipy.signal import coherence as scipy_coherence
 from scipy.signal import csd, get_window, resample
 
@@ -370,13 +370,20 @@ def compute_spectrogram(
     phase = np.rad2deg(np.angle(cross))
 
     # Coherence needs averaging; smooth the auto/cross spectra over frequency bins.
+    # Magnitude-squared coherence is definitionally in [0, 1], but a single-realization
+    # frequency-smoothed estimate overshoots (Cauchy–Schwarz breaks numerically, and a
+    # pure tone's leakage is genuinely coherent off-peak) and near-zero-power bins give a
+    # 0/0 blow-up — so guard the denominator and clip. Without this, downstream gates and
+    # the coherence view see values far outside [0, 1].
     if coherence_smooth > 1:
         sxx = uniform_filter1d(np.abs(spec1) ** 2, coherence_smooth, axis=1)
         syy = uniform_filter1d(np.abs(spec2) ** 2, coherence_smooth, axis=1)
         sxy = uniform_filter1d(cross.real, coherence_smooth, axis=1) + 1j * uniform_filter1d(
             cross.imag, coherence_smooth, axis=1
         )
-        coh = (np.abs(sxy) ** 2) / (sxx * syy + 1e-30)
+        denom = sxx * syy
+        coh = np.divide(np.abs(sxy) ** 2, denom, out=np.zeros_like(power), where=denom > 0)
+        coh = np.clip(coh, 0.0, 1.0)
     else:
         coh = np.ones_like(power)
 
@@ -428,7 +435,10 @@ def denoise_spectrogram(
     Returns:
         result (SpectrogramResult): copy with gated power zeroed and rms_by_mode recomputed.
     """
-    keep = result.coherence >= coherence_min
+    # NaN coherence (cells where γ² couldn't be estimated) counts as incoherent (0), so a
+    # disabled gate (coherence_min ≤ 0) keeps every cell — a true no-op — while any positive
+    # threshold still drops those cells as noise.
+    keep = np.nan_to_num(result.coherence, nan=0.0) >= coherence_min
 
     if power_floor_k is not None:
         floor = np.percentile(result.power, floor_percentile, axis=0)  # (n_freqs,)
@@ -448,6 +458,66 @@ def denoise_spectrogram(
         frequency=result.frequency,
         power=power,
         coherence=result.coherence,
+        mode_number=result.mode_number,
+        rms_by_mode=rms,
+        mode_indices=result.mode_indices,
+    )
+
+
+def smooth_spectrogram(
+    result: SpectrogramResult,
+    *,
+    sigma_time_bins: float,
+    sigma_freq_bins: float,
+) -> SpectrogramResult:
+    """Optional 2-D Gaussian pre-smoothing over (time, frequency), so a coherent structure —
+    which spans a neighborhood of cells — survives later gating even where individual cells
+    dip below threshold, while isolated noise cells and thin transients average down.
+
+    Blurs ``power`` in **linear space** (an arithmetic mean of neighbouring energy) and
+    ``coherence`` linearly (already in [0,1]); leaves the discrete ``mode_number`` untouched and
+    recomputes ``rms_by_mode`` from the smoothed power. Linear (arithmetic) averaging is pulled
+    toward the *bright* cells, so a coherent ridge bleeds into and fills its dim/dropout
+    neighbours — reinforcing it above a later gate. (A log/geometric mean is instead dominated by
+    the *smallest* cell, so a punched-out gap stays dark and never survives — the whole point of
+    pre-smoothing is defeated.) Meant to run *before* ``denoise_spectrogram`` so both the gate and
+    the display see the same field. σ=0 in an axis is a no-op along it; σ=0 in both returns an
+    unchanged copy. Never mutates the input (it typically comes from a shared cache).
+
+    Inputs:
+        result (SpectrogramResult): spectrogram to smooth.
+        sigma_time_bins (float): Gaussian σ along time, in time columns (≥0).
+        sigma_freq_bins (float): Gaussian σ along frequency, in frequency bins (≥0).
+    Returns:
+        result (SpectrogramResult): copy with smoothed power/coherence and recomputed rms.
+    """
+    st = max(0.0, float(sigma_time_bins))
+    sf = max(0.0, float(sigma_freq_bins))
+    if st == 0.0 and sf == 0.0:
+        return replace(result)
+
+    sigma = (st, sf)  # arrays are (n_times, n_freqs): axis 0 = time, axis 1 = frequency
+    # Smooth LINEAR power (arithmetic mean): the average is dominated by the bright cells, so a
+    # coherent ridge spreads into and fills its dim/dropout neighbours — the behaviour that lets
+    # it survive a later gate. (Smoothing log power is a geometric mean, dominated by the darkest
+    # cell, so gaps stay dark and never fill.)
+    power = gaussian_filter(np.asarray(result.power, dtype=float), sigma=sigma, mode="reflect")
+    # A convex average of [0,1] coherence stays in [0,1]; reflect avoids edge darkening.
+    coherence = gaussian_filter(
+        np.asarray(result.coherence, dtype=float), sigma=sigma, mode="reflect"
+    )
+
+    df = result.frequency[1] - result.frequency[0]
+    rms = np.empty((power.shape[0], len(result.mode_indices)))
+    for j, m in enumerate(result.mode_indices):
+        rms[:, j] = np.sqrt(np.sum(power * (result.mode_number == m), axis=1) * df)
+
+    return SpectrogramResult(
+        kind="spectrogram",
+        time=result.time,
+        frequency=result.frequency,
+        power=power,
+        coherence=coherence,
         mode_number=result.mode_number,
         rms_by_mode=rms,
         mode_indices=result.mode_indices,
@@ -535,7 +605,7 @@ class ArrayModeSpectrogram:
     freq_band: NDArray[np.floating]  # (n_band,) Hz kept
     mode_number: NDArray[np.integer]  # (n_times, n_band) best-fit toroidal n
     amplitude: NDArray[np.floating]  # (n_times, n_band) |Σ_p Z_p e^{-inφ}|
-    quality: NDArray[np.floating]  # (n_times, n_band) resultant length ∈ [0,1]
+    quality: NDArray[np.floating]  # (n_times, n_band) harmonic energy fraction ∈ [1/M,1]
 
 
 def array_mode_spectrogram(
@@ -552,10 +622,13 @@ def array_mode_spectrogram(
     ``round(Δφ_phase / Δφ)`` estimate — which a wide probe pair aliases down to ``|n|≤1``
     — a P-probe fit resolves ``|n|`` up to ~P/2, so n = 2, 3, 4… are recovered.
 
-    The projection's resultant length ``|Σ_p Z_p e^{-inφ_p}| / Σ_p |Z_p| ∈ [0, 1]`` is a
-    per-cell mode-coherence (1 = a clean single-n pattern, ~1/√P = incoherent noise),
-    suitable for gating. The ``exp(-i n φ)`` sign matches ``mode_from_spectrum`` and the
-    phase fit, so the reported n agrees with them.
+    The per-cell mode-coherence is the *energy fraction* the single best-fit n captures of
+    the summed toroidal-harmonic power, ``|R_{n*}|² / Σ_n |R_n|² ∈ [1/M, 1]`` with
+    ``R_n = Σ_p Z_p e^{-inφ_p}`` and ``M = 2·n_max + 1`` candidates: 1 = a pure single-n
+    pattern, 1/M = white across harmonics (incoherent noise). This is a spectral-
+    concentration ratio (more noise/signal contrast than the resultant length ``|R_{n*}| /
+    Σ_p|Z_p|``, whose noise floor sits higher at ~1/√P). The ``exp(-i n φ)`` sign matches
+    ``mode_from_spectrum`` and the phase fit, so the reported n agrees with them.
 
     Inputs:
         spectrum (ArrayShapeSpectrum): the per-probe complex STFT band.
@@ -568,19 +641,54 @@ def array_mode_spectrogram(
     phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
     ns = np.arange(-int(n_max), int(n_max) + 1)
     basis = np.exp(-1j * ns[:, None] * phi[None, :])  # (M, P)
-    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F)
+    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F) = R_n
     amp = np.abs(proj)
     k = np.argmax(amp, axis=0)  # (T, F)
-    peak = np.take_along_axis(amp, k[None], axis=0)[0]  # (T, F)
-    denom = np.abs(z).sum(axis=0) + 1e-30  # (T, F)
+    peak = np.take_along_axis(amp, k[None], axis=0)[0]  # |R_{n*}| (T, F)
+    # Energy fraction: share of the summed harmonic power |R_n|² held by the best-fit n.
+    # peak is the max |R_n|, so this is in [1/M, 1] by construction — no clip needed.
+    energy = (amp**2).sum(axis=0) + 1e-30  # Σ_n |R_n|² (T, F)
+    quality = peak**2 / energy
     return ArrayModeSpectrogram(
         kind="array_mode_spectrogram",
         time=np.asarray(spectrum.time),
         freq_band=np.asarray(spectrum.freq_band),
         mode_number=ns[k].astype(np.intp),
         amplitude=peak,
-        quality=peak / denom,
+        quality=quality,
     )
+
+
+def smooth_mode_spectrogram(
+    result: ArrayModeSpectrogram,
+    *,
+    sigma_time_bins: float,
+    sigma_freq_bins: float,
+) -> ArrayModeSpectrogram:
+    """2-D Gaussian pre-smoothing for the array n-map — the n-map counterpart of
+    ``smooth_spectrogram``. Blurs the two continuous *gated* fields (``quality`` and
+    ``amplitude``) over (time, frequency) so a coherent mode survives the n-map gate across
+    its neighborhood; the discrete ``mode_number`` is left untouched (the reported n stays the
+    per-cell argmax). σ in bins; σ=0 in both axes returns an unchanged copy; never mutates.
+
+    Inputs:
+        result (ArrayModeSpectrogram): n-map to smooth.
+        sigma_time_bins (float): Gaussian σ along time, in time columns (≥0).
+        sigma_freq_bins (float): Gaussian σ along frequency, in frequency bins (≥0).
+    Returns:
+        result (ArrayModeSpectrogram): copy with smoothed quality/amplitude.
+    """
+    st = max(0.0, float(sigma_time_bins))
+    sf = max(0.0, float(sigma_freq_bins))
+    if st == 0.0 and sf == 0.0:
+        return replace(result)
+
+    sigma = (st, sf)  # (n_times, n_band): axis 0 = time, axis 1 = frequency
+    quality = gaussian_filter(np.asarray(result.quality, dtype=float), sigma=sigma, mode="reflect")
+    amplitude = gaussian_filter(
+        np.asarray(result.amplitude, dtype=float), sigma=sigma, mode="reflect"
+    )
+    return replace(result, quality=quality, amplitude=amplitude)
 
 
 def mode_from_spectrum(
