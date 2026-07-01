@@ -207,3 +207,17 @@ def test_tree_device_coerces_remote_to_mdsthin(monkeypatch):
     # tree path's "needs a sensor_set" guard, proving the coercion ran.
     with pytest.raises(ValueError, match="sensor_set"):
         fetch_shot(204718, device="nstx", backend="remote", tcp=True)
+
+
+def test_askpass_env_handles_blank_password():
+    """A key-based + Duo login has no password: askpass_env must coerce None -> ''
+    so every subprocess env value is a str (else Popen raises 'expected str ... not
+    NoneType' and the Duo tunnel never spawns)."""
+    from magnetics.data.sshauth import askpass_env
+
+    env, cleanup = askpass_env(None, "1")
+    try:
+        assert env["MS_PW"] == "" and env["MS_DUO"] == "1"
+        assert all(isinstance(v, str) for v in env.values())
+    finally:
+        cleanup()

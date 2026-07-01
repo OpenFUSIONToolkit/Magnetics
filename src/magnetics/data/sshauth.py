@@ -36,7 +36,10 @@ def askpass_env(password: str, duo: str | None = None):
         {
             "SSH_ASKPASS": path,
             "SSH_ASKPASS_REQUIRE": "force",  # use askpass even with a tty (OpenSSH ≥8.4)
-            "MS_PW": password,
+            # subprocess env values must be strings: a key-based + Duo login has no
+            # password, so coerce None → "" (else Popen raises "expected str ... not
+            # NoneType"). The Duo prompt is still answered from MS_DUO.
+            "MS_PW": password or "",
             "MS_DUO": duo or "1",
             "DISPLAY": env.get("DISPLAY", ":0"),
         }
