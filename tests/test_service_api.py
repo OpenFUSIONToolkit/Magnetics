@@ -45,6 +45,34 @@ def test_unknown_node_id_is_404(synthetic_shot):
     assert r.status_code == 404
 
 
+def test_extra_signals_forwards_signals_query_param(synthetic_shot):
+    """The custom-signal panel reads /api/node/{shot}/extra_signals?signals=...; the
+    named channel comes back as a series, an unknown name lands in meta.missing."""
+    from magnetics.data import h5source
+
+    known = h5source.channel_names(synthetic_shot)[0]
+    r = client.get(f"/api/node/{synthetic_shot}/extra_signals", params={"signals": f"{known},NOPE"})
+    assert r.status_code == 200, r.text[:200]
+    node = r.json()
+    assert node["meta"]["found"] == [known]
+    assert "NOPE" in node["meta"]["missing"]
+
+
+def test_fit_exclude_query_param_reaches_the_fit(synthetic_shot):
+    """A fit_exclude query param drops the named channel from the fit_quality count."""
+
+    def channels(node):
+        return next(int(f["value"]) for f in node["fields"] if f["label"] == "channels")
+
+    base = client.get(f"/api/node/{synthetic_shot}/fit_quality").json()
+    pairs = client.get(f"/api/node/{synthetic_shot}/signal_conditioning").json()["meta"]["pairs"]
+    victim = pairs[0]["channel"]
+    excl = client.get(
+        f"/api/node/{synthetic_shot}/fit_quality", params={"fit_exclude": victim}
+    ).json()
+    assert channels(excl) == channels(base) - 1
+
+
 def test_unknown_shot_is_404():
     r = client.get("/api/node/100/geometry")
     assert r.status_code == 404

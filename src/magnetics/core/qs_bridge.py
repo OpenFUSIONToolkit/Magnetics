@@ -309,7 +309,7 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
             "theta_fixed_deg": theta_fixed_deg,
             "condition_number": round(K, 2),
             "shot": str(fit_ds.attrs.get("shot", "")),
-            "note": "SLCONTOUR φ–t at fixed θ",
+            "note": "φ–t at fixed θ",
         },
     )
 

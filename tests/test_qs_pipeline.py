@@ -95,3 +95,30 @@ def test_qs_fit_recovers_injected_mode_amplitudes(synthetic_shot):
     assert recovered_ratio == pytest.approx(injected_ratio, rel=0.2), (
         f"recovered n=1/n=2 ratio {recovered_ratio:.3f} != injected {injected_ratio:.3f}"
     )
+
+
+def _channels_field(node) -> int:
+    for f in node["fields"]:
+        if f["label"] == "channels":
+            return int(f["value"])
+    raise AssertionError(f"no 'channels' field in {node['fields']}")
+
+
+def test_fit_exclude_drops_one_channel_from_the_fit(synthetic_shot):
+    """The GUI fit-channels checkboxes send a comma-separated ``fit_exclude``. A
+    single excluded channel must leave the fit with exactly one fewer channel while
+    staying a real (finite) fit — the channel is dropped from fit(), not prep()."""
+    base = nodes.build_node(synthetic_shot, "fit_quality")
+    n0 = _channels_field(base)
+
+    # A real channel that IS in the fit — take one from the prepared signal pairs.
+    pairs = nodes.build_node(synthetic_shot, "signal_conditioning")["meta"]["pairs"]
+    assert pairs, "synthetic QS shot has no signal-conditioning pairs"
+    victim = pairs[0]["channel"]
+
+    excl = nodes.build_node(synthetic_shot, "fit_quality", {"fit_exclude": victim})
+    assert _channels_field(excl) == n0 - 1, (n0, victim)
+
+    # The reduced fit is still finite (exclusion did not break the SVD).
+    fit = nodes.build_node(synthetic_shot, "qs_fit", {"fit_exclude": victim})
+    assert np.all(np.isfinite(np.asarray(fit["z"], dtype=float)))

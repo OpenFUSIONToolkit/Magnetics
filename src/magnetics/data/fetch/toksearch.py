@@ -1016,6 +1016,7 @@ def fetch_shot(
     backend: str = "mdsthin",
     device: str = "diiid",
     sensor_set: str | None = None,
+    raw_pointnames: list[str] | None = None,
     username: str | None = None,
     password: str | None = None,
     duo: str | None = None,
@@ -1101,6 +1102,7 @@ def fetch_shot(
             decimate=decimate,
             device=device,
             sensor_set=sensor_set,
+            raw_pointnames=raw_pointnames,
             local_out_dir=(str(Path(out).parent) if out else None),
             progress=progress,
             **kw,
@@ -1144,10 +1146,20 @@ def fetch_shot(
                 "or use --tcp for a direct connection"
             )
 
-    # Signal selection. A device sensor set (preferred) overrides the analysis
-    # sensor groups: pull the set's signals plus the device's plasma params.
+    # Signal selection. An explicit `raw_pointnames` list (GUI custom-signal panel:
+    # Ip, dalpha, …) wins over everything and is fetched verbatim as PTDATA — no
+    # device sensor map, no plasma extras — so it merges cleanly into an existing
+    # shot file. A device sensor set is next; the analysis groups are the default.
     stride = max(1, int(decimate))
-    if sensor_set:
+    if raw_pointnames:
+        pointnames = _dedup([p.strip() for p in raw_pointnames if p and p.strip()])
+        tree_signals = {}
+        label = "custom"
+        # bdot / raw dB/dt probes end in "D"; never decimate them (corrupts FFTs).
+        if stride > 1 and any(p.endswith("D") for p in pointnames):
+            progress(0.0, "decimation disabled (custom set has bdot signals)")
+            stride = 1
+    elif sensor_set:
         sensors = resolve_sensor_set(dev, sensor_set)
         # Always add the device's plasma params (current, toroidal field,
         # elongation). Each entry is {"name": ..., "tree": <optional>}: a "tree"
@@ -1427,6 +1439,12 @@ def main(argv=None) -> int:
         "elongation instead of the --analysis groups",
     )
     ap.add_argument(
+        "--pointnames",
+        default=None,
+        help="comma-separated PTDATA pointnames to fetch verbatim (e.g. 'ip,dalpha'); "
+        "overrides --sensor-set/--analysis and merges into an existing shot file",
+    )
+    ap.add_argument(
         "--gateway",
         default=None,
         help="mdsthin SSH gateway as host[:port], or an ~/.ssh/config Host alias; "
@@ -1489,6 +1507,11 @@ def main(argv=None) -> int:
         backend=args.backend,
         device=args.device,
         sensor_set=args.sensor_set,
+        raw_pointnames=(
+            [p.strip() for p in args.pointnames.split(",") if p.strip()]
+            if args.pointnames
+            else None
+        ),
         username=args.username,
         gateway=args.gateway,
         server=args.server,

@@ -85,6 +85,7 @@ def run_remote(
     decimate=1,
     device="diiid",
     sensor_set=None,
+    raw_pointnames=None,
     local_out_dir=None,
     progress=None,
 ) -> str:
@@ -172,7 +173,9 @@ def run_remote(
             "--out",
             remote_out,
         ]
-        if sensor_set:
+        if raw_pointnames:
+            fetch += ["--pointnames", ",".join(raw_pointnames)]
+        elif sensor_set:
             fetch += ["--sensor-set", sensor_set]
         else:
             fetch += ["--analysis", analysis]

@@ -226,6 +226,22 @@ def test_unknown_node_raises():
         nodes.build_node(shot, "does_not_exist")
 
 
+def test_extra_signals_serves_found_and_reports_missing():
+    """The custom-signal panel reads merged pointnames via `extra_signals`: a known
+    channel becomes a series; an unknown name is reported in meta.missing (not an
+    error), so the panel can warn without failing."""
+    from magnetics.data import h5source
+
+    shot = _first_shot()
+    known = h5source.channel_names(shot)[0]
+    node = nodes.build_node(shot, "extra_signals", {"signals": f"{known}, NOPE_NOT_A_REAL_SIGNAL"})
+    assert node["kind"] == "line"
+    assert node["meta"]["found"] == [known]
+    assert "NOPE_NOT_A_REAL_SIGNAL" in node["meta"]["missing"]
+    assert [s["name"] for s in node["series"]] == [known]
+    assert len(node["series"][0]["x"]) == len(node["series"][0]["y"])
+
+
 def test_quality_for_k_thresholds():
     # mirrors contract.ts qualityForK
     assert contracts.quality_for_k(5) == "good"

@@ -170,6 +170,7 @@ class FetchRequest(BaseModel):
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
     device: str | None = None  # data/device/<device>.json
     sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
+    signals: list[str] | None = None  # custom PTDATA pointnames; merged into an existing shot file
     # remote backend overrides (None → device file's network.cluster block: explicit
     # omega.gat.com host + auto cybele ProxyJump + env python — no ssh-config alias)
     remote_host: str | None = None
@@ -212,6 +213,9 @@ def post_fetch(req: FetchRequest) -> dict:
         for k, v in {
             "device": req.device,
             "sensor_set": req.sensor_set,
+            # custom-signal panel: fetch these PTDATA pointnames verbatim and merge
+            # them into the shot's existing HDF5 (skips the sensor-set/analysis map).
+            "raw_pointnames": req.signals,
             "remote_host": req.remote_host,
             "ssh_jump": req.ssh_jump,
             "remote_dir": req.remote_dir,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 import threading
 from functools import lru_cache
 
@@ -514,7 +515,7 @@ def _contour(shot, params=None) -> dict:
         meta={
             "channels": n_ch,
             "shot": str(shot),
-            "note": "raw toroidal δBp(φ,t) — SLCONTOUR φ–θ fit pending",
+            "note": "raw toroidal δBp(φ,t) — φ–θ fit pending",
         },
     )
 
@@ -1178,6 +1179,7 @@ def _qs_run(
     energy: float,
     tmin_s: float,
     tmax_s: float,
+    fit_exclude: tuple = (),
 ):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
@@ -1185,6 +1187,11 @@ def _qs_run(
     explicit cache-key arguments so the result is reused across node requests
     that share the same settings. tmin_s/tmax_s are in seconds and come from
     _prep_qs_ds (which reads HDF5 defaults and applies any user override).
+
+    ``fit_exclude`` names channels to drop from the fit only (not from prep), so
+    the sensor maps and signal-conditioning plots still show excluded sensors —
+    the GUI greys them rather than hiding them. Each name is matched literally
+    (``fit.fit`` uses ``re.match``): anchored + ``re.escape``-d in _prep_qs_ds.
     """
     from .._slcontour.run import run_steps
 
@@ -1207,6 +1214,7 @@ def _qs_run(
             detrend_type=detrend_type,
             detrend_band=(db_lo_s, db_hi_s),
         ),
+        fit_kwargs=dict(fit_exclude=fit_exclude) if fit_exclude else None,
         verbose=False,
     )
     return r
@@ -1247,8 +1255,7 @@ def _prep_qs_ds(shot, params):
     # other devices instead of crashing deep in the SLCONTOUR shim.
     if _dev_geom(str(shot)).device_id != "diiid":
         raise ValueError(
-            "quasi-stationary (SLCONTOUR) analysis is DIII-D-only; "
-            "use the rotating-mode views for this device"
+            "quasi-stationary analysis is DIII-D-only; use the rotating-mode views for this device"
         )
 
     ns_raw = params.get("ns", "1,2,3") if params else "1,2,3"
@@ -1270,6 +1277,14 @@ def _prep_qs_ds(shot, params):
     cutoff_lo = float(params.get("cutoff_lo", 5.0)) if params else 5.0
     cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
     energy = float(params.get("energy", 0.98)) if params else 0.98
+
+    # fit_exclude: comma-separated exact channel names the GUI checkbox-panel has
+    # deselected. fit.fit matches with re.match, so anchor + escape each name for a
+    # literal match. Excluded channels stay in prep (still drawn on the maps); only
+    # the fit drops them. Sort so the tuple is a stable _qs_run cache key.
+    excl_raw = params.get("fit_exclude", "") if params else ""
+    excl_names = sorted(x.strip() for x in str(excl_raw).split(",") if x.strip())
+    fit_exclude = tuple(f"{re.escape(n)}$" for n in excl_names)
 
     # Time trim: read shot-window defaults from HDF5, then apply any user override.
     path = h5source.shot_file(str(shot))
@@ -1297,6 +1312,7 @@ def _prep_qs_ds(shot, params):
             energy,
             tmin_s,
             tmax_s,
+            fit_exclude,
         )
 
 
@@ -1409,6 +1425,38 @@ def _fit_residuals(shot, params=None) -> dict:
     return qs_bridge.fit_to_fit_residuals_node(_prep_qs_ds(shot, params).fit)
 
 
+def _extra_signals(shot, params=None) -> dict:
+    """User-requested raw signals (Ip, Dα, …) as time series → LineNode.
+
+    The GUI custom-signal panel POSTs the names to /api/fetch (merged into the shot
+    HDF5), then reads them here. `signals` is a comma-separated pointname list; each
+    found channel becomes one series (downsampled to keep the line light), each
+    missing name is reported in ``meta.missing`` so the panel can warn.
+    """
+    raw = params.get("signals", "") if params else ""
+    names = [n.strip() for n in str(raw).split(",") if n.strip()]
+    have = set(h5source.channel_names(str(shot)))
+    series, found, missing = [], [], []
+    for name in names:
+        if name not in have:
+            missing.append(name)
+            continue
+        t_ms, d = h5source.load_channel(str(shot), name)
+        t_ms = np.asarray(t_ms, dtype=float)
+        d = np.asarray(d, dtype=float)
+        if t_ms.size > 2000:  # keep the line light
+            sel = np.linspace(0, t_ms.size - 1, 2000).astype(int)
+            t_ms, d = t_ms[sel], d[sel]
+        series.append({"name": name, "x": t_ms.tolist(), "y": d.tolist()})
+        found.append(name)
+
+    return contracts.line(
+        series,
+        {"x": "time (ms)", "y": "signal"},
+        meta={"shot": str(shot), "found": found, "missing": missing, "requested": names},
+    )
+
+
 _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
@@ -1429,6 +1477,7 @@ _BUILDERS = {
     "chi_sq_t": _chi_sq_t,
     "fit_signals": _fit_signals,
     "fit_residuals": _fit_residuals,
+    "extra_signals": _extra_signals,
     # rotating eigspec (develop): GP mode shapes + patterns + tracks
     "mode_shape": _mode_shape,
     "poloidal_shape": _poloidal_shape,
