@@ -1,12 +1,15 @@
 {
   "name": "DIII-D",
   "R0": 1.69,
-  "gateway": "cybele.gat.com:2039",
-  "server": "atlas.gat.com:8000",
-  "cluster": {
-    "host": "omega.gat.com",
-    "jump": "cybele.gat.com:2039",
-    "python": "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
+  "network": {
+    "domain": "gat.com",
+    "jump": { "host": "cybele.gat.com", "port": 2039 },
+    "mdsip": { "host": "atlas.gat.com", "port": 8000 },
+    "cluster": {
+      "host": "omega.gat.com",
+      "port": 22,
+      "python": "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
+    }
   },
   "wall": {
     "segments": [
