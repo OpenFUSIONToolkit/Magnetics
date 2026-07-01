@@ -16,6 +16,7 @@ import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
 import { usingLiveBackend } from "../../lib/api";
 import type { EquilibriumNode } from "../../lib/contract";
+import { d2r, loopSegment2d } from "../../lib/sensorGeometry";
 import Plot from "../../lib/Plot";
 
 type Kind = "Bp" | "Br" | "coil";
@@ -43,7 +44,6 @@ const KIND_LABEL: Record<Kind, string> = {
   Bp: "Bp probes", Br: "Br saddle loops", coil: "coils",
 };
 const KINDS: Kind[] = ["Bp", "Br", "coil"];
-const d2r = (deg: number) => (deg * Math.PI) / 180;
 // Sensors time-cursor window (ms), until a real equilibrium node supplies bounds.
 const EQ_TIME_RANGE: [number, number] = [100, 5000];
 // No backend `equilibrium` node exists yet (tracked in #43). Until it does, don't
@@ -240,9 +240,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
         // the wrong way. The segment is symmetric, so tilt's sign/wrap is moot.
         const x: (number | null)[] = [], y: (number | null)[] = [], txt: (string | null)[] = [];
         for (const s of loops) {
-          const a = d2r(s.tilt), dr = Math.cos(a), dz = Math.sin(a), h = s.length / 2;
-          x.push(s.r - h * dr, s.r + h * dr, null);
-          y.push(s.z - h * dz, s.z + h * dz, null);
+          const seg = loopSegment2d(s);
+          x.push(seg.x[0], seg.x[1], null);
+          y.push(seg.y[0], seg.y[1], null);
           txt.push(s.name, s.name, null);
         }
         t.push({

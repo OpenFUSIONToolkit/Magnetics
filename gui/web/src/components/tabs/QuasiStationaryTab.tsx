@@ -8,6 +8,7 @@ import { useNode } from "../../lib/useNode";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
 import type { ContourNode, LineNode, MetricsNode } from "../../lib/contract";
+import { phiPeak as phiPeakFn, phiRms as phiRmsFn } from "../../lib/qsTransforms";
 
 // ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
 const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
@@ -248,24 +249,15 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const phiTimePlot = phiTimeNode?.kind === "contour" ? (phiTimeNode as ContourNode) : null;
 
-  const phiPeak = useMemo(() => {
-    if (!phiTimePlot) return null;
-    return phiTimePlot.x.map((_, j) => {
-      let bestI = 0, bestV = -Infinity;
-      for (let i = 0; i < phiTimePlot.z.length; i++) {
-        if (phiTimePlot.z[i][j] > bestV) { bestV = phiTimePlot.z[i][j]; bestI = i; }
-      }
-      return phiTimePlot.y[bestI];
-    });
-  }, [phiTimePlot]);
+  const phiPeak = useMemo(
+    () => (phiTimePlot ? phiPeakFn(phiTimePlot.z, phiTimePlot.y) : null),
+    [phiTimePlot],
+  );
 
-  const phiRms = useMemo(() => {
-    if (!phiTimePlot) return null;
-    const nPhi = phiTimePlot.z.length;
-    return phiTimePlot.x.map((_, j) =>
-      Math.sqrt(phiTimePlot.z.reduce((s, row) => s + row[j] ** 2, 0) / nPhi)
-    );
-  }, [phiTimePlot]);
+  const phiRms = useMemo(
+    () => (phiTimePlot ? phiRmsFn(phiTimePlot.z) : null),
+    [phiTimePlot],
+  );
 
   const seekTo = useCallback((e: Plotly.PlotMouseEvent) => {
     const x = e.points?.[0]?.x;
