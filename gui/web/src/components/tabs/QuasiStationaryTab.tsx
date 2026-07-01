@@ -8,6 +8,7 @@ import { useNode } from "../../lib/useNode";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
 import type { ContourNode, LineNode, MetricsNode } from "../../lib/contract";
+import { phiPeak as phiPeakFn, phiRms as phiRmsFn } from "../../lib/qsTransforms";
 
 // ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
 const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
@@ -213,6 +214,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // No-data guard: 404 means the shot's HDF5 file hasn't been pulled yet.
   const noData = committedParams !== null && ampError?.includes("fetch failed (404)") === true;
+  // Fit-unavailable guard: a non-404 error means the SLCONTOUR fit couldn't run
+  // (most often the shot was pulled for rotating-mode analysis and lacks the Bp
+  // LFS midplane array). Show the reason instead of a perpetual "loading…".
+  const fitUnavailable = committedParams !== null && !noData && ampError != null;
+  const fitError = ampError?.replace(/^Error:\s*fetch failed \(\d+\):\s*/, "") ?? "";
 
   const sensorRzNode  = sensorRzRaw?.kind  === "line" ? (sensorRzRaw  as LineNode) : null;
   const sensorCylNode = sensorCylRaw?.kind === "line" ? (sensorCylRaw as LineNode) : null;
@@ -243,24 +249,15 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   const phiTimePlot = phiTimeNode?.kind === "contour" ? (phiTimeNode as ContourNode) : null;
 
-  const phiPeak = useMemo(() => {
-    if (!phiTimePlot) return null;
-    return phiTimePlot.x.map((_, j) => {
-      let bestI = 0, bestV = -Infinity;
-      for (let i = 0; i < phiTimePlot.z.length; i++) {
-        if (phiTimePlot.z[i][j] > bestV) { bestV = phiTimePlot.z[i][j]; bestI = i; }
-      }
-      return phiTimePlot.y[bestI];
-    });
-  }, [phiTimePlot]);
+  const phiPeak = useMemo(
+    () => (phiTimePlot ? phiPeakFn(phiTimePlot.z, phiTimePlot.y) : null),
+    [phiTimePlot],
+  );
 
-  const phiRms = useMemo(() => {
-    if (!phiTimePlot) return null;
-    const nPhi = phiTimePlot.z.length;
-    return phiTimePlot.x.map((_, j) =>
-      Math.sqrt(phiTimePlot.z.reduce((s, row) => s + row[j] ** 2, 0) / nPhi)
-    );
-  }, [phiTimePlot]);
+  const phiRms = useMemo(
+    () => (phiTimePlot ? phiRmsFn(phiTimePlot.z) : null),
+    [phiTimePlot],
+  );
 
   const seekTo = useCallback((e: Plotly.PlotMouseEvent) => {
     const x = e.points?.[0]?.x;
@@ -636,6 +633,15 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           <strong>No data for shot {machine}.</strong><br />
           The HDF5 file for this shot has not been fetched yet.<br />
           Use the <strong>pull panel</strong> in the left sidebar to fetch the data, then click Plot.
+        </div>
+      ) : fitUnavailable ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <strong>No quasi-stationary fit for shot {machine}.</strong><br />
+          The SLCONTOUR fit needs the Bp LFS midplane array; this shot was most likely
+          fetched for rotating-mode analysis only. Re-fetch it with the quasi-stationary
+          channels, or choose a QS-capable shot.<br />
+          <span style={{ opacity: 0.7 }}>reason: {fitError}</span>
         </div>
       ) : (<>
 

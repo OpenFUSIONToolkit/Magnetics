@@ -10,6 +10,7 @@ import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
 import ThemeToggle from "./components/ThemeToggle";
 import PullControl from "./components/PullControl";
+import ErrorBoundary from "./components/ErrorBoundary";
 import SensorsTab from "./components/tabs/SensorsTab";
 import QuasiStationaryTab from "./components/tabs/QuasiStationaryTab";
 import RotatingTab from "./components/tabs/RotatingTab";
@@ -63,12 +64,16 @@ export default function App() {
         </div>
         {!machine ? (
           <div className="placeholder">No machine selected.</div>
-        ) : tab === "sensors" ? (
-          <SensorsTab machine={machine} />
-        ) : tab === "qs" ? (
-          <QuasiStationaryTab machine={machine} />
         ) : (
-          <RotatingTab machine={machine} />
+          <ErrorBoundary resetKeys={[machine, tab]} label={`The ${tab} view`}>
+            {tab === "sensors" ? (
+              <SensorsTab machine={machine} />
+            ) : tab === "qs" ? (
+              <QuasiStationaryTab machine={machine} />
+            ) : (
+              <RotatingTab machine={machine} />
+            )}
+          </ErrorBoundary>
         )}
       </main>
 

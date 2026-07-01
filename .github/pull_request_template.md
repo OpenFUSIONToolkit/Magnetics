@@ -5,9 +5,9 @@
 <!-- e.g. Closes #123 -->
 
 ## Type of change
-- [ ] Analysis core (`analysis/src/magnetics/core`)
-- [ ] Data source (`analysis/src/magnetics/data`)
-- [ ] Service / API (`analysis/src/magnetics/service`)
+- [ ] Analysis core (`src/magnetics/core`)
+- [ ] Data source (`src/magnetics/data`)
+- [ ] Service / API (`src/magnetics/service`)
 - [ ] Web GUI (`gui/web`)
 - [ ] Docs
 - [ ] Other:

@@ -5,6 +5,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # uv / virtual environments  (uv.lock should be committed)
 .venv/
@@ -13,6 +16,8 @@ venv/
 # Node / web
 node_modules/
 dist/
+# built GUI staged into the package for wheel bundling (run.sh --prod)
+src/magnetics/service/webapp/
 .vite/
 *.local
 *.log

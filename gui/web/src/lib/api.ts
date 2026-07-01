@@ -116,15 +116,21 @@ export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
 function base(): string {
   return import.meta.env.BASE_URL; // respects vite `base` for sub-path deploys
 }
-function qs(params?: Record<string, string | number>): string {
+export function qs(params?: Record<string, string | number>): string {
   if (!params) return "";
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) p.set(k, String(v));
   const s = p.toString();
   return s ? `?${s}` : "";
 }
-async function getJSON<T>(url: string): Promise<T> {
+export async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch failed (${res.status}): ${url}`);
+  if (!res.ok) {
+    // Surface the service's reason (FastAPI `{detail}`) when present, so callers
+    // can distinguish e.g. "shot not fetched" (404) from "no QS array" (422).
+    let detail = "";
+    try { detail = ((await res.json()) as { detail?: string }).detail ?? ""; } catch { /* non-JSON body */ }
+    throw new Error(`fetch failed (${res.status}): ${detail || url}`);
+  }
   return res.json() as Promise<T>;
 }

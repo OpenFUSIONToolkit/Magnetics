@@ -1,7 +1,7 @@
 // Sensors view — the static device sensor layout.
 //
 //   • R-Z poloidal cross-section: the vessel wall, Bp point probes as dots, and
-//     saddle loops drawn as their true poloidal extent (a segment along the wall).
+//     saddle loops drawn as their poloidal extent (a segment along the loop's tilt).
 //   • 3D: every sensor in machine coordinates — Bp probes as points, saddle loops
 //     and coils as their real toroidal × poloidal band, curved around the torus,
 //     inside a faint vessel surface.
@@ -15,8 +15,8 @@ import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
 import { usingLiveBackend } from "../../lib/api";
-import { mockEquilibrium, EQ_TIME_RANGE } from "../../lib/mockEquilibrium";
 import type { EquilibriumNode } from "../../lib/contract";
+import { d2r, loopSegment2d } from "../../lib/sensorGeometry";
 import Plot from "../../lib/Plot";
 
 type Kind = "Bp" | "Br" | "coil";
@@ -26,10 +26,17 @@ interface Sensor {
 }
 interface Wall { r: number[]; z: number[]; label: string }
 interface SensorSet { name: string; kind: Kind; count: number; sensors: string[] }
+interface VVPlate { r: number[]; z: number[] }
+interface CoilSet {
+  name: string; count: number; turns: number;
+  rz: { r: number[]; z: number[] }; // one representative coil's R-Z footprint
+  loops: number[][][]; // every coil's 3D [x,y,z] loop
+}
 interface GeoMeta {
   n_sensors: number; device: string; sensors: Sensor[]; wall: Wall;
   arrays: { family: string; kind: Kind; shape: string; count: number }[];
   sensor_sets: SensorSet[];
+  vv?: VVPlate[]; coils?: CoilSet[];
 }
 
 const COLOR: Record<Kind, string> = { Bp: "#4aa3ff", Br: "#ff5cad", coil: "#ffb454" };
@@ -37,7 +44,12 @@ const KIND_LABEL: Record<Kind, string> = {
   Bp: "Bp probes", Br: "Br saddle loops", coil: "coils",
 };
 const KINDS: Kind[] = ["Bp", "Br", "coil"];
-const d2r = (deg: number) => (deg * Math.PI) / 180;
+// Sensors time-cursor window (ms), until a real equilibrium node supplies bounds.
+const EQ_TIME_RANGE: [number, number] = [100, 5000];
+// No backend `equilibrium` node exists yet (tracked in #43). Until it does, don't
+// request one — otherwise every time-cursor move fires a 404. Flip to true when the
+// service serves `equilibrium` and the overlay + fetch light up automatically.
+const EQUILIBRIUM_BACKEND = false;
 
 // 2D cross-section: scroll to zoom, drag to pan, toolbar for zoom/reset.
 const PAN_CONFIG: Partial<Plotly.Config> = {
@@ -48,11 +60,17 @@ const PAN_CONFIG: Partial<Plotly.Config> = {
 };
 
 const LEGEND = { orientation: "h" as const, font: { size: 10 }, y: 1.12 };
+// 2D: legend sits BELOW the R-Z plot so it never overlaps the (tall, narrow) scene.
+const LEGEND_2D = {
+  orientation: "h" as const, font: { size: 10 },
+  x: 0.5, xanchor: "center" as const, y: -0.16, yanchor: "top" as const,
+};
 
 // Stable layouts (module constants) + a constant `uirevision`, so re-plotting on
 // a slider move never resets the user's 3D camera or 2D zoom/pan.
 const LAYOUT_2D = {
-  showlegend: true, legend: LEGEND, dragmode: "pan", uirevision: "sensors",
+  showlegend: true, legend: LEGEND_2D, dragmode: "pan", uirevision: "sensors",
+  margin: { t: 24, r: 16, b: 96, l: 56 },
   xaxis: { title: { text: "R (m)" } },
   yaxis: { title: { text: "Z (m)" }, scaleanchor: "x", scaleratio: 1 },
 } as Partial<Plotly.Layout>;
@@ -72,17 +90,24 @@ const LAYOUT_3D = {
 export default function SensorsTab({ machine }: { machine: string }) {
   const dark = useStore((s) => s.theme === "dark");
   const cursorMs = useStore((s) => s.cursorMs);
-  const setCursorMs = useStore((s) => s.setCursorMs);
   const { node, error, loading } = useNode(machine, "geometry");
-  const meta = (node?.meta as unknown as GeoMeta) ?? null;
+  // The Sensors scene needs the rich geometry meta (sensors + wall + sensor_sets);
+  // the backend geometry node currently supplies only n_sensors, so treat an
+  // incomplete meta as absent. The `if (!meta)` guards below then render an empty
+  // scene instead of crashing the whole app on meta.sensors / meta.wall.
+  const rawMeta = node?.meta as unknown as GeoMeta | undefined;
+  const meta = rawMeta?.sensors && rawMeta?.wall ? rawMeta : null;
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
   const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
+  const vvInk = dark ? "rgba(255,255,255,0.16)" : "rgba(20,34,46,0.18)";
   // 3D vessel shell — brighter/whiter than the 2D outline so it reads in the
   // dark scene; lighter mode bumped up slightly too.
   const wallSurface = dark ? "rgb(225,232,245)" : "rgb(70,90,110)";
   const wallSurfaceOpacity = dark ? 0.22 : 0.16;
 
   const [showEq, setShowEq] = useState(true);
+  const [showVV, setShowVV] = useState(true);
+  const [showCoils, setShowCoils] = useState(true);
 
   // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
   // is shown if it belongs to ANY checked set. Default: the broadest Bp + Br set.
@@ -108,16 +133,17 @@ export default function SensorsTab({ machine }: { machine: string }) {
       return { ...base, [name]: !base[name] };
     });
 
-  // Equilibrium overlay (time-parametrized). On a live backend, pull the real
-  // node; otherwise synthesize a swappable stand-in from the time cursor.
+  // Equilibrium overlay. Only the real backend node is drawn; when absent (today
+  // it always is — no equilibrium node yet) nothing is added to the plot or the
+  // legend. Real EFIT/boundary plotting is tracked as a follow-up.
   const live = usingLiveBackend();
   const [tmin, tmax] = EQ_TIME_RANGE;
   const tNow = Math.min(tmax, Math.max(tmin, cursorMs || tmin));
-  const eqLive = useNode(live ? machine : null, "equilibrium", { time: tNow });
+  const eqLive = useNode(EQUILIBRIUM_BACKEND && live ? machine : null, "equilibrium", { time: tNow });
   const equilibrium = useMemo<EquilibriumNode | null>(() => {
     if (!showEq) return null;
-    return (eqLive.node as unknown as EquilibriumNode | null) ?? mockEquilibrium(tNow);
-  }, [showEq, eqLive.node, tNow]);
+    return eqLive.node as unknown as EquilibriumNode | null;
+  }, [showEq, eqLive.node]);
 
   // Sensors visible under the current set selection (union of checked sets).
   const visibleSensors = useMemo(() => {
@@ -165,6 +191,32 @@ export default function SensorsTab({ machine }: { machine: string }) {
       line: { color: wallInk, width: 1.5 },
     } as Partial<Plotly.PlotData>);
 
+    // Vacuum-vessel plates — one combined, null-separated outline under everything.
+    const vv = meta.vv ?? [];
+    if (showVV && vv.length) {
+      const vx: (number | null)[] = [], vy: (number | null)[] = [];
+      for (const plate of vv) {
+        plate.r.forEach((r, i) => { vx.push(r); vy.push(plate.z[i]); });
+        vx.push(null); vy.push(null);
+      }
+      t.push({
+        type: "scatter", mode: "lines", name: "vacuum vessel", x: vx, y: vy,
+        hoverinfo: "skip", showlegend: false, line: { color: vvInk, width: 1 },
+      } as Partial<Plotly.PlotData>);
+    }
+
+    // Perturbation coils — one representative coil's R-Z footprint per set.
+    const coils2d = meta.coils ?? [];
+    if (showCoils) {
+      for (const c of coils2d) {
+        t.push({
+          type: "scatter", mode: "lines", legendgroup: "coils",
+          name: `${c.name}-coils (×${c.count}, ${c.turns > 0 ? "+" : ""}${c.turns}T)`,
+          x: c.rz.r, y: c.rz.z, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
+        } as Partial<Plotly.PlotData>);
+      }
+    }
+
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
       if (!group.length) continue;
@@ -182,14 +234,15 @@ export default function SensorsTab({ machine }: { machine: string }) {
         legendShown = true;
       }
       if (loops.length) {
-        // Each loop projects onto R-Z as a segment of its poloidal length, laid
-        // along the local wall tangent through the sensor center.
+        // Each loop projects onto R-Z as a segment of its poloidal length, oriented
+        // by the sensor's own tilt (its real angle in the R-Z plane, measured from
+        // +R toward +Z) — NOT the vessel tangent, which points off-midplane loops
+        // the wrong way. The segment is symmetric, so tilt's sign/wrap is moot.
         const x: (number | null)[] = [], y: (number | null)[] = [], txt: (string | null)[] = [];
         for (const s of loops) {
-          const u = Math.atan2(s.z, s.r - Rc);
-          const tr = -Math.sin(u), tz = Math.cos(u), h = s.length / 2;
-          x.push(s.r - h * tr, s.r + h * tr, null);
-          y.push(s.z - h * tz, s.z + h * tz, null);
+          const seg = loopSegment2d(s);
+          x.push(seg.x[0], seg.x[1], null);
+          y.push(seg.y[0], seg.y[1], null);
           txt.push(s.name, s.name, null);
         }
         t.push({
@@ -201,7 +254,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, wallInk, visibleSensors, equilibrium, fluxInk]);
+  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -227,6 +280,21 @@ export default function SensorsTab({ machine }: { machine: string }) {
       y: ru.map((R) => phis.map((p) => R * Math.sin(p))),
       z: ru.map((_, i) => phis.map(() => zu[i])),
     } as unknown as Partial<Plotly.PlotData>);
+
+    // Perturbation coils — every coil's real 3D loop.
+    if (showCoils) {
+      for (const c of meta.coils ?? []) {
+        const cx: (number | null)[] = [], cy: (number | null)[] = [], cz: (number | null)[] = [];
+        for (const loop of c.loops) {
+          for (const p of loop) { cx.push(p[0]); cy.push(p[1]); cz.push(p[2]); }
+          cx.push(null); cy.push(null); cz.push(null);
+        }
+        t.push({
+          type: "scatter3d", mode: "lines", name: `${c.name}-coils`, legendgroup: "coils",
+          x: cx, y: cy, z: cz, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
+        } as unknown as Partial<Plotly.PlotData>);
+      }
+    }
 
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
@@ -275,7 +343,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity]);
+  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
 
   return (
     <div className="card">
@@ -317,22 +385,23 @@ export default function SensorsTab({ machine }: { machine: string }) {
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
-                equilibrium {!live && <em style={{ opacity: 0.6 }}>(synthetic)</em>}
+                equilibrium
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: vvInk, display: "inline-block" }} />
+                vacuum vessel
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={showCoils} onChange={() => setShowCoils((v) => !v)} />
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR.coil, display: "inline-block" }} />
+                coils
               </label>
             </div>
           </div>
 
-          {/* Shared time cursor — also linked to the rotating / QS views. */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "0 0 14px", fontSize: 13 }}>
-            <span style={{ opacity: 0.7 }}>time</span>
-            <input
-              type="range" min={tmin} max={tmax} step={10} value={tNow}
-              onChange={(e) => setCursorMs(Number(e.target.value))}
-              style={{ flex: "1 1 240px", maxWidth: 420 }}
-            />
-            <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 70 }}>{tNow.toFixed(0)} ms</span>
-          </div>
-
+          {/* No time cursor here: sensor geometry is shot-static, and the only
+              time-dependent overlay (equilibrium) is a future backend node (#43). */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
               <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} />

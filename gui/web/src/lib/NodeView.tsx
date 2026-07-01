@@ -205,6 +205,18 @@ export default function NodeView({ node, height }: { node: Node; height?: number
         />
       );
     }
+
+    default: {
+      // A kind outside the known union (backend shipped a new node before the
+      // contract was updated, or a malformed payload). Render a placeholder —
+      // returning nothing here makes React throw "nothing was returned".
+      const unknownKind = (node as { kind?: string }).kind ?? "unknown";
+      return (
+        <div className="placeholder" style={{ padding: 16 }}>
+          Unsupported node kind: <code>{unknownKind}</code>
+        </div>
+      );
+    }
   }
 }
 

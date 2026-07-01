@@ -8,34 +8,8 @@ import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
 import { usingLiveBackend, fetchChannelUsage, type ChannelUsage } from "../../lib/api";
 import type { Node } from "../../lib/contract";
+import { GATE_POS_MAX, gatePosToPct, percentile } from "../../lib/rotatingTransforms";
 
-// p-th percentile of a numeric array (linear interpolation). Used by the power gate
-// to pick a noise-floor threshold from the visible cells. NOTE: sorts `values` in
-// place — callers pass freshly-built throwaway arrays, so we skip the copy to keep
-// slider scrubbing allocation-free.
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) return -Infinity;
-  const s = values.sort((a, b) => a - b);
-  if (p <= 0) return s[0];
-  if (p >= 100) return s[s.length - 1];
-  const idx = (p / 100) * (s.length - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.ceil(idx);
-  return s[lo] + (s[hi] - s[lo]) * (idx - lo);
-}
-
-// Power-gate slider mapping. The slider position is linear in [0, 1000] but the
-// percentile it selects follows a log curve in the "headroom" (100 − percentile):
-// the top of the travel resolves finely (e.g. 97 → 99.5%) where the noise floor
-// matters, instead of a coarse 1%-per-step linear scale.
-const GATE_POS_MAX = 1000;
-const GATE_H_LO = 100; // headroom at pos 0   → 0th percentile (show everything)
-const GATE_H_HI = 0.5; // headroom at pos max → 99.5th percentile (tightest crop)
-function gatePosToPct(pos: number): number {
-  const t = Math.min(1, Math.max(0, pos / GATE_POS_MAX));
-  const h = Math.exp(Math.log(GATE_H_LO) * (1 - t) + Math.log(GATE_H_HI) * t);
-  return Math.round((100 - h) * 10) / 10; // 0.1%-resolution percentile
-}
 // Slider position that yields ≈70% by default (a sensible noise floor to start).
 const GATE_POS_DEFAULT = 227;
 
