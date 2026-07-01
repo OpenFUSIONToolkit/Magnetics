@@ -125,6 +125,12 @@ function qs(params?: Record<string, string | number>): string {
 }
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch failed (${res.status}): ${url}`);
+  if (!res.ok) {
+    // Surface the service's reason (FastAPI `{detail}`) when present, so callers
+    // can distinguish e.g. "shot not fetched" (404) from "no QS array" (422).
+    let detail = "";
+    try { detail = ((await res.json()) as { detail?: string }).detail ?? ""; } catch { /* non-JSON body */ }
+    throw new Error(`fetch failed (${res.status}): ${detail || url}`);
+  }
   return res.json() as Promise<T>;
 }
