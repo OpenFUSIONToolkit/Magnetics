@@ -1,7 +1,7 @@
 // Sensors view — the static device sensor layout.
 //
 //   • R-Z poloidal cross-section: the vessel wall, Bp point probes as dots, and
-//     saddle loops drawn as their true poloidal extent (a segment along the wall).
+//     saddle loops drawn as their poloidal extent (a segment along the loop's tilt).
 //   • 3D: every sensor in machine coordinates — Bp probes as points, saddle loops
 //     and coils as their real toroidal × poloidal band, curved around the torus,
 //     inside a faint vessel surface.
@@ -46,6 +46,10 @@ const KINDS: Kind[] = ["Bp", "Br", "coil"];
 const d2r = (deg: number) => (deg * Math.PI) / 180;
 // Sensors time-cursor window (ms), until a real equilibrium node supplies bounds.
 const EQ_TIME_RANGE: [number, number] = [100, 5000];
+// No backend `equilibrium` node exists yet (tracked in #43). Until it does, don't
+// request one — otherwise every time-cursor move fires a 404. Flip to true when the
+// service serves `equilibrium` and the overlay + fetch light up automatically.
+const EQUILIBRIUM_BACKEND = false;
 
 // 2D cross-section: scroll to zoom, drag to pan, toolbar for zoom/reset.
 const PAN_CONFIG: Partial<Plotly.Config> = {
@@ -86,7 +90,6 @@ const LAYOUT_3D = {
 export default function SensorsTab({ machine }: { machine: string }) {
   const dark = useStore((s) => s.theme === "dark");
   const cursorMs = useStore((s) => s.cursorMs);
-  const setCursorMs = useStore((s) => s.setCursorMs);
   const { node, error, loading } = useNode(machine, "geometry");
   // The Sensors scene needs the rich geometry meta (sensors + wall + sensor_sets);
   // the backend geometry node currently supplies only n_sensors, so treat an
@@ -136,7 +139,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
   const live = usingLiveBackend();
   const [tmin, tmax] = EQ_TIME_RANGE;
   const tNow = Math.min(tmax, Math.max(tmin, cursorMs || tmin));
-  const eqLive = useNode(live ? machine : null, "equilibrium", { time: tNow });
+  const eqLive = useNode(EQUILIBRIUM_BACKEND && live ? machine : null, "equilibrium", { time: tNow });
   const equilibrium = useMemo<EquilibriumNode | null>(() => {
     if (!showEq) return null;
     return eqLive.node as unknown as EquilibriumNode | null;
@@ -231,14 +234,15 @@ export default function SensorsTab({ machine }: { machine: string }) {
         legendShown = true;
       }
       if (loops.length) {
-        // Each loop projects onto R-Z as a segment of its poloidal length, laid
-        // along the local wall tangent through the sensor center.
+        // Each loop projects onto R-Z as a segment of its poloidal length, oriented
+        // by the sensor's own tilt (its real angle in the R-Z plane, measured from
+        // +R toward +Z) — NOT the vessel tangent, which points off-midplane loops
+        // the wrong way. The segment is symmetric, so tilt's sign/wrap is moot.
         const x: (number | null)[] = [], y: (number | null)[] = [], txt: (string | null)[] = [];
         for (const s of loops) {
-          const u = Math.atan2(s.z, s.r - Rc);
-          const tr = -Math.sin(u), tz = Math.cos(u), h = s.length / 2;
-          x.push(s.r - h * tr, s.r + h * tr, null);
-          y.push(s.z - h * tz, s.z + h * tz, null);
+          const a = d2r(s.tilt), dr = Math.cos(a), dz = Math.sin(a), h = s.length / 2;
+          x.push(s.r - h * dr, s.r + h * dr, null);
+          y.push(s.z - h * dz, s.z + h * dz, null);
           txt.push(s.name, s.name, null);
         }
         t.push({
@@ -250,7 +254,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
+  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -396,17 +400,8 @@ export default function SensorsTab({ machine }: { machine: string }) {
             </div>
           </div>
 
-          {/* Shared time cursor — also linked to the rotating / QS views. */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "0 0 14px", fontSize: 13 }}>
-            <span style={{ opacity: 0.7 }}>time</span>
-            <input
-              type="range" min={tmin} max={tmax} step={10} value={tNow}
-              onChange={(e) => setCursorMs(Number(e.target.value))}
-              style={{ flex: "1 1 240px", maxWidth: 420 }}
-            />
-            <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 70 }}>{tNow.toFixed(0)} ms</span>
-          </div>
-
+          {/* No time cursor here: sensor geometry is shot-static, and the only
+              time-dependent overlay (equilibrium) is a future backend node (#43). */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
               <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} />
