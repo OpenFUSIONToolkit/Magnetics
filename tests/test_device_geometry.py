@@ -101,18 +101,25 @@ def test_fetch_resolution_skips_decommissioned():
     assert query == [] and skipped == ["S_GONE"]
 
 
-# ── real device file: seeded shots vs the pre-152472 era ──────────────────────
-def test_real_file_skips_modeled_sensors_before_floor():
+# ── real device file: the three availability eras (124400 / 151593) ───────────
+def test_real_file_resolves_sensors_by_era():
     from magnetics.data.fetch import toksearch as tf
 
     dev = devices.load_device("diiid")
-    ids = ["MPID66M020", "MPID66M067", "ISLD66M017"]
-    ids = [i for i in ids if i in dev["sensors"]]
-    assert ids, "expected known sensors in the device file"
-    q_now, _c, skip_now = tf._resolve_pointnames(dev, ids, 184927)
-    q_old, _c2, skip_old = tf._resolve_pointnames(dev, ids, 150000)
-    assert q_now == ids and skip_now == []  # all valid since 152472
-    assert set(skip_old) == set(ids) and q_old == []  # none modeled before the floor
+    survivor = "MPID66M067"  # legacy survivor: present from 124400
+    upgrade = "MPID66M020"  # upgrade-only: present from 151593
+    ids = [survivor, upgrade]
+    assert all(i in dev["sensors"] for i in ids), "expected known sensors in the device file"
+
+    # Modern shot: both resolve.
+    q, _c, skip = tf._resolve_pointnames(dev, ids, 184927)
+    assert set(q) == set(ids) and skip == []
+    # Legacy era (124400 ≤ shot < 151593): survivor resolves, upgrade-only is skipped.
+    q, _c, skip = tf._resolve_pointnames(dev, ids, 147131)
+    assert q == [survivor] and skip == [upgrade]
+    # Pre-legacy (shot < 124400): neither is modeled.
+    q, _c, skip = tf._resolve_pointnames(dev, ids, 120000)
+    assert q == [] and set(skip) == set(ids)
 
 
 def test_diiid_geometry_is_shot_dependent():
