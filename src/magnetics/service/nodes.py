@@ -1165,6 +1165,7 @@ def _qs_run(
     energy: float,
     tmin_s: float,
     tmax_s: float,
+    fit_basis: str = "sinusoidal-integral",
 ):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
@@ -1172,6 +1173,11 @@ def _qs_run(
     explicit cache-key arguments so the result is reused across node requests
     that share the same settings. tmin_s/tmax_s are in seconds and come from
     _prep_qs_ds (which reads HDF5 defaults and applies any user override).
+    ``fit_basis`` selects the spatial basis: the DIII-D default
+    ``sinusoidal-integral`` models each sensor as an extended loop (needs
+    tilt/length/delta_phi); ``sinusoidal-point`` treats it as a point (only
+    r/z/phi), which is what devices lacking extended-loop geometry (e.g. KSTAR)
+    use — resolved per-device in _prep_qs_ds.
     """
     from .._slcontour.run import run_steps
 
@@ -1194,6 +1200,7 @@ def _qs_run(
             detrend_type=detrend_type,
             detrend_band=(db_lo_s, db_hi_s),
         ),
+        fit_kwargs=dict(fit_basis=fit_basis),
         verbose=False,
     )
     return r
@@ -1243,6 +1250,10 @@ def _prep_qs_ds(shot, params):
             "quasi_stationary" if "quasi_stationary" in dev.get("sensor_sets", {}) else default_cf
         )
     channel_filter = params.get("channel_filter", default_cf) if params else default_cf
+    # Spatial-fit basis is device-specific: a device may declare ``qs_fit_basis``
+    # (KSTAR → ``sinusoidal-point``, since it has no extended-loop tilt/length yet);
+    # DIII-D falls back to the extended-loop ``sinusoidal-integral`` default.
+    fit_basis = (dev or {}).get("qs_fit_basis", "sinusoidal-integral")
     detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
     # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
     # so _qs_run defaults to the first 10ms of the shot window.
@@ -1282,6 +1293,7 @@ def _prep_qs_ds(shot, params):
             energy,
             tmin_s,
             tmax_s,
+            fit_basis,
         )
 
 

@@ -42,6 +42,7 @@
     "poloidal": "mirnov_poloidal"
   },
   "qs_default_set": "quasi_stationary",
+  "qs_fit_basis": "sinusoidal-point",
   "signal_groups": {
     "mirnov_toroidal": {
       "unit": "T/s",

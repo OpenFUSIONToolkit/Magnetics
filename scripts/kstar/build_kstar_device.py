@@ -370,6 +370,10 @@ doc = {
     # Default sensor set for the SLCONTOUR quasi-stationary fit (nodes._prep_qs_ds
     # reads this so KSTAR uses its own composite instead of DIII-D's Bp_LFS_midplane).
     "qs_default_set": "quasi_stationary",
+    # Point-sensor spatial basis: KSTAR geometry is r/z/phi only (no extended-loop
+    # tilt/length yet), so the fit models each sensor as a point rather than DIII-D's
+    # extended-loop "sinusoidal-integral". Upgrade to integral once tilt/length land.
+    "qs_fit_basis": "sinusoidal-point",
     "signal_groups": GROUPMETA,
     "alerts": ALERTS,
     "sensors": sensors,

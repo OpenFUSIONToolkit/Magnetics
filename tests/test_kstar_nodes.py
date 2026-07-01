@@ -53,11 +53,12 @@ def test_set_channels_phi_unaffected_by_theta_fallback(monkeypatch):
     assert out == {"D": pytest.approx(12.0)}
 
 
-# ── device-aware QS channel_filter in _prep_qs_ds ────────────────────────────
-def test_qs_default_filter_is_device_specific(monkeypatch, kstar_shot, synthetic_shot):
-    """KSTAR resolves to its ``quasi_stationary`` composite; DIII-D keeps the
-    legacy ``Bp_LFS_midplane`` literal. We capture the channel_filter that
-    ``_prep_qs_ds`` hands to ``_qs_run`` without running the (geometry-dependent) fit."""
+# ── device-aware QS channel_filter + fit_basis in _prep_qs_ds ────────────────
+def test_qs_defaults_are_device_specific(monkeypatch, kstar_shot, synthetic_shot):
+    """KSTAR resolves to its ``quasi_stationary`` composite + the point basis;
+    DIII-D keeps ``Bp_LFS_midplane`` + the extended-loop integral basis. We capture
+    what ``_prep_qs_ds`` hands to ``_qs_run`` without running the geometry-dependent fit
+    (``fit_basis`` is the last positional arg, so read it from ``*a``)."""
 
     class _StopFit(Exception):
         pass
@@ -66,14 +67,20 @@ def test_qs_default_filter_is_device_specific(monkeypatch, kstar_shot, synthetic
 
     def fake_qs_run(shot, ns, ms, channel_filter, *a, **k):
         captured["cf"] = channel_filter
+        captured["fb"] = a[-1]  # fit_basis is the final positional arg
         raise _StopFit
 
     monkeypatch.setattr(nodes, "_qs_run", fake_qs_run)
 
-    for shot, expect in ((kstar_shot, "quasi_stationary"), (synthetic_shot, "Bp_LFS_midplane")):
+    cases = (
+        (kstar_shot, "quasi_stationary", "sinusoidal-point"),
+        (synthetic_shot, "Bp_LFS_midplane", "sinusoidal-integral"),
+    )
+    for shot, expect_cf, expect_fb in cases:
         with pytest.raises(_StopFit):
             nodes._prep_qs_ds(shot, None)
-        assert captured["cf"] == expect, f"{shot} → {captured['cf']}"
+        assert captured["cf"] == expect_cf, f"{shot} cf → {captured['cf']}"
+        assert captured["fb"] == expect_fb, f"{shot} fit_basis → {captured['fb']}"
 
 
 # ── rotating spectral nodes on the synthetic KSTAR shot ──────────────────────
