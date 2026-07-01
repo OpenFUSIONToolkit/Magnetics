@@ -109,6 +109,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
 
   const [showEq, setShowEq] = useState(true);
   const [showVV, setShowVV] = useState(true);
+  // Perturbation-coil overlay — device-agnostic, driven entirely by meta.coils
+  // (whatever coil sets the device config supplies); on by default.
+  const [showCoils, setShowCoils] = useState(true);
 
   // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
   // is shown if it belongs to ANY checked set. Default: the broadest Bp + Br set.
@@ -126,8 +129,6 @@ export default function SensorsTab({ machine }: { machine: string }) {
         widest[set.kind] = set;
     }
     Object.values(widest).forEach((s) => { if (s) init[s.name] = true; });
-    // Also show the full 3D coil set by default.
-    if ("All 3D Coils" in init) init["All 3D Coils"] = true;
     return init;
   }, [sets, userSets]);
   const toggleSet = (name: string) =>
@@ -201,6 +202,18 @@ export default function SensorsTab({ machine }: { machine: string }) {
       } as Partial<Plotly.PlotData>);
     }
 
+    // Perturbation coils — one representative coil's R-Z footprint per set.
+    const coils2d = meta.coils ?? [];
+    if (showCoils) {
+      for (const c of coils2d) {
+        t.push({
+          type: "scatter", mode: "lines", legendgroup: "coils",
+          name: `${c.name}-coils (×${c.count}, ${c.turns > 0 ? "+" : ""}${c.turns}T)`,
+          x: c.rz.r, y: c.rz.z, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
+        } as Partial<Plotly.PlotData>);
+      }
+    }
+
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
       if (!group.length) continue;
@@ -238,7 +251,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, vvInk]);
+  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -274,6 +287,21 @@ export default function SensorsTab({ machine }: { machine: string }) {
       x: [null], y: [null], z: [null], hoverinfo: "skip",
       line: { color: wallSurface, width: 3 },
     } as unknown as Partial<Plotly.PlotData>);
+
+    // Perturbation coils — every coil's real 3D loop.
+    if (showCoils) {
+      for (const c of meta.coils ?? []) {
+        const cx: (number | null)[] = [], cy: (number | null)[] = [], cz: (number | null)[] = [];
+        for (const loop of c.loops) {
+          for (const p of loop) { cx.push(p[0]); cy.push(p[1]); cz.push(p[2]); }
+          cx.push(null); cy.push(null); cz.push(null);
+        }
+        t.push({
+          type: "scatter3d", mode: "lines", name: `${c.name}-coils`, legendgroup: "coils",
+          x: cx, y: cy, z: cz, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
+        } as unknown as Partial<Plotly.PlotData>);
+      }
+    }
 
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
@@ -325,7 +353,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, visibleSensors, wallSurface, wallSurfaceOpacity]);
+  }, [meta, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
 
   return (
     <div className="card">
@@ -382,6 +410,11 @@ export default function SensorsTab({ machine }: { machine: string }) {
                 <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: vvInk, display: "inline-block" }} />
                 vacuum vessel
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={showCoils} onChange={() => setShowCoils((v) => !v)} />
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR.coil, display: "inline-block" }} />
+                coils
               </label>
             </div>
           </div>
