@@ -38,6 +38,7 @@ dev = [
     "jupyter>=1.1.0",
     "nbconvert>=7.16",
     "nbstripout>=0.9.1",
+    "ty>=0.0.52",
 ]
 
 # Run the mock service:  uv run --extra service magnetics-service
