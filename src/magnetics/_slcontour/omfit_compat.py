@@ -348,16 +348,18 @@ def load_sensor_table(device="DIII-D"):
     return sensor_geometry(device)
 
 
-def load_wall(device="DIII-D"):
+def load_wall(device="DIII-D", shot=None):
     """Return the ``(r, z)`` first-wall outline arrays from the device JSON.
 
-    Returns ``(None, None)`` if no device file or wall section is found.
+    The detailed ``wall`` outline is shot-segmented. Layout/plotting callers use
+    the nearest modeled wall for shots before the earliest wall segment; fetch and
+    sensor validity remain strict in ``magnetics.data.devices``.
     """
     try:
         dev = load_device(device)
     except (FileNotFoundError, OSError):
         return None, None
-    wall = dev.get("wall")
+    wall = _devices.feature_nearest(dev, "wall", int(shot) if shot is not None else None)
     if not wall or "r" not in wall or "z" not in wall:
         return None, None
     return np.array(wall["r"], dtype=float), np.array(wall["z"], dtype=float)

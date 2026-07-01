@@ -150,3 +150,27 @@ def feature_at(dev: dict, key: str, shot: int) -> dict | None:
     if active is None:
         return None
     return {k: v for k, v in active.items() if k != "since_shot"}
+
+
+def feature_nearest(dev: dict, key: str, shot: int | None) -> dict | None:
+    """Top-level geometry segment for layout/plotting at ``shot``.
+
+    Uses the active segment when available; for shots before the earliest modeled
+    segment, returns that earliest segment. Fetch validity remains strict via
+    ``feature_at`` / sensor-specific resolvers.
+    """
+    segs = _segments(dev.get(key))
+    if not segs:
+        return None
+    if shot is None:
+        active = segs[-1]
+    else:
+        active = None
+        for seg in segs:
+            if seg.get("since_shot", 0) <= shot:
+                active = seg
+            else:
+                break
+        if active is None:
+            active = segs[0]
+    return {k: v for k, v in active.items() if k != "since_shot"}

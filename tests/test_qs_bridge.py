@@ -45,6 +45,14 @@ def test_dropping_a_required_variable_raises_not_silently_misserves(fit_ds):
         qs_bridge.fit_to_qs_fit_node(broken)
 
 
+def test_fit_quality_statuses_use_contract_vocabulary(fit_ds):
+    node = qs_bridge.fit_to_fit_quality_node(fit_ds)
+    statuses = [field["status"] for field in node["fields"] if "status" in field]
+
+    assert statuses
+    assert set(statuses) <= {"good", "warn", "bad"}
+
+
 def test_amplitude_sigma_is_finite(fit_ds):
     node = qs_bridge.fit_to_amplitude_node(fit_ds)
     sigma = np.asarray(node["meta"]["sigma"], dtype=float)

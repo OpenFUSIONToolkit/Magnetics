@@ -55,14 +55,6 @@ def _mode_label(n: int | float, m: int | float) -> str:
     return f"n={n}" if m == 0 else f"m/n={m}/{n}"
 
 
-def _quality_status(K: float) -> str:
-    if K > 20:
-        return "error"
-    if K > 10:
-        return "warn"
-    return "ok"
-
-
 def _reconstruct_grid(
     fit_ds, phi_grid: np.ndarray, theta_grid: np.ndarray, t_idx: int
 ) -> np.ndarray:
@@ -257,8 +249,12 @@ def fit_to_fit_quality_node(fit_ds) -> dict:
     return contracts.metrics(
         title="fit quality",
         fields=[
-            {"label": "K (raw)", "value": f"{K:.1f}", "status": _quality_status(K)},
-            {"label": "K (eff)", "value": f"{eff_cn:.1f}", "status": _quality_status(eff_cn)},
+            {"label": "K (raw)", "value": f"{K:.1f}", "status": contracts.quality_for_k(K)},
+            {
+                "label": "K (eff)",
+                "value": f"{eff_cn:.1f}",
+                "status": contracts.quality_for_k(eff_cn),
+            },
             {"label": "K cutoff", "value": f"{fit_cond:.0f}"},
             {"label": "χ² (mean)", "value": f"{mean_chi2:.3f}"},
             {"label": "channels", "value": n_ch},

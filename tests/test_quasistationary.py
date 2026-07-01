@@ -1,12 +1,6 @@
 """The pure quasi-stationary port (`core/quasistationary.py`) — previously a test
 desert. Covers modal recovery, the helicity sign-flip, and the fit↔reconstruct
 round-trip.
-
-Sign-convention note (audit follow-up): `quasistationary.reconstruct_grid` uses
-`exp(+i(nφ+mθ))` while `qs_bridge._reconstruct_grid` uses `exp(-i…)`. These are
-NOT in conflict — each matches its own pipeline's fit basis, and each round-trips
-(this file proves it for the pure port; `test_qs_bridge` + `qs_fit` cover the
-other). Do not "align" the signs without also flipping the matching fit basis.
 """
 
 from __future__ import annotations
@@ -57,3 +51,60 @@ def test_fit_reconstruct_roundtrip():
     res = qs.fit(_T_MS, signal, _P1, _P2, _TH, _TH, ns=(1, 2, 3), ms=(0,))
     recon = qs.reconstruct_grid(res, _PHI, np.array([0.0]), t_idx=0)[0]
     np.testing.assert_allclose(recon, patt, atol=1e-9)
+
+
+def test_integral_basis_is_separable_for_nonzero_n_and_m():
+    x1 = np.array([10.0, 100.0])
+    x2 = x1 + 20.0
+    y1 = np.array([5.0, 60.0])
+    y2 = y1 + 15.0
+    n, m = 2, 3
+
+    two_dim = qs.form_basis_function(n, m, x1, x2, y1, y2, fit_basis="sinusoidal-integral")
+    toroidal = qs.form_basis_function(n, 0, x1, x2, y1, y2, fit_basis="sinusoidal-integral")
+    poloidal = qs.form_basis_function(0, m, x1, x2, y1, y2, fit_basis="sinusoidal-integral")
+
+    np.testing.assert_allclose(two_dim, toroidal * poloidal)
+
+
+def test_fit_sizes_sigmas_for_underdetermined_basis():
+    phi = np.linspace(0.0, 300.0, 6)
+    theta = np.linspace(0.0, 150.0, 6)
+    signal = np.cos(np.deg2rad(phi))[:, None] + 0.3 * np.sin(np.deg2rad(theta))[:, None]
+
+    res = qs.fit(
+        np.array([0.0]),
+        signal,
+        phi,
+        phi,
+        theta,
+        theta,
+        ns=(1, 2, 3),
+        ms=(0, 1, 2),
+        fit_basis="sinusoidal-point",
+    )
+
+    assert res.sigmas.shape == res.ns.shape
+    assert np.all(np.isfinite(np.abs(res.sigmas)))
+
+
+def test_phase_shifted_mode_reconstructs_without_toroidal_mirror():
+    phi = np.linspace(0.0, 315.0, 8)
+    theta = np.zeros_like(phi)
+    signal = np.cos(np.deg2rad(phi - 40.0))[:, None]
+
+    res = qs.fit(
+        np.array([0.0]),
+        signal,
+        phi,
+        phi,
+        theta,
+        theta,
+        ns=(1,),
+        ms=(0,),
+        fit_basis="sinusoidal-point",
+    )
+    grid = np.linspace(0.0, 350.0, 36)
+    recon = qs.reconstruct_grid(res, grid, np.array([0.0]), t_idx=0)[0]
+
+    np.testing.assert_allclose(recon, np.cos(np.deg2rad(grid - 40.0)), atol=1e-6)
