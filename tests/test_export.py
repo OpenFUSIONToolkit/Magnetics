@@ -69,6 +69,33 @@ def test_scatter2d_node_keeps_labels_and_nan_wrap_breaks():
         assert fit_x[0] == 0.0 and fit_x[2] == 90.0 and fit_x[1] != fit_x[1]  # NaN
 
 
+def test_scatter2d_non_ascii_labels_roundtrip():
+    # φ/θ-decorated sensor labels must survive — fixed-width "S" would raise
+    # UnicodeEncodeError; utf-8 vlen strings keep them.
+    node = {
+        "kind": "scatter2d",
+        "points": [
+            {"x": 0, "y": 1, "label": "Bpφ", "group": "θ-array"},
+            {"x": 90, "y": 2, "label": "µ-coil", "group": "θ-array"},
+        ],
+    }
+    with h5py.File(io.BytesIO(export.node_to_hdf5("990000", "mode_pattern", node, {})), "r") as h:
+        assert [s.decode() for s in h["label"][:]] == ["Bpφ", "µ-coil"]
+        assert [s.decode() for s in h["group"][:]] == ["θ-array", "θ-array"]
+
+
+def test_download_serializer_failure_is_clean_500(synthetic_shot, monkeypatch):
+    # A node that builds fine but can't serialize must yield a clean 500, not an
+    # unhandled stack trace (the writer sits outside build_node's try/except).
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(export, "node_to_hdf5", boom)
+    r = client.get(f"/api/node/{synthetic_shot}/spectrogram/download")
+    assert r.status_code == 500
+    assert "could not serialize" in r.json()["detail"]
+
+
 def test_metrics_node_writes_scalar_attrs():
     node = {
         "kind": "metrics",

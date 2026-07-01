@@ -18,6 +18,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
+import h5py
 import numpy as np
 
 
@@ -26,8 +27,9 @@ def _num_array(values) -> np.ndarray:
 
     Node payloads are plain JSON, so a "column" can be a list of lists (2-D fields),
     a list of numbers, or carry `null` (wrap breaks in fit lines). None → NaN keeps
-    the array numeric and rectangular-friendly; ragged rows fall back to object dtype
-    so the write still succeeds rather than raising.
+    the array numeric and rectangular-friendly. A ragged/non-numeric list falls back
+    to object dtype — h5py can't store that, so the caller (the /download route)
+    turns the resulting write error into a clean 500 rather than a raw stack trace.
     """
     arr = np.asarray(values, dtype=object)
 
@@ -69,12 +71,14 @@ def _write_node(h5, node: dict) -> None:
         pts = node.get("points", [])
         h5.create_dataset("x", data=_num_array([p.get("x") for p in pts]))
         h5.create_dataset("y", data=_num_array([p.get("y") for p in pts]))
+        # utf-8 vlen strings, not fixed-width ASCII ("S"): sensor labels can carry
+        # φ/θ/µ and a non-ASCII char would raise UnicodeEncodeError under "S".
         labels = [str(p.get("label") or "") for p in pts]
         if any(labels):
-            h5.create_dataset("label", data=np.array(labels, dtype="S"))
+            h5.create_dataset("label", data=labels, dtype=h5py.string_dtype())
         groups = [str(p.get("group") or "") for p in pts]
         if any(groups):
-            h5.create_dataset("group", data=np.array(groups, dtype="S"))
+            h5.create_dataset("group", data=groups, dtype=h5py.string_dtype())
         for err in ("error_x", "error_y"):
             if any(p.get(err) is not None for p in pts):
                 h5.create_dataset(err, data=_num_array([p.get(err) for p in pts]))
@@ -141,8 +145,6 @@ def node_to_hdf5(shot: str, node_id: str, node: dict, params: dict | None = None
         h5.attrs["generated"] = datetime.now(timezone.utc).isoformat()
         h5.attrs["source"] = "magnetics service /api/node download"
         _write_node(h5, node)
-
-    import h5py
 
     # Prefer an in-memory file (no disk touch); fall back to a temp file if this h5py
     # build lacks the file-like (fileobj) driver.
