@@ -41,7 +41,7 @@ interface GeoMeta {
 
 const COLOR: Record<Kind, string> = { Bp: "#4aa3ff", Br: "#ff5cad", coil: "#ffb454" };
 const KIND_LABEL: Record<Kind, string> = {
-  Bp: "Bp probes", Br: "Br saddle loops", coil: "coils",
+  Bp: "Bp probes", Br: "Br saddle loops", coil: "Coils",
 };
 const KINDS: Kind[] = ["Bp", "Br", "coil"];
 // Sensors time-cursor window (ms), until a real equilibrium node supplies bounds.
@@ -109,7 +109,6 @@ export default function SensorsTab({ machine }: { machine: string }) {
 
   const [showEq, setShowEq] = useState(true);
   const [showVV, setShowVV] = useState(true);
-  const [showCoils, setShowCoils] = useState(true);
 
   // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
   // is shown if it belongs to ANY checked set. Default: the broadest Bp + Br set.
@@ -200,18 +199,6 @@ export default function SensorsTab({ machine }: { machine: string }) {
       } as Partial<Plotly.PlotData>);
     }
 
-    // Perturbation coils — one representative coil's R-Z footprint per set.
-    const coils2d = meta.coils ?? [];
-    if (showCoils) {
-      for (const c of coils2d) {
-        t.push({
-          type: "scatter", mode: "lines", legendgroup: "coils",
-          name: `${c.name}-coils (×${c.count}, ${c.turns > 0 ? "+" : ""}${c.turns}T)`,
-          x: c.rz.r, y: c.rz.z, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
-        } as Partial<Plotly.PlotData>);
-      }
-    }
-
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
       if (!group.length) continue;
@@ -249,7 +236,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
+  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, vvInk]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -263,6 +250,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
     for (let i = 0; i < meta.wall.r.length; i += step) { ru.push(meta.wall.r[i]); zu.push(meta.wall.z[i]); }
     t.push({
       type: "surface", showscale: false, opacity: wallSurfaceOpacity, hoverinfo: "skip",
+      // Surface traces don't render a legend swatch, so a legend-only line trace
+      // (below) carries the wall's label; keep this one out of the legend.
+      showlegend: false,
       colorscale: [[0, wallSurface], [1, wallSurface]],
       // Flat, even shading so the shell reads uniformly bright (no dark facets).
       lighting: { ambient: 1.0, diffuse: 0.0, specular: 0.0, fresnel: 0.0 },
@@ -276,20 +266,12 @@ export default function SensorsTab({ machine }: { machine: string }) {
       z: ru.map((_, i) => phis.map(() => zu[i])),
     } as unknown as Partial<Plotly.PlotData>);
 
-    // Perturbation coils — every coil's real 3D loop.
-    if (showCoils) {
-      for (const c of meta.coils ?? []) {
-        const cx: (number | null)[] = [], cy: (number | null)[] = [], cz: (number | null)[] = [];
-        for (const loop of c.loops) {
-          for (const p of loop) { cx.push(p[0]); cy.push(p[1]); cz.push(p[2]); }
-          cx.push(null); cy.push(null); cz.push(null);
-        }
-        t.push({
-          type: "scatter3d", mode: "lines", name: `${c.name}-coils`, legendgroup: "coils",
-          x: cx, y: cy, z: cz, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
-        } as unknown as Partial<Plotly.PlotData>);
-      }
-    }
+    // Legend-only proxy so the (legend-less) wall surface gets a labelled entry.
+    t.push({
+      type: "scatter3d", mode: "lines", name: meta.wall.label,
+      x: [null], y: [null], z: [null], hoverinfo: "skip",
+      line: { color: wallSurface, width: 3 },
+    } as unknown as Partial<Plotly.PlotData>);
 
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
@@ -341,7 +323,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
+  }, [meta, visibleSensors, wallSurface, wallSurfaceOpacity]);
 
   return (
     <div className="card">
@@ -398,11 +380,6 @@ export default function SensorsTab({ machine }: { machine: string }) {
                 <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: vvInk, display: "inline-block" }} />
                 vacuum vessel
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input type="checkbox" checked={showCoils} onChange={() => setShowCoils((v) => !v)} />
-                <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR.coil, display: "inline-block" }} />
-                coils
               </label>
             </div>
           </div>
