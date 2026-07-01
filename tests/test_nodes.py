@@ -63,6 +63,8 @@ def test_spectrogram_smooth_preserves_grid_and_off_is_noop():
     )
     # same (t, f) grid — smoothing blurs values, it doesn't reshape
     assert len(sm["z"]) == len(base["z"]) and len(sm["x"]) == len(base["x"])
+    # ...but the values must actually change, or the smooth wiring silently no-op'd
+    assert sm["z"] != base["z"]
     # smoothing off (flag 0) reproduces the default spectrogram exactly
     off = nodes.build_node(
         shot, "spectrogram", {"smooth": 0, "smooth_t_cells": 3, "smooth_f_cells": 1.5}
