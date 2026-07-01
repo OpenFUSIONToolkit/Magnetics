@@ -3,6 +3,7 @@
 Imports only magnetics.service.mock (numpy), not the FastAPI app — so these run
 with the core install, no `service` extra needed.
 """
+
 from magnetics.service import mock
 
 
@@ -31,19 +32,19 @@ def test_mock_geometry_reads_the_device_table_not_a_snapshot():
     sensors = mock.geometry_frames("MOCK-A", {})[0][1]["sensors"]
     s = next(x for x in sensors if x["r"] is not None)
     ref = diiid.sensor(s["name"], _GEOM_REF_SHOT)
-    assert ref["r"] is not None                       # genuinely came from the table
+    assert ref["r"] is not None  # genuinely came from the table
     assert s["r"] == ref["r"] and s["z"] == ref["z"]
-    assert s["theta"] == ref["theta"]                 # real, table-derived θ
+    assert s["theta"] == ref["theta"]  # real, table-derived θ
 
 
 def test_qs_fit_refines_coarse_to_fine():
     frames = mock.qs_fit_frames("MOCK-A", {})
     progs = [p for p, _ in frames]
-    assert progs == sorted(progs) and progs[-1] == 1.0   # monotonic, ends at 1
+    assert progs == sorted(progs) and progs[-1] == 1.0  # monotonic, ends at 1
     data = frames[-1][1]
     assert {"contour", "sensors", "modes", "quality"} <= set(data)
     c = data["contour"]
-    assert len(c["z"]) == len(c["theta"])                # z is row-major [theta][phi]
+    assert len(c["z"]) == len(c["theta"])  # z is row-major [theta][phi]
     assert len(c["z"][0]) == len(c["phi"])
     # grid gets finer across frames
     assert len(frames[-1][1]["contour"]["phi"]) > len(frames[0][1]["contour"]["phi"])

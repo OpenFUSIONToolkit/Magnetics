@@ -8,6 +8,7 @@ Where the full SLCONTOUR/MODESPEC physics doesn't exist yet, we serve the real
 underlying data with honest labels (e.g. raw δBp(φ,t) instead of a fitted φ–θ map)
 rather than fake numbers.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -40,7 +41,7 @@ def _f(params, key, default=None):
         return default
     try:
         return float(params[key])
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
@@ -88,15 +89,19 @@ def channel_usage(shot: str) -> dict:
 
     used = [{"name": nm, "roles": roles[nm]} for nm in all_names if nm in roles]
     unused = [nm for nm in all_names if nm not in roles]
-    return {"shot": str(shot), "n_total": len(all_names), "n_used": len(used),
-            "used": used, "unused": unused}
+    return {
+        "shot": str(shot),
+        "n_total": len(all_names),
+        "n_used": len(used),
+        "used": used,
+        "unused": unused,
+    }
 
 
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec,
-               _qs_run):
+    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run):
         fn.cache_clear()
 
 
@@ -137,7 +142,7 @@ def _kappa_at(shot, t0_ms=None):
         if "kappa" not in h5source.channel_names(shot):
             return None
         t, d = h5source.load_channel(shot, "kappa")
-    except (KeyError, OSError):
+    except KeyError, OSError:
         return None
     d = np.asarray(d, dtype=float)
     good = np.isfinite(d)
@@ -178,15 +183,18 @@ def _geometry(shot, params=None) -> dict:
         s = diiid.sensor(name, shot)
         if s["phi"] is None:
             continue
-        points.append({"x": s["phi"], "y": s["theta"],
-                       "label": s["family"], "group": s["family"]})
+        points.append({"x": s["phi"], "y": s["theta"], "label": s["family"], "group": s["family"]})
     if not points:
         raise ValueError("no sensors with a parseable toroidal angle")
     return contracts.scatter2d(
-        points, {"x": "φ (deg)", "y": "θ (deg)"},
-        meta={"n_sensors": len(points), "shot": str(shot),
-              "note": "φ, θ from the device geometry table at this shot "
-                      "(θ derived from r, z)"})
+        points,
+        {"x": "φ (deg)", "y": "θ (deg)"},
+        meta={
+            "n_sensors": len(points),
+            "shot": str(shot),
+            "note": "φ, θ from the device geometry table at this shot (θ derived from r, z)",
+        },
+    )
 
 
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
@@ -195,15 +203,14 @@ def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     Prefer the fast Mirnov dB/dt array (MPI_BDOT), then integrated Bp (MPID).
     Returns ((name1, phi1), (name2, phi2)) with the widest non-zero separation."""
     for families in (("MPI_BDOT",), ("MPID",), ("MPI_BDOT", "MPID", "MPIF")):
-        arr = _array_channels(shot, families)        # (name, phi), sorted by phi
+        arr = _array_channels(shot, families)  # (name, phi), sorted by phi
         if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
             return arr[0], arr[-1]
     raise ValueError("need two toroidally-separated probes for a spectrogram")
 
 
 @lru_cache(maxsize=8)
-def _spec_result(shot: str, slice_duration: float, coherence_smooth: int,
-                 max_columns: int = 4000):
+def _spec_result(shot: str, slice_duration: float, coherence_smooth: int, max_columns: int = 4000):
     """The (expensive) STFT, cached so the spectrogram/n-map/coherence/n-spectrum
     nodes share one compute. Keyed on the STFT-shaping params only; cheap post-ops
     (freq crop, denoise) are applied per node. Returns (result, probes, delta_phi).
@@ -217,11 +224,16 @@ def _spec_result(shot: str, slice_duration: float, coherence_smooth: int,
     k = min(t1.size, s1.size, t2.size, s2.size)
     if k < 256:
         raise ValueError(f"channels too short for a spectrogram ({k} samples)")
-    time_s = np.asarray(t1[:k], dtype=float) * 1e-3   # HDF5 time base is ms
+    time_s = np.asarray(t1[:k], dtype=float) * 1e-3  # HDF5 time base is ms
     res = spectral.compute_spectrogram(
-        time_s, s1[:k], s2[:k], delta_phi=float(phi2 - phi1),
-        slice_duration=slice_duration, coherence_smooth=coherence_smooth,
-        max_columns=max_columns)
+        time_s,
+        s1[:k],
+        s2[:k],
+        delta_phi=float(phi2 - phi1),
+        slice_duration=slice_duration,
+        coherence_smooth=coherence_smooth,
+        max_columns=max_columns,
+    )
     return res, (n1, n2), round(float(phi2 - phi1), 1)
 
 
@@ -252,10 +264,13 @@ def _spectrogram(shot, params=None) -> dict:
     # power is [n_times, n_freqs]; heatmap z is [i_y=freq][i_x=time] → transpose.
     z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
     return contracts.heatmap(
-        (np.asarray(res.time) * 1e3).tolist(), f.tolist(), z.tolist(),
+        (np.asarray(res.time) * 1e3).tolist(),
+        f.tolist(),
+        z.tolist(),
         {"x": "time (ms)", "y": "f (kHz)", "z": "log<sub>10</sub> power"},
         discrete=False,
-        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)})
+        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)},
+    )
 
 
 def _mode_number_2pt(shot, params=None) -> dict:
@@ -264,13 +279,21 @@ def _mode_number_2pt(shot, params=None) -> dict:
     usable multi-probe toroidal array."""
     res, mask, probes, dphi = _prep_spec(shot, params)
     f = np.asarray(res.frequency)[mask] / 1e3
-    n = np.abs(np.asarray(res.mode_number, dtype=float)[:, mask])   # |n|, 0…6
+    n = np.abs(np.asarray(res.mode_number, dtype=float)[:, mask])  # |n|, 0…6
     return contracts.heatmap(
-        (np.asarray(res.time) * 1e3).tolist(), f.tolist(), n.T.tolist(),
+        (np.asarray(res.time) * 1e3).tolist(),
+        f.tolist(),
+        n.T.tolist(),
         {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal |n|"},
-        discrete=True, zrange=[-0.5, 6.5],
-        meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot),
-              "method": "2-point round(phase/Δφ)"})
+        discrete=True,
+        zrange=[-0.5, 6.5],
+        meta={
+            "probes": list(probes),
+            "delta_phi_deg": dphi,
+            "shot": str(shot),
+            "method": "2-point round(phase/Δφ)",
+        },
+    )
 
 
 def _mode_number(shot, params=None) -> dict:
@@ -292,7 +315,7 @@ def _mode_number(shot, params=None) -> dict:
         return _mode_number_2pt(shot, params)
     names = tuple(n for n, _ in arr)
     phis = tuple(float(p) for _, p in arr)
-    sd = _f(params, "slice_duration", 0.002)   # honor the resolution knob (500 Hz default)
+    sd = _f(params, "slice_duration", 0.002)  # honor the resolution knob (500 Hz default)
     ms = _array_mode_spec(str(shot), names, phis, sd)
 
     f_khz = np.asarray(ms.freq_band) / 1e3
@@ -317,16 +340,25 @@ def _mode_number(shot, params=None) -> dict:
     show = (q >= gate) & (amp >= floor)
     # Display magnitude |n| (0…6) — folds co/counter-rotating into one label so the
     # discrete palette stays visually distinct; signed n is in the phase fit.
-    z = np.where(show, np.abs(n), np.nan).T    # [freq, time]; NaN → null (Plotly gap)
+    z = np.where(show, np.abs(n), np.nan).T  # [freq, time]; NaN → null (Plotly gap)
     zlist = [[None if not np.isfinite(v) else float(v) for v in row] for row in z]
 
     return contracts.heatmap(
-        t_ms[ti].tolist(), f_khz[mask].tolist(), zlist,
+        t_ms[ti].tolist(),
+        f_khz[mask].tolist(),
+        zlist,
         {"x": "time (ms)", "y": "f (kHz)", "z": "toroidal |n|"},
-        discrete=True, zrange=[-0.5, 6.5],   # 7-bin |n| palette aligned to integers
-        meta={"probes": list(names), "n_probes": len(names), "shot": str(shot),
-              "method": f"array projection |n|≤5 ({len(names)} probes)",
-              "n_gate": round(float(gate), 2), "n_amp_pct": round(amp_pct, 1)})
+        discrete=True,
+        zrange=[-0.5, 6.5],  # 7-bin |n| palette aligned to integers
+        meta={
+            "probes": list(names),
+            "n_probes": len(names),
+            "shot": str(shot),
+            "method": f"array projection |n|≤5 ({len(names)} probes)",
+            "n_gate": round(float(gate), 2),
+            "n_amp_pct": round(amp_pct, 1),
+        },
+    )
 
 
 def _coherence(shot, params=None) -> dict:
@@ -335,22 +367,29 @@ def _coherence(shot, params=None) -> dict:
     f = np.asarray(res.frequency)[mask] / 1e3
     coh = np.asarray(res.coherence, dtype=float)[:, mask]
     return contracts.heatmap(
-        (np.asarray(res.time) * 1e3).tolist(), f.tolist(), coh.T.tolist(),
+        (np.asarray(res.time) * 1e3).tolist(),
+        f.tolist(),
+        coh.T.tolist(),
         {"x": "time (ms)", "y": "f (kHz)", "z": "coherence"},
-        discrete=False, zrange=[0.0, 1.0],
-        meta={"probes": list(probes), "shot": str(shot)})
+        discrete=False,
+        zrange=[0.0, 1.0],
+        meta={"probes": list(probes), "shot": str(shot)},
+    )
 
 
 def _n_spectrum(shot, params=None) -> dict:
     """RMS amplitude per toroidal mode number vs time (the n-spectrum)."""
     res, _mask, probes, _dphi = _prep_spec(shot, params)
-    rms = np.asarray(res.rms_by_mode, dtype=float)   # [n_times, n_modes]
-    modes = np.asarray(res.mode_indices)             # [n_modes]
+    rms = np.asarray(res.rms_by_mode, dtype=float)  # [n_times, n_modes]
+    modes = np.asarray(res.mode_indices)  # [n_modes]
     return contracts.heatmap(
-        (np.asarray(res.time) * 1e3).tolist(), modes.tolist(), rms.T.tolist(),
+        (np.asarray(res.time) * 1e3).tolist(),
+        modes.tolist(),
+        rms.T.tolist(),
         {"x": "time (ms)", "y": "toroidal n", "z": "rms amplitude"},
         discrete=False,
-        meta={"probes": list(probes), "shot": str(shot)})
+        meta={"probes": list(probes), "shot": str(shot)},
+    )
 
 
 # ── shared grid builder for contour and phi_t ────────────────────────────────
@@ -387,14 +426,20 @@ def _toroidal_grid(shot):
 def _contour(shot, params=None) -> dict:
     t_sub, phi_grid, z, phis, n_ch = _toroidal_grid(shot)
     zmax = float(np.nanmax(np.abs(z))) or 1.0
-    overlay = {"points": [{"x": float(p), "y": float(t_sub[0])} for p in phis],
-               "symbol": "square"}
+    overlay = {"points": [{"x": float(p), "y": float(t_sub[0])} for p in phis], "symbol": "square"}
     return contracts.contour(
-        phi_grid.tolist(), t_sub.tolist(), z.tolist(),
+        phi_grid.tolist(),
+        t_sub.tolist(),
+        z.tolist(),
         {"x": "φ (deg)", "y": "time (ms)", "z": "δBp (G)"},
-        zrange=[-zmax, zmax], overlay=overlay,
-        meta={"channels": n_ch, "shot": str(shot),
-              "note": "raw toroidal δBp(φ,t) — SLCONTOUR φ–θ fit pending"})
+        zrange=[-zmax, zmax],
+        overlay=overlay,
+        meta={
+            "channels": n_ch,
+            "shot": str(shot),
+            "note": "raw toroidal δBp(φ,t) — SLCONTOUR φ–θ fit pending",
+        },
+    )
 
 
 # ── array wave-stripes: raw δBp(angle, t) over a few mode periods at the cursor ─
@@ -404,21 +449,21 @@ def _stripes(shot, arr, t0_ms, f_khz, *, n_cycles=8, n_time=320, n_angle=120):
     ``arr`` is a list of (name, angle_deg); returns (t_ms, angle_grid, z[angle, time])."""
     names = [n for n, _ in arr]
     angles = np.array([a for _, a in arr], dtype=float)
-    t_ms, mat = _stack(str(shot), names)            # [ch, time], shared clock
+    t_ms, mat = _stack(str(shot), names)  # [ch, time], shared clock
     t_ms = np.asarray(t_ms, dtype=float)
     if t0_ms is None:
         t0_ms = float(t_ms[t_ms.size // 2])
-    half = max(0.3, 0.5 * n_cycles / max(float(f_khz), 0.5))   # ms, ≈n_cycles wide
+    half = max(0.3, 0.5 * n_cycles / max(float(f_khz), 0.5))  # ms, ≈n_cycles wide
     sel = np.flatnonzero((t_ms >= t0_ms - half) & (t_ms <= t0_ms + half))
-    if sel.size < 4:                                  # cursor off-record → centre window
+    if sel.size < 4:  # cursor off-record → centre window
         c = t_ms.size // 2
         sel = np.arange(max(0, c - 160), min(t_ms.size, c + 160))
     ti = sel[np.linspace(0, sel.size - 1, min(sel.size, n_time)).astype(int)]
     t_sub = t_ms[ti]
-    vals = mat[:, ti]                                 # [ch, n_time]
+    vals = mat[:, ti]  # [ch, n_time]
     order = np.argsort(angles)
     ang_grid = np.linspace(0.0, 360.0, n_angle)
-    ae = np.concatenate([angles[order], angles[order][:1] + 360.0])   # periodic wrap
+    ae = np.concatenate([angles[order], angles[order][:1] + 360.0])  # periodic wrap
     z = np.empty((n_angle, t_sub.size))
     for j in range(t_sub.size):
         ve = np.concatenate([vals[order, j], vals[order, j][:1]])
@@ -433,12 +478,19 @@ def _toroidal_stripes(shot, params=None) -> dict:
     arr = _toroidal_arr(str(shot))
     t_sub, ang, z = _stripes(shot, arr, t0_ms, f_khz)
     return contracts.heatmap(
-        t_sub.tolist(), ang.tolist(), z.tolist(),
-        {"x": "time (ms)", "y": "φ (deg)", "z": "δBp (a.u.)"}, discrete=False,
-        meta={"n_probes": len(arr), "f_kHz": round(float(f_khz), 1),
-              "t0_ms": t0_ms, "shot": str(shot),
-              "note": "raw toroidal δBp(φ,t) at the cursor; diagonal stripes = a "
-                      "rotating mode"})
+        t_sub.tolist(),
+        ang.tolist(),
+        z.tolist(),
+        {"x": "time (ms)", "y": "φ (deg)", "z": "δBp (a.u.)"},
+        discrete=False,
+        meta={
+            "n_probes": len(arr),
+            "f_kHz": round(float(f_khz), 1),
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "note": "raw toroidal δBp(φ,t) at the cursor; diagonal stripes = a rotating mode",
+        },
+    )
 
 
 def _poloidal_stripes(shot, params=None) -> dict:
@@ -450,11 +502,19 @@ def _poloidal_stripes(shot, params=None) -> dict:
     arr = _poloidal_arr(str(shot))
     t_sub, ang, z = _stripes(shot, arr, t0_ms, f_khz)
     return contracts.heatmap(
-        t_sub.tolist(), ang.tolist(), z.tolist(),
-        {"x": "time (ms)", "y": "θ (deg)", "z": "δBp (a.u.)"}, discrete=False,
-        meta={"n_probes": len(arr), "f_kHz": round(float(f_khz), 1),
-              "t0_ms": t0_ms, "shot": str(shot),
-              "note": "raw poloidal δBp(θ,t) at the cursor (toroidal phase not removed)"})
+        t_sub.tolist(),
+        ang.tolist(),
+        z.tolist(),
+        {"x": "time (ms)", "y": "θ (deg)", "z": "δBp (a.u.)"},
+        discrete=False,
+        meta={
+            "n_probes": len(arr),
+            "f_kHz": round(float(f_khz), 1),
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "note": "raw poloidal δBp(θ,t) at the cursor (toroidal phase not removed)",
+        },
+    )
 
 
 # ── raw_trace: one Mirnov probe's dB/dt time series at the cursor ─────────────
@@ -471,16 +531,23 @@ def _raw_trace(shot, params=None) -> dict:
     if t0_ms is None:
         t0_ms = float(t_ms[t_ms.size // 2])
     sel = np.flatnonzero((t_ms >= t0_ms - half_ms) & (t_ms <= t0_ms + half_ms))
-    if sel.size < 2:                                  # cursor off-record → centre window
+    if sel.size < 2:  # cursor off-record → centre window
         c = t_ms.size // 2
         sel = np.arange(max(0, c - 2000), min(t_ms.size, c + 2000))
-    if sel.size > 2000:                               # keep the line light
+    if sel.size > 2000:  # keep the line light
         sel = sel[np.linspace(0, sel.size - 1, 2000).astype(int)]
     series = [{"name": name, "x": t_ms[sel].tolist(), "y": d[sel].tolist()}]
     return contracts.line(
-        series, {"x": "time (ms)", "y": "dB/dt (a.u.)"},
-        meta={"probe": name, "t0_ms": t0_ms, "window_ms": round(2 * half_ms, 1),
-              "shot": str(shot), "note": f"raw dB/dt of {name} around the cursor"})
+        series,
+        {"x": "time (ms)", "y": "dB/dt (a.u.)"},
+        meta={
+            "probe": name,
+            "t0_ms": t0_ms,
+            "window_ms": round(2 * half_ms, 1),
+            "shot": str(shot),
+            "note": f"raw dB/dt of {name} around the cursor",
+        },
+    )
 
 
 # ── phi_t: SLCONTOUR φ–t contour from fit reconstruction ─────────────────────
@@ -505,20 +572,29 @@ def _fit_quality(shot, params=None) -> dict:
     if len(arr) < 4:
         arr = _array_channels(shot, ("MPI_BDOT",))
     m = h5source.meta(shot)
-    fields = [{"label": "shot", "value": str(m["shot"])},
-              {"label": "channels fetched", "value": m["n_channels"]}]
+    fields = [
+        {"label": "shot", "value": str(m["shot"])},
+        {"label": "channels fetched", "value": m["n_channels"]},
+    ]
     if len(arr) >= 7:
         phis = [p for _, p in arr]
         k = geometry.condition_number(phis, n_max=3)
-        fields.insert(0, {"label": "condition number K (n≤3)",
-                          "value": round(k, 2),
-                          "status": contracts.quality_for_k(k)})
+        fields.insert(
+            0,
+            {
+                "label": "condition number K (n≤3)",
+                "value": round(k, 2),
+                "status": contracts.quality_for_k(k),
+            },
+        )
         fields.append({"label": "toroidal-array channels", "value": len(arr)})
     else:
-        fields.append({"label": "condition number K",
-                       "value": "n/a (no toroidal array in this pull)"})
-    return contracts.metrics("Fit quality", fields,
-                             meta={"note": "geometry-only K; full fit unavailable"})
+        fields.append(
+            {"label": "condition number K", "value": "n/a (no toroidal array in this pull)"}
+        )
+    return contracts.metrics(
+        "Fit quality", fields, meta={"note": "geometry-only K; full fit unavailable"}
+    )
 
 
 # ── auto analysis frequency: the dominant mode at the cursor (so shapes track it) ─
@@ -530,8 +606,9 @@ def _auto_freq_khz(shot, t0_ms=None, fmin=1.0, fmax=25.0):
     try:
         res, _probes, _dphi = _spec_result(str(shot), 0.001, 5)
     except Exception:  # noqa: BLE001
-        logger.warning("auto-freq: spectrogram unavailable for shot %s, using 5 kHz",
-                       shot, exc_info=True)
+        logger.warning(
+            "auto-freq: spectrogram unavailable for shot %s, using 5 kHz", shot, exc_info=True
+        )
         return 5.0
     f_khz = np.asarray(res.frequency) / 1e3
     band = (f_khz >= fmin) & (f_khz <= fmax)
@@ -576,8 +653,13 @@ def _array_mode_spec(shot, names, phis, slice_duration):
     # native fine hop would just inflate the per-cell projection (an (n, t, f) einsum)
     # with columns we'd throw away.
     spec = spectral.array_shape_spectrum(
-        mat, np.asarray(t_ms, dtype=float) * 1e-3,
-        fmin=0.0, fmax=50_000.0, slice_duration=slice_duration, max_columns=2000)
+        mat,
+        np.asarray(t_ms, dtype=float) * 1e-3,
+        fmin=0.0,
+        fmax=50_000.0,
+        slice_duration=slice_duration,
+        max_columns=2000,
+    )
     return spectral.array_mode_spectrogram(spec, np.asarray(phis, dtype=float), n_max=5)
 
 
@@ -591,9 +673,12 @@ def _toroidal_arr(shot):
     arr = _array_channels(shot, ("MPI_BDOT",))
     if len(arr) >= 4:
         return arr
-    theta = _real_theta(shot)                       # integrated-Bp midplane fallback
-    arr = [(n, p) for n, p in _array_channels(shot, ("MPID",))
-           if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)]
+    theta = _real_theta(shot)  # integrated-Bp midplane fallback
+    arr = [
+        (n, p)
+        for n, p in _array_channels(shot, ("MPID",))
+        if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)
+    ]
     if len(arr) < 4:
         raise ValueError("not enough toroidal-array channels for a mode fit")
     return arr
@@ -602,8 +687,8 @@ def _toroidal_arr(shot):
 def _toroidal_mode(shot, params):
     """Per-probe phase/amplitude (+1σ) across the toroidal array at one frequency,
     honoring the GUI time cursor. Returns (arr, mode, f_khz, t0_ms)."""
-    t0_ms = _f(params, "time", None)              # GUI cursor (ms)
-    f_khz = _f(params, "f_khz", None)             # explicit, else track the mode
+    t0_ms = _f(params, "time", None)  # GUI cursor (ms)
+    f_khz = _f(params, "f_khz", None)  # explicit, else track the mode
     if f_khz is None:
         f_khz = _auto_freq_khz(shot, t0_ms)
     arr = _toroidal_arr(str(shot))
@@ -637,7 +722,7 @@ def _wrapped_ramp(intercept_deg, slope_n) -> dict:
 
 def _phase_fit(shot, params=None) -> dict:
     arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
-    fit = spectral.fit_toroidal_mode(mode)        # best-fit toroidal n + uncertainty
+    fit = spectral.fit_toroidal_mode(mode)  # best-fit toroidal n + uncertainty
     # Real per-probe phase σ from the cross-spectral statistics (Bendat & Piersol),
     # replacing the GUI's previously fabricated error bars. The reference probe's σ is
     # NaN (self-reference); omit error_y there rather than emit a JSON-invalid NaN.
@@ -650,15 +735,25 @@ def _phase_fit(shot, params=None) -> dict:
         points.append(pt)
     line = _wrapped_ramp(fit.intercept_deg, fit.n)
     return contracts.scatter2d(
-        points, {"x": "φ (deg)", "y": "phase (deg)"}, fit=line,
-        meta={"n_estimate": fit.n, "resultant": round(float(fit.resultant), 3),
-              "n_confidence": round(float(fit.n_confidence), 3)
-              if fit.n_confidence is not None else None,
-              "phase_sigma_deg": round(float(fit.phase_sigma), 3)
-              if fit.phase_sigma is not None else None,
-              "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "note": "MODESPEC phase-at-frequency + circular n-fit; "
-                      "error bars = 1σ cross-spectral phase uncertainty"})
+        points,
+        {"x": "φ (deg)", "y": "phase (deg)"},
+        fit=line,
+        meta={
+            "n_estimate": fit.n,
+            "resultant": round(float(fit.resultant), 3),
+            "n_confidence": round(float(fit.n_confidence), 3)
+            if fit.n_confidence is not None
+            else None,
+            "phase_sigma_deg": round(float(fit.phase_sigma), 3)
+            if fit.phase_sigma is not None
+            else None,
+            "f_kHz": f_khz,
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "note": "MODESPEC phase-at-frequency + circular n-fit; "
+            "error bars = 1σ cross-spectral phase uncertainty",
+        },
+    )
 
 
 # ── mode shape: GP-smoothed eigenmode shape (re/im) with 2σ bands + markers ───
@@ -668,14 +763,22 @@ def _shape_line(ms, x_label, meta) -> dict:
     grid = ms.grid_deg.tolist()
     ang = ms.angle_deg.tolist()
     series = [
-        {"name": "Re", "x": grid, "y": ms.re_mean.tolist(),
-         "lower": (ms.re_mean - 2 * ms.re_sigma).tolist(),
-         "upper": (ms.re_mean + 2 * ms.re_sigma).tolist(),
-         "markers": {"x": ang, "y": ms.re_obs.tolist()}},
-        {"name": "Im", "x": grid, "y": ms.im_mean.tolist(),
-         "lower": (ms.im_mean - 2 * ms.im_sigma).tolist(),
-         "upper": (ms.im_mean + 2 * ms.im_sigma).tolist(),
-         "markers": {"x": ang, "y": ms.im_obs.tolist()}},
+        {
+            "name": "Re",
+            "x": grid,
+            "y": ms.re_mean.tolist(),
+            "lower": (ms.re_mean - 2 * ms.re_sigma).tolist(),
+            "upper": (ms.re_mean + 2 * ms.re_sigma).tolist(),
+            "markers": {"x": ang, "y": ms.re_obs.tolist()},
+        },
+        {
+            "name": "Im",
+            "x": grid,
+            "y": ms.im_mean.tolist(),
+            "lower": (ms.im_mean - 2 * ms.im_sigma).tolist(),
+            "upper": (ms.im_mean + 2 * ms.im_sigma).tolist(),
+            "markers": {"x": ang, "y": ms.im_obs.tolist()},
+        },
     ]
     return contracts.line(series, {"x": x_label, "y": "shape (a.u.)"}, meta=meta)
 
@@ -685,10 +788,18 @@ def _mode_shape(shot, params=None) -> dict:
     periodic-kernel GP (eigspec §2.2.2), plus the measured probe markers."""
     arr, mode, f_khz, t0_ms = _toroidal_mode(shot, params)
     ms = _gp_shape(mode)
-    return _shape_line(ms, "φ (deg)", {
-        "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
-        "length_scale_rad": round(float(ms.length_scale), 3),
-        "note": "GP toroidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"})
+    return _shape_line(
+        ms,
+        "φ (deg)",
+        {
+            "f_kHz": f_khz,
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "n_probes": len(arr),
+            "length_scale_rad": round(float(ms.length_scale), 3),
+            "note": "GP toroidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes",
+        },
+    )
 
 
 def _poloidal_shape(shot, params=None) -> dict:
@@ -697,21 +808,34 @@ def _poloidal_shape(shot, params=None) -> dict:
     arr, mode, f_khz, t0_ms, kappa = _poloidal_mode(shot, params)
     ms = _gp_shape(mode)
     x_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
-    note = ("GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes"
-            + (f"; θ* straightened for κ={kappa:.2f}" if kappa is not None
-               else "; geometric θ (no κ in this pull)"))
-    return _shape_line(ms, x_label, {
-        "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot), "n_probes": len(arr),
-        "length_scale_rad": round(float(ms.length_scale), 3),
-        "kappa": round(float(kappa), 3) if kappa is not None else None,
-        "note": note})
+    note = "GP poloidal mode shape (eigspec §2.2.2); curve ±2σ, markers = probes" + (
+        f"; θ* straightened for κ={kappa:.2f}"
+        if kappa is not None
+        else "; geometric θ (no κ in this pull)"
+    )
+    return _shape_line(
+        ms,
+        x_label,
+        {
+            "f_kHz": f_khz,
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "n_probes": len(arr),
+            "length_scale_rad": round(float(ms.length_scale), 3),
+            "kappa": round(float(kappa), 3) if kappa is not None else None,
+            "note": note,
+        },
+    )
 
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
     theta = _real_theta(shot)
-    arr = [(name, theta[name]) for name in h5source.channel_names(shot)
-           if diiid.family_of(name) == "MPID" and name in theta]
+    arr = [
+        (name, theta[name])
+        for name in h5source.channel_names(shot)
+        if diiid.family_of(name) == "MPID" and name in theta
+    ]
     arr.sort(key=lambda nt: nt[1])
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
         raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
@@ -763,7 +887,7 @@ def _poloidal_phase_fit(shot, params=None) -> dict:
     array (φ-detrended), with the best-fit poloidal mode number m and a wrapped fit
     line. θ is the elongation-corrected θ* when the EFIT κ is in the pull."""
     arr, mode, f_khz, t0_ms, kappa = _poloidal_mode(shot, params)
-    fit = spectral.fit_toroidal_mode(mode)        # same circular fit, here vs θ → m
+    fit = spectral.fit_toroidal_mode(mode)  # same circular fit, here vs θ → m
     perr = mode.phase_error if mode.phase_error is not None else [None] * len(arr)
     th_used, _ = _theta_star([th for _, th in arr], kappa)
     points = []
@@ -775,14 +899,23 @@ def _poloidal_phase_fit(shot, params=None) -> dict:
     line = _wrapped_ramp(fit.intercept_deg, fit.n)
     x_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
     return contracts.scatter2d(
-        points, {"x": x_label, "y": "phase (deg)"}, fit=line,
-        meta={"m_fit": fit.n, "resultant": round(float(fit.resultant), 3),
-              "n_confidence": round(float(fit.n_confidence), 3)
-              if fit.n_confidence is not None else None,
-              "f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "kappa": round(float(kappa), 3) if kappa is not None else None,
-              "note": "poloidal phase-at-frequency + circular m-fit (φ-detrended); "
-                      "error bars = 1σ cross-spectral phase uncertainty"})
+        points,
+        {"x": x_label, "y": "phase (deg)"},
+        fit=line,
+        meta={
+            "m_fit": fit.n,
+            "resultant": round(float(fit.resultant), 3),
+            "n_confidence": round(float(fit.n_confidence), 3)
+            if fit.n_confidence is not None
+            else None,
+            "f_kHz": f_khz,
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "kappa": round(float(kappa), 3) if kappa is not None else None,
+            "note": "poloidal phase-at-frequency + circular m-fit (φ-detrended); "
+            "error bars = 1σ cross-spectral phase uncertainty",
+        },
+    )
 
 
 def _gp_shape(mode):
@@ -826,17 +959,30 @@ def _mode_pattern(shot, params=None) -> dict:
     phi_g, th_g, pattern = mode_shape.mode_pattern_2d(_gp_shape(tmode), _gp_shape(pmode))
     zmax = float(np.nanmax(np.abs(pattern))) or 1.0
     y_label = "θ* (deg, κ-corrected)" if kappa is not None else "θ (deg)"
-    note = ("2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D geometry; "
-            "dots = probe locations"
-            + (f"; θ* straightened for κ={kappa:.2f}" if kappa is not None
-               else "; geometric θ (no κ in this pull)"))
+    note = (
+        "2D (θ,φ) modal pattern (eigspec eq 23) on real DIII-D geometry; "
+        "dots = probe locations"
+        + (
+            f"; θ* straightened for κ={kappa:.2f}"
+            if kappa is not None
+            else "; geometric θ (no κ in this pull)"
+        )
+    )
     return contracts.contour(
-        phi_g.tolist(), th_g.tolist(), pattern.tolist(),
+        phi_g.tolist(),
+        th_g.tolist(),
+        pattern.tolist(),
         {"x": "φ (deg)", "y": y_label, "z": "mode pattern (a.u.)"},
-        zrange=[-zmax, zmax], overlay=_pattern_overlay(shot, kappa),
-        meta={"f_kHz": f_khz, "t0_ms": t0_ms, "shot": str(shot),
-              "kappa": round(float(kappa), 3) if kappa is not None else None,
-              "note": note})
+        zrange=[-zmax, zmax],
+        overlay=_pattern_overlay(shot, kappa),
+        meta={
+            "f_kHz": f_khz,
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "kappa": round(float(kappa), 3) if kappa is not None else None,
+            "note": note,
+        },
+    )
 
 
 # ── mode_track: shape coherence to a reference over time (full-array, fig 9) ──
@@ -846,7 +992,7 @@ def _mode_track(shot, params=None) -> dict:
     mode persists; a drop marks a mode change. Reads the cached full-array STFT."""
     f_khz = _f(params, "f_khz", None)
     if f_khz is None:
-        f_khz = _auto_freq_khz(shot, None)        # global dominant (cursor-independent)
+        f_khz = _auto_freq_khz(shot, None)  # global dominant (cursor-independent)
     n_slices = _i(params, "n_slices", 300)
     arr = _toroidal_arr(str(shot))
     phis = np.array([p for _, p in arr], dtype=float)
@@ -854,18 +1000,31 @@ def _mode_track(shot, params=None) -> dict:
     # Sample finely, but only over the active-signal window — the full record is mostly
     # dead time, which both coarsens the trace and biases the dominant mode toward n=0.
     t_lo, t_hi = mode_shape.active_time_window(spec)
-    tr = mode_shape.track_from_spectrum(spec, phis, f_khz * 1e3,
-                                        n_slices=n_slices, t_range=(t_lo, t_hi))
+    tr = mode_shape.track_from_spectrum(
+        spec, phis, f_khz * 1e3, n_slices=n_slices, t_range=(t_lo, t_hi)
+    )
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
-    series = [{"name": "shape similarity to dominant mode",
-               "x": tr.t_ms.tolist(), "y": tr.mac_to_ref.tolist()}]
+    series = [
+        {
+            "name": "shape similarity to dominant mode",
+            "x": tr.t_ms.tolist(),
+            "y": tr.mac_to_ref.tolist(),
+        }
+    ]
     return contracts.line(
-        series, {"x": "time (ms)", "y": "shape similarity (0–1)"},
-        meta={"f_kHz": f_khz, "ref_t_ms": round(float(tr.ref_t_ms), 1),
-              "dominant_n": int(vals[int(counts.argmax())]), "shot": str(shot),
-              "n_probes": len(arr), "n_slices": int(tr.t_ms.size),
-              "t_window_ms": [round(t_lo * 1e3, 1), round(t_hi * 1e3, 1)],
-              "note": "1 = same spatial mode persists; drops mark mode changes (fig 9)"})
+        series,
+        {"x": "time (ms)", "y": "shape similarity (0–1)"},
+        meta={
+            "f_kHz": f_khz,
+            "ref_t_ms": round(float(tr.ref_t_ms), 1),
+            "dominant_n": int(vals[int(counts.argmax())]),
+            "shot": str(shot),
+            "n_probes": len(arr),
+            "n_slices": int(tr.t_ms.size),
+            "t_window_ms": [round(t_lo * 1e3, 1), round(t_hi * 1e3, 1)],
+            "note": "1 = same spatial mode persists; drops mark mode changes (fig 9)",
+        },
+    )
 
 
 # ── mode_over_time: dominant toroidal mode number n(t) over the shot ─────────
@@ -881,21 +1040,32 @@ def _mode_over_time(shot, params=None) -> dict:
     phis = np.array([p for _, p in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t_lo, t_hi = mode_shape.active_time_window(spec)
-    tr = mode_shape.ridge_track_from_spectrum(
-        spec, phis, n_slices=n_slices, t_range=(t_lo, t_hi))
+    tr = mode_shape.ridge_track_from_spectrum(spec, phis, n_slices=n_slices, t_range=(t_lo, t_hi))
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
-    f_lo, f_hi = (float(np.min(tr.freq_khz)), float(np.max(tr.freq_khz))) if tr.freq_khz.size else (0.0, 0.0)
-    series = [{"name": "toroidal n (strongest mode)", "x": tr.t_ms.tolist(),
-               "y": tr.n_by_time.astype(float).tolist()}]
+    f_lo, f_hi = (
+        (float(np.min(tr.freq_khz)), float(np.max(tr.freq_khz))) if tr.freq_khz.size else (0.0, 0.0)
+    )
+    series = [
+        {
+            "name": "toroidal n (strongest mode)",
+            "x": tr.t_ms.tolist(),
+            "y": tr.n_by_time.astype(float).tolist(),
+        }
+    ]
     return contracts.line(
-        series, {"x": "time (ms)", "y": "toroidal n"},
-        meta={"dominant_n": int(vals[int(counts.argmax())]),
-              "f_range_kHz": [round(f_lo, 1), round(f_hi, 1)],
-              "n_probes": len(arr), "n_slices": int(tr.t_ms.size),
-              "t_window_ms": [round(t_lo * 1e3, 1), round(t_hi * 1e3, 1)],
-              "shot": str(shot),
-              "note": "best-fit toroidal n of the strongest in-band mode at each time "
-                      "(frequency follows the ridge); see the n-map for all modes"})
+        series,
+        {"x": "time (ms)", "y": "toroidal n"},
+        meta={
+            "dominant_n": int(vals[int(counts.argmax())]),
+            "f_range_kHz": [round(f_lo, 1), round(f_hi, 1)],
+            "n_probes": len(arr),
+            "n_slices": int(tr.t_ms.size),
+            "t_window_ms": [round(t_lo * 1e3, 1), round(t_hi * 1e3, 1)],
+            "shot": str(shot),
+            "note": "best-fit toroidal n of the strongest in-band mode at each time "
+            "(frequency follows the ridge); see the n-map for all modes",
+        },
+    )
 
 
 # ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────
@@ -904,10 +1074,19 @@ _QS_RUN_LOCK = threading.Lock()
 
 
 @lru_cache(maxsize=8)
-def _qs_run(shot: str, ns: tuple, ms: tuple, channel_filter: str,
-            detrend_type: str, detrend_band: tuple,
-            cutoff_lo: float, cutoff_hi: float, energy: float,
-            tmin_s: float, tmax_s: float):
+def _qs_run(
+    shot: str,
+    ns: tuple,
+    ms: tuple,
+    channel_filter: str,
+    detrend_type: str,
+    detrend_band: tuple,
+    cutoff_lo: float,
+    cutoff_hi: float,
+    energy: float,
+    tmin_s: float,
+    tmax_s: float,
+):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
     Delegates to magnetics-code/run.run_steps. All tuning parameters are
@@ -949,8 +1128,9 @@ def _prep_qs_ds(shot, params):
     ms_raw = params.get("ms", "0") if params else "0"
     ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())
     ms = tuple(int(x.strip()) for x in str(ms_raw).split(",") if x.strip())
-    channel_filter = (params.get("channel_filter", "Bp_LFS_midplane") if params
-                      else "Bp_LFS_midplane")
+    channel_filter = (
+        params.get("channel_filter", "Bp_LFS_midplane") if params else "Bp_LFS_midplane"
+    )
     detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
     # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
     # so _qs_run defaults to the first 10ms of the shot window.
@@ -977,9 +1157,19 @@ def _prep_qs_ds(shot, params):
     # Serialize concurrent calls with the same args: only one thread runs
     # run_steps; the others wait and then read the cached result instantly.
     with _QS_RUN_LOCK:
-        return _qs_run(str(shot), ns, ms, channel_filter, detrend_type,
-                       (db_lo, db_hi), cutoff_lo, cutoff_hi, energy,
-                       tmin_s, tmax_s)
+        return _qs_run(
+            str(shot),
+            ns,
+            ms,
+            channel_filter,
+            detrend_type,
+            (db_lo, db_hi),
+            cutoff_lo,
+            cutoff_hi,
+            energy,
+            tmin_s,
+            tmax_s,
+        )
 
 
 def _qs_fit(shot, params=None) -> dict:
@@ -1001,6 +1191,7 @@ def _phase_t(shot, params=None) -> dict:
 
 # ── sensor maps ──────────────────────────────────────────────────────────────
 
+
 def _no_wrap(a):
     """Avoid mis-plotting sensors that straddle an angle wrap (>240° span)."""
     x = np.array(a, dtype=float)
@@ -1017,6 +1208,7 @@ def _sensor_map_rz(shot, params=None) -> dict:
     device = str(raw.attrs.get("device", "DIII-D"))
 
     from omfit_compat import load_wall  # magnetics-code/ on sys.path
+
     r_wall, z_wall = load_wall(device)
 
     series = []
@@ -1030,9 +1222,16 @@ def _sensor_map_rz(shot, params=None) -> dict:
     if r_wall is not None:
         wall = {"x": r_wall.tolist(), "y": z_wall.tolist()}
 
-    return contracts.line(series, {"x": "R (m)", "y": "z (m)"},
-                          meta={"wall": wall, "shot": str(shot), "channels": channels,
-                                "note": "sensor extent segments from device geometry"})
+    return contracts.line(
+        series,
+        {"x": "R (m)", "y": "z (m)"},
+        meta={
+            "wall": wall,
+            "shot": str(shot),
+            "channels": channels,
+            "note": "sensor extent segments from device geometry",
+        },
+    )
 
 
 def _sensor_map_cylindrical(shot, params=None) -> dict:
@@ -1050,11 +1249,13 @@ def _sensor_map_cylindrical(shot, params=None) -> dict:
         y = _no_wrap([t1, t1, t2, t2, t1])
         series.append({"name": c, "x": x, "y": y})
 
-    return contracts.line(series, {"x": "φ (deg)", "y": "θ (deg)"},
-                          meta={"shot": str(shot), "channels": channels})
+    return contracts.line(
+        series, {"x": "φ (deg)", "y": "θ (deg)"}, meta={"shot": str(shot), "channels": channels}
+    )
 
 
 # ── signal conditioning ───────────────────────────────────────────────────────
+
 
 def _signal_conditioning(shot, params=None) -> dict:
     """Raw vs prepared signals for the selected channel subset."""
@@ -1063,6 +1264,7 @@ def _signal_conditioning(shot, params=None) -> dict:
 
 
 # ── fit quality time series (chi-squared, fitted signals, residuals) ──────────
+
 
 def _chi_sq_t(shot, params=None) -> dict:
     """Reduced χ² vs time → LineNode (log scale, reference at 1)."""
@@ -1115,7 +1317,6 @@ _BUILDERS = {
 
 def build_node(shot: str, node_id: str, params: dict | None = None) -> dict:
     if node_id not in _BUILDERS:
-        raise KeyError(f"unknown node {node_id!r}; "
-                       f"have {', '.join(sorted(_BUILDERS))}")
+        raise KeyError(f"unknown node {node_id!r}; have {', '.join(sorted(_BUILDERS))}")
     h5source.shot_file(shot)  # raises KeyError if the shot isn't available
     return _BUILDERS[node_id](shot, params)

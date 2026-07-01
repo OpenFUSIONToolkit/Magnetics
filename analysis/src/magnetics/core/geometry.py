@@ -5,6 +5,7 @@ matrix evaluated at the sensor positions (warn > 10, error > 20). It depends onl
 on sensor angles + the requested mode set, so it is a real, honest number we can
 report before the full spatial fit exists.
 """
+
 from __future__ import annotations
 
 import numpy as np

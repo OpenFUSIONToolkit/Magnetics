@@ -5,6 +5,7 @@ Importing ``magnetics.data.diiid`` puts the repo-root ``data/`` catalog dir on
 ``sys.path`` (its module-load shim), so ``import devices`` / ``toksearch_fetch``
 resolve here without network or fetched data.
 """
+
 from __future__ import annotations
 
 from magnetics.data import diiid  # noqa: F401 — also wires the catalog path
@@ -17,14 +18,19 @@ import devices
 DEV = {
     "R0": 1.69,
     "sensors": {
-        "S_OK": {"segments": [
-            {"since_shot": 152472, "r": 2.0, "z": 0.0, "phi": 10.0}]},
-        "S_RENAMED": {"segments": [
-            {"since_shot": 100000, "pointname": "OLD_S", "r": 1.0, "z": 0.1, "phi": 5.0},
-            {"since_shot": 180000, "r": 2.5, "z": -0.2, "phi": 7.0}]},  # moved; pt defaults to id
-        "S_GONE": {"segments": [
-            {"since_shot": 152472, "r": 2.0, "z": 0.0, "phi": 12.0},
-            {"since_shot": 190000, "pointname": "NotAvailable"}]},
+        "S_OK": {"segments": [{"since_shot": 152472, "r": 2.0, "z": 0.0, "phi": 10.0}]},
+        "S_RENAMED": {
+            "segments": [
+                {"since_shot": 100000, "pointname": "OLD_S", "r": 1.0, "z": 0.1, "phi": 5.0},
+                {"since_shot": 180000, "r": 2.5, "z": -0.2, "phi": 7.0},
+            ]
+        },  # moved; pt defaults to id
+        "S_GONE": {
+            "segments": [
+                {"since_shot": 152472, "r": 2.0, "z": 0.0, "phi": 12.0},
+                {"since_shot": 190000, "pointname": "NotAvailable"},
+            ]
+        },
     },
 }
 
@@ -59,7 +65,7 @@ def test_not_available_segment_is_skipped():
 def test_geometry_tracks_the_moved_segment():
     g_old = devices.geometry_at(DEV, "S_RENAMED", 150000)
     g_new = devices.geometry_at(DEV, "S_RENAMED", 185000)
-    assert g_old["r"] == 1.0 and g_new["r"] == 2.5      # different position per era
+    assert g_old["r"] == 1.0 and g_new["r"] == 2.5  # different position per era
     assert "since_shot" not in g_old and "pointname" not in g_old
 
 
@@ -71,24 +77,29 @@ def test_geometry_none_when_decommissioned_or_out_of_range():
 # ── fetch assembly: _resolve_pointnames (no network) ──────────────────────────
 def test_fetch_resolution_recent_shot_keeps_all():
     import toksearch_fetch as tf
+
     query, canon, skipped = tf._resolve_pointnames(
-        DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 185000)
+        DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 185000
+    )
     assert query == ["S_OK", "S_RENAMED", "S_GONE", "ip"]
-    assert canon["ip"] == "ip"                          # unmodeled passes through
+    assert canon["ip"] == "ip"  # unmodeled passes through
     assert skipped == []
 
 
 def test_fetch_resolution_old_shot_uses_alt_and_skips():
     import toksearch_fetch as tf
+
     query, canon, skipped = tf._resolve_pointnames(
-        DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 150000)
+        DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 150000
+    )
     assert "OLD_S" in query and canon["OLD_S"] == "S_RENAMED"  # legacy name queried
-    assert "ip" in query                                 # unmodeled still passes
-    assert set(skipped) == {"S_OK", "S_GONE"}            # pre-floor sensors dropped
+    assert "ip" in query  # unmodeled still passes
+    assert set(skipped) == {"S_OK", "S_GONE"}  # pre-floor sensors dropped
 
 
 def test_fetch_resolution_skips_decommissioned():
     import toksearch_fetch as tf
+
     query, _canon, skipped = tf._resolve_pointnames(DEV, ["S_GONE"], 195000)
     assert query == [] and skipped == ["S_GONE"]
 
@@ -96,14 +107,15 @@ def test_fetch_resolution_skips_decommissioned():
 # ── real device file: seeded shots vs the pre-152472 era ──────────────────────
 def test_real_file_skips_modeled_sensors_before_floor():
     import toksearch_fetch as tf
+
     dev = devices.load_device("diiid")
     ids = ["MPID66M020", "MPID66M067", "ISLD66M017"]
     ids = [i for i in ids if i in dev["sensors"]]
     assert ids, "expected known sensors in the device file"
     q_now, _c, skip_now = tf._resolve_pointnames(dev, ids, 184927)
     q_old, _c2, skip_old = tf._resolve_pointnames(dev, ids, 150000)
-    assert q_now == ids and skip_now == []               # all valid since 152472
-    assert set(skip_old) == set(ids) and q_old == []     # none modeled before the floor
+    assert q_now == ids and skip_now == []  # all valid since 152472
+    assert set(skip_old) == set(ids) and q_old == []  # none modeled before the floor
 
 
 def test_diiid_geometry_is_shot_dependent():
@@ -111,4 +123,4 @@ def test_diiid_geometry_is_shot_dependent():
     modern = diiid.sensor("MPID79A272", 184927)
     legacy = diiid.sensor("MPID79A272", 150000)
     assert modern["theta"] != legacy["theta"]
-    assert abs(modern["theta"] - 86.83) < 0.1           # real θ from (r, z)
+    assert abs(modern["theta"] - 86.83) < 0.1  # real θ from (r, z)

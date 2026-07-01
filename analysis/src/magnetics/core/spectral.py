@@ -24,9 +24,9 @@ class CrossSpectrumResult:
     power: NDArray[np.floating]
     coherence: NDArray[np.floating]
     phase: NDArray[np.floating]
-    phase_error: NDArray[np.floating] | None = None     # 1σ phase (deg) per freq
+    phase_error: NDArray[np.floating] | None = None  # 1σ phase (deg) per freq
     amplitude_error: NDArray[np.floating] | None = None  # 1σ |Gxy| per freq
-    n_segments: int | None = None                        # Welch averages K
+    n_segments: int | None = None  # Welch averages K
     mode_number: NDArray[np.integer] | None = None
     rms_by_mode: NDArray[np.floating] | None = None
     mode_indices: NDArray[np.integer] | None = None
@@ -53,21 +53,21 @@ class ModeAtFrequencyResult:
     coherence: NDArray[np.floating]
     toroidal_angle: NDArray[np.floating]
     poloidal_angle: NDArray[np.floating] | None = None
-    phase_error: NDArray[np.floating] | None = None      # 1σ phase (deg) per probe
+    phase_error: NDArray[np.floating] | None = None  # 1σ phase (deg) per probe
     amplitude_error: NDArray[np.floating] | None = None  # 1σ amplitude per probe
 
 
 @dataclass(slots=True)
 class ToroidalFitResult:
     kind: str
-    n: int                      # best-fit toroidal mode number
-    intercept_deg: float        # fitted phase at phi = 0 (deg), in [0, 360)
-    resultant: float            # clustering quality in [0, 1] (1 = perfect fit)
-    frequency: float            # Hz, the frequency the fit was evaluated at
-    toroidal_angle: NDArray[np.floating]   # measured probe angles (deg)
-    phase: NDArray[np.floating]            # measured phases (deg), wrapped [0, 360)
-    phase_sigma: float | None = None       # 1σ of the fitted intercept (deg)
-    n_confidence: float | None = None      # posterior prob. of the best n in [0, 1]
+    n: int  # best-fit toroidal mode number
+    intercept_deg: float  # fitted phase at phi = 0 (deg), in [0, 360)
+    resultant: float  # clustering quality in [0, 1] (1 = perfect fit)
+    frequency: float  # Hz, the frequency the fit was evaluated at
+    toroidal_angle: NDArray[np.floating]  # measured probe angles (deg)
+    phase: NDArray[np.floating]  # measured phases (deg), wrapped [0, 360)
+    phase_sigma: float | None = None  # 1σ of the fitted intercept (deg)
+    n_confidence: float | None = None  # posterior prob. of the best n in [0, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +220,7 @@ def cross_spectrum(
     mode_indices = np.arange(n_lo, n_hi + 1, dtype=np.intp)
 
     df = f[1] - f[0]
-    rms = np.array(
-        [np.sqrt(np.sum(power[mode == m]) * df) for m in mode_indices]
-    )
+    rms = np.array([np.sqrt(np.sum(power[mode == m]) * df) for m in mode_indices])
 
     return CrossSpectrumResult(
         kind="cross_spectrum",
@@ -290,9 +288,7 @@ def _stft(
 # ---------------------------------------------------------------------------
 
 
-def stft_layout(
-    n_samples: int, sample_rate: float, slice_duration: float
-) -> tuple[int, int, int]:
+def stft_layout(n_samples: int, sample_rate: float, slice_duration: float) -> tuple[int, int, int]:
     """FFT length, native 50%-overlap hop, and natural column count for an STFT.
 
     Single source of truth for the sliding-window geometry, shared by
@@ -466,9 +462,9 @@ def denoise_spectrogram(
 @dataclass(slots=True)
 class ArrayShapeSpectrum:
     kind: str
-    time: NDArray[np.floating]              # (n_times,) window-center times (s)
-    freq_band: NDArray[np.floating]         # (n_band,) Hz kept (the [fmin,fmax] band)
-    spec: NDArray[np.complexfloating]       # (n_probes, n_times, n_band) complex STFT
+    time: NDArray[np.floating]  # (n_times,) window-center times (s)
+    freq_band: NDArray[np.floating]  # (n_band,) Hz kept (the [fmin,fmax] band)
+    spec: NDArray[np.complexfloating]  # (n_probes, n_times, n_band) complex STFT
 
 
 def array_shape_spectrum(
@@ -504,8 +500,11 @@ def array_shape_spectrum(
     dt = float(np.median(np.diff(time)))
 
     n_fft, natural_hop, n_cols_natural = stft_layout(n, 1.0 / dt, slice_duration)
-    hop = (natural_hop if n_cols_natural <= max_columns
-           else max(natural_hop, (n - n_fft) // max(1, max_columns - 1)))
+    hop = (
+        natural_hop
+        if n_cols_natural <= max_columns
+        else max(natural_hop, (n - n_fft) // max(1, max_columns - 1))
+    )
     win = get_window(window, n_fft, fftbins=True).astype(np.float32)
 
     freqs = rfftfreq(n_fft, d=dt)
@@ -517,24 +516,26 @@ def array_shape_spectrum(
     bands = []
     starts = None
     for i in range(n_probes):
-        s, starts = _stft(sig[i], n_fft, hop, win)     # (n_frames, n_freqs)
+        s, starts = _stft(sig[i], n_fft, hop, win)  # (n_frames, n_freqs)
         bands.append(s[:, lo:hi].astype(np.complex64))
-    spec = np.stack(bands, axis=0)                       # (n_probes, n_frames, n_band)
+    spec = np.stack(bands, axis=0)  # (n_probes, n_frames, n_band)
     t_centers = time[starts] + (n_fft / 2.0) * dt
     return ArrayShapeSpectrum(
         kind="array_shape_spectrum",
-        time=t_centers, freq_band=freqs[lo:hi], spec=spec,
+        time=t_centers,
+        freq_band=freqs[lo:hi],
+        spec=spec,
     )
 
 
 @dataclass(slots=True)
 class ArrayModeSpectrogram:
     kind: str
-    time: NDArray[np.floating]              # (n_times,) window-center times (s)
-    freq_band: NDArray[np.floating]         # (n_band,) Hz kept
-    mode_number: NDArray[np.integer]        # (n_times, n_band) best-fit toroidal n
-    amplitude: NDArray[np.floating]         # (n_times, n_band) |Σ_p Z_p e^{-inφ}|
-    quality: NDArray[np.floating]           # (n_times, n_band) resultant length ∈ [0,1]
+    time: NDArray[np.floating]  # (n_times,) window-center times (s)
+    freq_band: NDArray[np.floating]  # (n_band,) Hz kept
+    mode_number: NDArray[np.integer]  # (n_times, n_band) best-fit toroidal n
+    amplitude: NDArray[np.floating]  # (n_times, n_band) |Σ_p Z_p e^{-inφ}|
+    quality: NDArray[np.floating]  # (n_times, n_band) resultant length ∈ [0,1]
 
 
 def array_mode_spectrogram(
@@ -563,15 +564,15 @@ def array_mode_spectrogram(
     Returns:
         result (ArrayModeSpectrogram): n / amplitude / quality as (n_times, n_band).
     """
-    z = np.asarray(spectrum.spec)                          # (P, T, F) complex
+    z = np.asarray(spectrum.spec)  # (P, T, F) complex
     phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
     ns = np.arange(-int(n_max), int(n_max) + 1)
-    basis = np.exp(-1j * ns[:, None] * phi[None, :])       # (M, P)
-    proj = np.einsum("mp,ptf->mtf", basis, z)              # (M, T, F)
+    basis = np.exp(-1j * ns[:, None] * phi[None, :])  # (M, P)
+    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F)
     amp = np.abs(proj)
-    k = np.argmax(amp, axis=0)                             # (T, F)
-    peak = np.take_along_axis(amp, k[None], axis=0)[0]     # (T, F)
-    denom = np.abs(z).sum(axis=0) + 1e-30                  # (T, F)
+    k = np.argmax(amp, axis=0)  # (T, F)
+    peak = np.take_along_axis(amp, k[None], axis=0)[0]  # (T, F)
+    denom = np.abs(z).sum(axis=0) + 1e-30  # (T, F)
     return ArrayModeSpectrogram(
         kind="array_mode_spectrogram",
         time=np.asarray(spectrum.time),
@@ -605,23 +606,23 @@ def mode_from_spectrum(
     short cursor window, not a defect. Widen ``window_s`` to trade time-resolution for
     tighter coherence statistics.
     """
-    band = spectrum.spec                                  # (n_probes, n_times, n_band)
+    band = spectrum.spec  # (n_probes, n_times, n_band)
     times = np.asarray(spectrum.time)
     fb = int(np.argmin(np.abs(np.asarray(spectrum.freq_band) - frequency)))
 
     sel = np.flatnonzero(np.abs(times - t0_s) <= window_s / 2.0)
-    if sel.size < 3:                                      # ensure a few segments
+    if sel.size < 3:  # ensure a few segments
         ti = int(np.argmin(np.abs(times - t0_s)))
         sel = np.arange(max(0, ti - 2), min(times.size, max(0, ti - 2) + 5))
 
-    sig_cells = band[:, sel, fb]                          # (n_probes, n_seg)
-    ref_cells = sig_cells[ref]                            # (n_seg,)
+    sig_cells = band[:, sel, fb]  # (n_probes, n_seg)
+    ref_cells = sig_cells[ref]  # (n_seg,)
 
     # conj(sig)·ref matches scipy.signal.csd(sig, ref) so the signed n agrees with
     # extract_mode_at_frequency; averaged over time segments → coherence.
-    cross = np.mean(np.conj(sig_cells) * ref_cells[None], axis=1)    # (n_probes,)
+    cross = np.mean(np.conj(sig_cells) * ref_cells[None], axis=1)  # (n_probes,)
     sxx = float(np.mean(np.abs(ref_cells) ** 2))
-    syy = np.mean(np.abs(sig_cells) ** 2, axis=1)                    # (n_probes,)
+    syy = np.mean(np.abs(sig_cells) ** 2, axis=1)  # (n_probes,)
 
     power = np.abs(cross)
     phase = np.rad2deg(np.angle(cross))
@@ -635,9 +636,12 @@ def mode_from_spectrum(
     return ModeAtFrequencyResult(
         kind="mode_at_frequency",
         frequency=float(spectrum.freq_band[fb]),
-        phase=phase, amplitude=power, coherence=coherence,
+        phase=phase,
+        amplitude=power,
+        coherence=coherence,
         toroidal_angle=np.asarray(angle_deg, dtype=np.float64),
-        phase_error=phase_err, amplitude_error=amp_err,
+        phase_error=phase_err,
+        amplitude_error=amp_err,
     )
 
 
@@ -781,8 +785,8 @@ def fit_toroidal_mode(
         w = np.ones_like(phi)
 
     candidates = list(range(n_range[0], n_range[1] + 1))
-    inter = np.empty(len(candidates))   # per-candidate intercept c_n (deg)
-    rmag = np.empty(len(candidates))    # per-candidate resultant length
+    inter = np.empty(len(candidates))  # per-candidate intercept c_n (deg)
+    rmag = np.empty(len(candidates))  # per-candidate resultant length
     for j, n in enumerate(candidates):
         resultant = np.sum(w * np.exp(1j * np.deg2rad(phase + n * phi))) / w.sum()
         rmag[j] = np.abs(resultant)
@@ -795,8 +799,10 @@ def fit_toroidal_mode(
     # (b) a posterior over candidate n from each hypothesis's weighted χ². Falls back
     # to unit σ when phase_error is absent so older callers still get sane numbers.
     sigma = np.asarray(
-        mode_result.phase_error if mode_result.phase_error is not None
-        else np.full_like(phi, np.nan), dtype=np.float64,
+        mode_result.phase_error
+        if mode_result.phase_error is not None
+        else np.full_like(phi, np.nan),
+        dtype=np.float64,
     )
     ok = np.isfinite(sigma) & (sigma > 0)
     fill = float(np.median(sigma[ok])) if np.any(ok) else 1.0
@@ -805,10 +811,12 @@ def fit_toroidal_mode(
     def _wrap180(x):
         return (x + 180.0) % 360.0 - 180.0
 
-    chi2 = np.array([
-        np.sum((_wrap180(phase + n * phi - inter[j]) / sigma) ** 2)
-        for j, n in enumerate(candidates)
-    ])
+    chi2 = np.array(
+        [
+            np.sum((_wrap180(phase + n * phi - inter[j]) / sigma) ** 2)
+            for j, n in enumerate(candidates)
+        ]
+    )
     post = np.exp(-(chi2 - chi2.min()) / 2.0)
     post /= post.sum()
     n_confidence = float(post[best_j])

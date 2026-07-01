@@ -147,6 +147,9 @@ Keep commits clean and reviewable:
 - Optional `scope:` prefix naming the touched area, matching existing history
   (e.g. `PullControl: default to the fast remote backend`, `mode_number: cap array STFT columns`).
 - Add a body (blank line after the subject) only when the *why* isn't obvious from the diff.
+- **Always format Python before committing.** Any time you commit changes that touch Python,
+  first run the ruff formatter through uv — `uv run ruff format .` (from `analysis/`) — and stage
+  the result. CI enforces this with `ruff format --check`, so an unformatted commit fails the build.
 
 ## Other Priorities
 - Speed is paramount in this project. Everything must be snappy and responsive. If something must

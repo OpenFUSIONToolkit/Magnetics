@@ -53,6 +53,9 @@ jobs:
       - name: Lint (ruff)
         run: uvx ruff check .
 
+      - name: Format check (ruff format)
+        run: uvx ruff format --check .
+
       - name: Tests (pytest; tolerate "no tests collected" while skeletal)
         run: |
           set +e
@@ -84,6 +87,9 @@ jobs:
 
       - name: Lint (eslint)
         run: npm run lint
+
+      - name: Typecheck (tsc --strict)
+        run: npm run typecheck
 
       - name: Tests (vitest)
         run: npm test

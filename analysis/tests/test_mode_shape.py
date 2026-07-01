@@ -119,9 +119,9 @@ class TestModePattern2D:
         tor = gp_mode_shape(phi, np.exp(1j * np.deg2rad(2 * phi)))
         pol = gp_mode_shape(phi, np.exp(1j * np.deg2rad(1 * phi)))
         phi_g, th_g, p = mode_pattern_2d(tor, pol)
-        assert p.shape == (th_g.size, phi_g.size)   # row-major [θ][φ]
+        assert p.shape == (th_g.size, phi_g.size)  # row-major [θ][φ]
         assert np.all(np.isfinite(p))
-        assert p.dtype.kind == "f"                  # real-valued
+        assert p.dtype.kind == "f"  # real-valued
 
 
 class TestMAC:
@@ -135,8 +135,7 @@ class TestMAC:
         assert abs(mac(v, 4.2 * np.exp(1.3j) * v) - 1.0) < 1e-12
 
     def test_orthogonal_is_zero(self):
-        assert mac(np.array([1.0, 0.0, 1.0, 0.0]),
-                   np.array([0.0, 1.0, 0.0, 1.0])) == 0.0
+        assert mac(np.array([1.0, 0.0, 1.0, 0.0]), np.array([0.0, 1.0, 0.0, 1.0])) == 0.0
 
     def test_zero_vector_safe(self):
         assert mac(np.zeros(4, complex), np.ones(4, complex)) == 0.0
@@ -166,14 +165,18 @@ class TestMacNSpectrum:
             extract_mode_at_frequency,
             fit_toroidal_mode,
         )
+
         rng = np.random.default_rng(5)
         fs = 50_000
         t = np.linspace(0, 0.1, int(fs * 0.1), endpoint=False)
         phi = np.array([0.0, 33.0, 66.0, 120.0, 200.0, 300.0])
-        sigs = np.vstack([
-            np.sin(2 * np.pi * 3000.0 * t - np.deg2rad(2 * p)) + 0.05 * rng.standard_normal(t.size)
-            for p in phi
-        ])
+        sigs = np.vstack(
+            [
+                np.sin(2 * np.pi * 3000.0 * t - np.deg2rad(2 * p))
+                + 0.05 * rng.standard_normal(t.size)
+                for p in phi
+            ]
+        )
         mode = extract_mode_at_frequency(sigs, phi, t, frequency=3000.0)
         fit = fit_toroidal_mode(mode)
         _, _, best = mac_n_spectrum(phi, shape_vector(mode.phase, mode.amplitude))
@@ -183,6 +186,7 @@ class TestMacNSpectrum:
 class TestNoiseCalibration:
     def test_shape_noise_combines_phase_and_amplitude(self):
         from magnetics.core.mode_shape import shape_noise
+
         amp = np.array([1.0, 2.0, 1.0])
         # σ_z² = σ_A² + (A·σ_φ)²; here σ_A=0.1, σ_φ=0 → σ_z=0.1
         s = shape_noise(amp, np.array([0.0, 0.0, 0.0]), np.array([0.1, 0.1, 0.1]))
@@ -190,14 +194,16 @@ class TestNoiseCalibration:
 
     def test_shape_noise_fills_reference_nan(self):
         from magnetics.core.mode_shape import shape_noise
+
         # reference probe (index 0) has NaN errors → filled, not propagated
-        s = shape_noise(np.ones(4),
-                        np.array([np.nan, 1.0, 2.0, 1.0]),
-                        np.array([np.nan, 0.1, 0.1, 0.1]))
+        s = shape_noise(
+            np.ones(4), np.array([np.nan, 1.0, 2.0, 1.0]), np.array([np.nan, 0.1, 0.1, 0.1])
+        )
         assert np.all(np.isfinite(s)) and np.all(s > 0)
 
     def test_shape_noise_none_without_errors(self):
         from magnetics.core.mode_shape import shape_noise
+
         assert shape_noise(np.ones(3), None, None) is None
 
     def test_band_widens_at_noisy_probe(self):
@@ -221,14 +227,18 @@ class TestModeTracking:
         t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
         phi = np.linspace(0, 330, 12)
         env = (t < on_until).astype(float)  # n=2 mode on, then gone
-        sigs = np.vstack([
-            env * np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(2 * p)) + 0.3 * rng.standard_normal(t.size)
-            for p in phi
-        ])
+        sigs = np.vstack(
+            [
+                env * np.sin(2 * np.pi * 8000.0 * t - np.deg2rad(2 * p))
+                + 0.3 * rng.standard_normal(t.size)
+                for p in phi
+            ]
+        )
         return sigs, phi, t
 
     def test_returns_track(self):
         from magnetics.core.mode_shape import ModeTrackResult, track_mode_shape
+
         sigs, phi, t = self._array()
         tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=16)
         assert isinstance(tr, ModeTrackResult)
@@ -237,6 +247,7 @@ class TestModeTracking:
 
     def test_mac_high_while_mode_present_low_after(self):
         from magnetics.core.mode_shape import track_mode_shape
+
         sigs, phi, t = self._array()
         tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=20)
         on = tr.mac_to_ref[tr.t_ms < 25.0].mean()
@@ -245,6 +256,7 @@ class TestModeTracking:
 
     def test_recovers_mode_number_during_mode(self):
         from magnetics.core.mode_shape import track_mode_shape
+
         sigs, phi, t = self._array()
         tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=20)
         assert abs(int(np.median(tr.n_by_time[tr.t_ms < 25.0]))) == 2
@@ -257,7 +269,7 @@ class TestGPScaleInvariance:
         rng = np.random.default_rng(0)
         phi = np.sort(rng.uniform(0, 360, 14))
         scale = 3.0e5
-        z = scale * np.exp(1j * np.deg2rad(1 * phi))      # n=1 mode, huge magnitude
+        z = scale * np.exp(1j * np.deg2rad(1 * phi))  # n=1 mode, huge magnitude
         ms = gp_mode_shape(phi, z)
         assert np.ptp(ms.re_mean) > 0.5 * np.ptp(z.real)  # shape recovered, not flat
         # band should be small relative to the signal for a clean mode

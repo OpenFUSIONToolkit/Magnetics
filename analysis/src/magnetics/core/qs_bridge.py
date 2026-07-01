@@ -20,6 +20,7 @@ Dataset attrs used:
 
 Output contract: dicts matching core/contracts.py (ContourNode, LineNode, MetricsNode).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,6 +31,7 @@ _T_TO_G = 1.0e4
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
+
 def _time_ms(fit_ds) -> np.ndarray:
     """Return time in milliseconds. fit.py stores time in seconds."""
     return np.asarray(fit_ds["time"].values, dtype=float) * 1e3
@@ -39,11 +41,11 @@ def _amp_phase(coeff: np.ndarray, sigma: np.ndarray):
     """Amplitude / phase and 1-σ errors. Direct port of plots._amp_phase_with_errors."""
     c, s = coeff.real, coeff.imag
     ec, es = sigma.real, sigma.imag
-    amp = np.sqrt(c ** 2 + s ** 2)
+    amp = np.sqrt(c**2 + s**2)
     denom = np.where(amp == 0, np.nan, amp)
     amp_err = np.sqrt((c * ec) ** 2 + (s * es) ** 2) / denom
     phase = np.rad2deg(np.arctan2(s, c))
-    p2 = np.where((c ** 2 + s ** 2) == 0, np.nan, c ** 2 + s ** 2)
+    p2 = np.where((c**2 + s**2) == 0, np.nan, c**2 + s**2)
     phase_err = np.rad2deg(np.sqrt((c * es) ** 2 + (s * ec) ** 2) / p2)
     return amp, np.nan_to_num(amp_err), phase, np.nan_to_num(phase_err)
 
@@ -61,16 +63,18 @@ def _quality_status(K: float) -> str:
     return "ok"
 
 
-def _reconstruct_grid(fit_ds, phi_grid: np.ndarray, theta_grid: np.ndarray, t_idx: int) -> np.ndarray:
+def _reconstruct_grid(
+    fit_ds, phi_grid: np.ndarray, theta_grid: np.ndarray, t_idx: int
+) -> np.ndarray:
     """Reconstruct δBp on a (phi, theta) grid at one time index.
 
     Uses plot_slice's sign convention: exp(-i*(n*phi + m*theta)).
     Returns z[n_theta, n_phi].
     """
-    phi_rad = np.deg2rad(phi_grid)      # [n_phi]
+    phi_rad = np.deg2rad(phi_grid)  # [n_phi]
     theta_rad = np.deg2rad(theta_grid)  # [n_theta]
-    ns = fit_ds["fit_ns"].values         # [n_mode]
-    ms = fit_ds["fit_ms"].values         # [n_mode]
+    ns = fit_ds["fit_ns"].values  # [n_mode]
+    ms = fit_ds["fit_ms"].values  # [n_mode]
     coeffs_t = fit_ds["fit_coeffs"].values[:, t_idx]  # [n_mode] complex
 
     z = np.zeros((len(theta_grid), len(phi_grid)))
@@ -83,6 +87,7 @@ def _reconstruct_grid(fit_ds, phi_grid: np.ndarray, theta_grid: np.ndarray, t_id
 
 
 # ── public adapters ───────────────────────────────────────────────────────────
+
 
 def fit_to_qs_fit_node(
     fit_ds,
@@ -120,8 +125,9 @@ def fit_to_qs_fit_node(
     overlay = None
     if sensor_phis is not None and sensor_thetas is not None:
         overlay = {
-            "points": [{"x": float(p), "y": float(th)}
-                       for p, th in zip(sensor_phis, sensor_thetas)],
+            "points": [
+                {"x": float(p), "y": float(th)} for p, th in zip(sensor_phis, sensor_thetas)
+            ],
             "symbol": "square",
         }
 
@@ -161,18 +167,20 @@ def fit_to_amplitude_node(fit_ds) -> dict:
     t_ms = _time_ms(fit_ds)
     ns = fit_ds["fit_ns"].values
     ms_vals = fit_ds["fit_ms"].values
-    coeffs = fit_ds["fit_coeffs"].values   # [mode, time] complex
-    sigmas = fit_ds["fit_sigmas"].values   # [mode, time] complex (constant along time)
+    coeffs = fit_ds["fit_coeffs"].values  # [mode, time] complex
+    sigmas = fit_ds["fit_sigmas"].values  # [mode, time] complex (constant along time)
 
     series = []
     sigma_bands = []
     for i, (n, m) in enumerate(zip(ns, ms_vals)):
         amp, amp_err, _, _ = _amp_phase(coeffs[i], sigmas[i])
-        series.append({
-            "name": _mode_label(n, m),
-            "x": np.round(t_ms, 2).tolist(),
-            "y": np.round(amp * _T_TO_G, 4).tolist(),
-        })
+        series.append(
+            {
+                "name": _mode_label(n, m),
+                "x": np.round(t_ms, 2).tolist(),
+                "y": np.round(amp * _T_TO_G, 4).tolist(),
+            }
+        )
         sigma_bands.append(np.round(amp_err * _T_TO_G, 4).tolist())
 
     legend_title = "n" if np.all(ms_vals == 0) else "m/n"
@@ -213,11 +221,13 @@ def fit_to_phase_t_node(fit_ds) -> dict:
     sigma_bands = []
     for i, (n, m) in enumerate(zip(ns, ms_vals)):
         _, _, phase, phase_err = _amp_phase(coeffs[i], sigmas[i])
-        series.append({
-            "name": _mode_label(n, m),
-            "x": np.round(t_ms, 2).tolist(),
-            "y": np.round(phase, 3).tolist(),
-        })
+        series.append(
+            {
+                "name": _mode_label(n, m),
+                "x": np.round(t_ms, 2).tolist(),
+                "y": np.round(phase, 3).tolist(),
+            }
+        )
         sigma_bands.append(np.round(phase_err, 3).tolist())
 
     K = float(fit_ds.attrs.get("condition_number", fit_ds.attrs.get("raw_cn", 0.0)))
@@ -247,12 +257,12 @@ def fit_to_fit_quality_node(fit_ds) -> dict:
     return contracts.metrics(
         title="fit quality",
         fields=[
-            {"label": "K (raw)",  "value": f"{K:.1f}",       "status": _quality_status(K)},
-            {"label": "K (eff)",  "value": f"{eff_cn:.1f}",  "status": _quality_status(eff_cn)},
+            {"label": "K (raw)", "value": f"{K:.1f}", "status": _quality_status(K)},
+            {"label": "K (eff)", "value": f"{eff_cn:.1f}", "status": _quality_status(eff_cn)},
             {"label": "K cutoff", "value": f"{fit_cond:.0f}"},
-            {"label": "χ² (mean)","value": f"{mean_chi2:.3f}"},
+            {"label": "χ² (mean)", "value": f"{mean_chi2:.3f}"},
             {"label": "channels", "value": n_ch},
-            {"label": "modes",    "value": n_modes},
+            {"label": "modes", "value": n_modes},
         ],
     )
 
@@ -271,16 +281,16 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
     phi_rad = np.deg2rad(phi_grid)
     theta_rad = np.deg2rad(theta_fixed_deg)
 
-    ns = fit_ds["fit_ns"].values       # [n_mode]
-    ms = fit_ds["fit_ms"].values       # [n_mode]
+    ns = fit_ds["fit_ns"].values  # [n_mode]
+    ms = fit_ds["fit_ms"].values  # [n_mode]
     coeffs = fit_ds["fit_coeffs"].values  # [n_mode, n_time] complex
 
     # field[n_phi, n_time] = Re Sum_m coeff[m,t] * exp(-i*(n*phi + m*theta))
     n_t = len(t_ms)
     z = np.zeros((n_phi, n_t))
     for i, (n, m) in enumerate(zip(ns, ms)):
-        phase_phi   = np.exp(-1j * n * phi_rad)[:, None]   # [n_phi, 1]
-        phase_theta = np.exp(-1j * m * theta_rad)           # scalar complex
+        phase_phi = np.exp(-1j * n * phi_rad)[:, None]  # [n_phi, 1]
+        phase_theta = np.exp(-1j * m * theta_rad)  # scalar complex
         z += (coeffs[i][None, :] * phase_phi * phase_theta).real
     z *= _T_TO_G
 
@@ -306,6 +316,7 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
 
 # ── Section 6: fit quality time series ───────────────────────────────────────
 
+
 def fit_to_chi_sq_node(fit_ds) -> dict:
     """Reduced χ² vs time → LineNode (log scale, reference at y=1)."""
     from ..core import contracts
@@ -313,11 +324,9 @@ def fit_to_chi_sq_node(fit_ds) -> dict:
     t_ms = _time_ms(fit_ds)
     chi_sq = fit_ds["red_chi_sq"].values
     return contracts.line(
-        [{"name": "χ²", "x": np.round(t_ms, 2).tolist(),
-          "y": np.round(chi_sq, 6).tolist()}],
+        [{"name": "χ²", "x": np.round(t_ms, 2).tolist(), "y": np.round(chi_sq, 6).tolist()}],
         {"x": "time (ms)", "y": "reduced χ²"},
-        meta={"log_y": True, "reference_line": 1.0,
-              "shot": str(fit_ds.attrs.get("shot", ""))},
+        meta={"log_y": True, "reference_line": 1.0, "shot": str(fit_ds.attrs.get("shot", ""))},
     )
 
 
@@ -328,13 +337,18 @@ def fit_to_fit_signals_node(fit_ds) -> dict:
     t_ms = _time_ms(fit_ds)
     channels = list(fit_ds["channel"].values)
     series = [
-        {"name": c, "x": np.round(t_ms, 2).tolist(),
-         "y": np.round(fit_ds["signal"].sel(channel=c).values, 8).tolist()}
+        {
+            "name": c,
+            "x": np.round(t_ms, 2).tolist(),
+            "y": np.round(fit_ds["signal"].sel(channel=c).values, 8).tolist(),
+        }
         for c in channels
     ]
-    return contracts.line(series, {"x": "time (ms)", "y": "signal (T)"},
-                          meta={"channels": channels,
-                                "shot": str(fit_ds.attrs.get("shot", ""))})
+    return contracts.line(
+        series,
+        {"x": "time (ms)", "y": "signal (T)"},
+        meta={"channels": channels, "shot": str(fit_ds.attrs.get("shot", ""))},
+    )
 
 
 def fit_to_fit_residuals_node(fit_ds) -> dict:
@@ -347,16 +361,22 @@ def fit_to_fit_residuals_node(fit_ds) -> dict:
     t_ms = _time_ms(fit_ds)
     channels = list(fit_ds["channel"].values)
     series = [
-        {"name": c, "x": np.round(t_ms, 2).tolist(),
-         "y": np.round(fit_ds["residual"].sel(channel=c).values, 8).tolist()}
+        {
+            "name": c,
+            "x": np.round(t_ms, 2).tolist(),
+            "y": np.round(fit_ds["residual"].sel(channel=c).values, 8).tolist(),
+        }
         for c in channels
     ]
-    return contracts.line(series, {"x": "time (ms)", "y": "residual (T)"},
-                          meta={"channels": channels, "worst_n": 6,
-                                "shot": str(fit_ds.attrs.get("shot", ""))})
+    return contracts.line(
+        series,
+        {"x": "time (ms)", "y": "residual (T)"},
+        meta={"channels": channels, "worst_n": 6, "shot": str(fit_ds.attrs.get("shot", ""))},
+    )
 
 
 # ── Section 4: signal conditioning (raw vs prepared) ─────────────────────────
+
 
 def prepared_to_signal_node(raw_ds, prepared_ds) -> dict:
     """Raw vs prepared signals for the filtered channel subset → LineNode.
@@ -374,7 +394,7 @@ def prepared_to_signal_node(raw_ds, prepared_ds) -> dict:
     # prepared time in seconds → ms
     t_prep_s = prepared_ds["time"].values
     t_prep_ms = np.round(t_prep_s * 1e3, 3)
-    raw_time_s = raw_ds["time"].values   # seconds
+    raw_time_s = raw_ds["time"].values  # seconds
 
     series = []
     pairs = []
@@ -388,19 +408,25 @@ def prepared_to_signal_node(raw_ds, prepared_ds) -> dict:
         raw_shifted = raw_at_prep - raw_at_prep[0] + prep_sig[0]
 
         prep_idx = len(series)
-        series.append({
-            "name": c,
-            "x": t_prep_ms.tolist(),
-            "y": np.round(prep_sig, 8).tolist(),
-        })
+        series.append(
+            {
+                "name": c,
+                "x": t_prep_ms.tolist(),
+                "y": np.round(prep_sig, 8).tolist(),
+            }
+        )
         raw_idx = len(series)
-        series.append({
-            "name": f"{c} (raw)",
-            "x": t_prep_ms.tolist(),
-            "y": np.round(raw_shifted, 8).tolist(),
-        })
+        series.append(
+            {
+                "name": f"{c} (raw)",
+                "x": t_prep_ms.tolist(),
+                "y": np.round(raw_shifted, 8).tolist(),
+            }
+        )
         pairs.append({"channel": c, "prepared_idx": prep_idx, "raw_idx": raw_idx})
 
-    return contracts.line(series, {"x": "time (ms)", "y": "signal (T)"},
-                          meta={"pairs": pairs,
-                                "shot": str(prepared_ds.attrs.get("shot", ""))})
+    return contracts.line(
+        series,
+        {"x": "time (ms)", "y": "signal (T)"},
+        meta={"pairs": pairs, "shot": str(prepared_ds.attrs.get("shot", ""))},
+    )

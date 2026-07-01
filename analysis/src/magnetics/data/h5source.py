@@ -10,6 +10,7 @@ The repo-root `data/` directory (with `magnetics_signals.py` and
 and the live-pull entry point. Location is `$MAGNETICS_DATA_DIR` or the repo's
 `data/` dir relative to this file.
 """
+
 from __future__ import annotations
 
 import os
@@ -86,13 +87,15 @@ def list_shots() -> list[dict]:
             analysis = _attr_str(h5.attrs.get("analysis"), "both")
             backend = _attr_str(h5.attrs.get("backend"), "?")
             n = len([k for k in h5.keys() if k != "_timebases"])
-        out.append({
-            "id": shot,
-            "label": f"{device} {shot}",
-            "device": device,
-            "note": f"{n} channels · {analysis} · {backend} · {path.name}",
-            "mock": False,
-        })
+        out.append(
+            {
+                "id": shot,
+                "label": f"{device} {shot}",
+                "device": device,
+                "note": f"{n} channels · {analysis} · {backend} · {path.name}",
+                "mock": False,
+            }
+        )
     return out
 
 
@@ -105,8 +108,10 @@ def meta(shot: str | int) -> dict:
             "analysis": _attr_str(h5.attrs.get("analysis"), "both"),
             "backend": _attr_str(h5.attrs.get("backend"), "?"),
             "n_channels": len([k for k in h5.keys() if k != "_timebases"]),
-            "channels": [c.decode() if isinstance(c, bytes) else str(c)
-                         for c in (fetched if fetched is not None else [])],
+            "channels": [
+                c.decode() if isinstance(c, bytes) else str(c)
+                for c in (fetched if fetched is not None else [])
+            ],
         }
 
 
