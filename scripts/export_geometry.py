@@ -29,7 +29,7 @@ _MACHINES = ("MOCK-A", "MOCK-B")
 
 
 def build_node() -> dict:
-    geo = diiid_geometry.device_geometry()
+    geo = diiid_geometry.device_geometry(184927)  # a recent shot — all sensors active
     sensors = geo["sensors"]
     points = [{"x": s["r"], "y": s["z"], "label": s["name"], "group": s["kind"]} for s in sensors]
     return contracts.scatter2d(

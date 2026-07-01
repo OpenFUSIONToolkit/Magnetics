@@ -92,3 +92,32 @@ def geometry_at(dev: dict, sensor_id: str, shot: int) -> dict | None:
 def valid_at(dev: dict, sensor_id: str, shot: int) -> bool:
     """True if `sensor_id` is fetchable at `shot` (has a segment, not NotAvailable)."""
     return pointname_at(dev, sensor_id, shot) is not None
+
+
+def geometry_nearest(dev: dict, sensor_id: str, shot: int) -> dict | None:
+    """Like ``geometry_at``, but for a shot before the sensor's earliest segment
+    it falls back to that earliest segment's geometry. Sensors move little between
+    campaigns, so this is fine for a layout/overview view (NOT for the fetcher,
+    which must use the strict ``geometry_at``). None only if there are no segments."""
+    g = geometry_at(dev, sensor_id, shot)
+    if g is not None:
+        return g
+    segs = _segments(dev.get("sensors", {}).get(sensor_id))
+    if not segs:
+        return None
+    return {k: v for k, v in segs[0].items() if k not in ("since_shot", "pointname")}
+
+
+def feature_at(dev: dict, key: str, shot: int) -> dict | None:
+    """The active segment of a top-level shot-segmented geometry item
+    (``first_wall``, ``vacuum_vessel``, ``coils``) at `shot`, or None if `shot`
+    precedes the earliest segment. Excludes the ``since_shot`` bookkeeping key."""
+    active = None
+    for seg in _segments(dev.get(key)):
+        if seg.get("since_shot", 0) <= shot:
+            active = seg
+        else:
+            break
+    if active is None:
+        return None
+    return {k: v for k, v in active.items() if k != "since_shot"}

@@ -21,8 +21,8 @@ Fields added to each device JSON:
     where ``rz`` is ONE representative coil's R-Z footprint (the GUI draws a single
     coil per set, not all of them) and ``loops`` keeps every coil's 3D path.
 
-NSTX and NSTX-U share ``nstx.json``, split at ``since_shot`` NSTXU_SINCE_SHOT.
-This boundary is a PLACEHOLDER — see issue #42.
+NSTX and NSTX-U share ``nstx.json``, split at ``since_shot`` NSTXU_SINCE_SHOT
+(200000 — NSTX ended ~shot 142500, the counter reset to 200000 for NSTX-U).
 
 Run:  uv run python scripts/import_device_geometry.py
 """
@@ -37,7 +37,9 @@ _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "geometry_sources"
 _DEVICE_DIR = _HERE.parent / "src" / "magnetics" / "data" / "device"
 
-#: NSTX -> NSTX-U geometry boundary. PLACEHOLDER — confirm (issue #42).
+#: NSTX -> NSTX-U geometry boundary. Clean cutoff: NSTX ended ~shot 142500 (2010)
+#: and the counter reset to 200000 for NSTX-U's first campaign (2016) — confirmed
+#: via OMFIT's `shot >= 200000` logic and Fredrickson's shot->config maps.
 NSTXU_SINCE_SHOT = 200000
 
 #: Keep 3D coil loops light (they render smoothly well below full resolution).
@@ -184,7 +186,7 @@ def main() -> None:
                 "coils": [rwmef],
             },
             {
-                "since_shot": NSTXU_SINCE_SHOT,  # PLACEHOLDER — issue #42
+                "since_shot": NSTXU_SINCE_SHOT,  # NSTX-U era (>= 200000)
                 "first_wall": first_wall(_load("nstxu_tokamaker.json")),
                 "vacuum_vessel": vacuum_vessel(_load("nstxu_tokamaker.json")),
                 "coils": [rwmef],

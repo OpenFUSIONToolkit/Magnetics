@@ -1,4 +1,4 @@
-"""DIII-D static sensor geometry, loaded from ``data/device/<name>.json``.
+"""Shot-aware device geometry, resolved from ``data/device/<name>.json``.
 
 The device file (owned by the data layer) holds, per channel, r/z/phi/tilt/length/
 delta_phi, a ``{r, z}`` first-wall outline, and named ``sensor_sets`` (e.g.
@@ -11,22 +11,12 @@ stays device-agnostic. A different machine ships its own ``<name>.json`` file.
 
 from __future__ import annotations
 
-import json
 import re
-from pathlib import Path
+
+from . import devices
 
 # A loop is anything with real toroidal extent; everything else is a point probe.
 _LOOP_MIN_DPHI = 5.0
-
-
-def _device_json(name: str = "diiid") -> Path:
-    """Locate ``data/device/<name>.json`` by walking up from this file."""
-    rel = Path("data") / "device" / f"{name}.json"
-    for parent in Path(__file__).resolve().parents:
-        cand = parent / rel
-        if cand.exists():
-            return cand
-    raise FileNotFoundError(f"device geometry file not found: {rel}")
 
 
 def _family(channel: str) -> str:
@@ -126,35 +116,44 @@ def _arrays(sensors: list[dict]) -> list[dict]:
     return list(seen.values())
 
 
-def device_geometry(name: str = "diiid") -> dict:
-    """The full static device geometry from ``data/device/<name>.json``:
-    sensors, the first-wall outline, an array summary, and the named sensor sets."""
-    doc = json.loads(_device_json(name).read_text())
-    sets_raw = doc.get("sensor_sets", {})
+def device_geometry(shot: int, name: str = "diiid") -> dict:
+    """The full device geometry at `shot`: sensors (shot-correct r/z/phi), the
+    first-wall outline, vacuum-vessel plates, perturbation coils, an array summary,
+    and the named sensor sets. Reads the device table through the shared shot-aware
+    resolvers (``devices``), so it never disagrees with the fetcher."""
+    dev = devices.load_device(name)
+    sets_raw = dev.get("sensor_sets", {})
     kind_by_name = _kind_map_from_sets(sets_raw)
     sensors: list[dict] = []
-    for ch, v in doc.get("sensors", {}).items():
-        try:
-            sensors.append(
-                _record(
-                    ch,
-                    v["r"],
-                    v["z"],
-                    v["phi"],
-                    v.get("tilt", 0.0),
-                    v.get("length", 0.0),
-                    v.get("delta_phi", 1.0),
-                    kind=kind_by_name.get(ch) or _kind(_family(ch)),
-                )
+    for ch in dev.get("sensors", {}):
+        g = devices.geometry_nearest(dev, ch, shot)
+        if g is None or g.get("r") is None or g.get("z") is None or g.get("phi") is None:
+            continue  # no modeled geometry for this sensor
+        sensors.append(
+            _record(
+                ch,
+                g["r"],
+                g["z"],
+                g["phi"],
+                g.get("tilt", 0.0),
+                g.get("length", 0.0),
+                g.get("delta_phi", 1.0),
+                kind=kind_by_name.get(ch) or _kind(_family(ch)),
             )
-        except KeyError, TypeError, ValueError:
-            continue  # skip malformed rows
-    wall = doc.get("wall") or {}
-    device = doc.get("name", name)
+        )
+    device = dev.get("name", name)
+    fw = devices.feature_at(dev, "first_wall", shot) or {}
+    vv = (devices.feature_at(dev, "vacuum_vessel", shot) or {}).get("plates", [])
+    coils = [
+        {k: c.get(k) for k in ("name", "count", "turns", "rz")}
+        for c in (devices.feature_at(dev, "coils", shot) or {}).get("sets", [])
+    ]
     return {
         "device": device,
         "sensors": sensors,
-        "wall": {"r": wall.get("r", []), "z": wall.get("z", []), "label": f"{device} first wall"},
+        "wall": {"r": fw.get("r", []), "z": fw.get("z", []), "label": f"{device} first wall"},
+        "vacuum_vessel": vv,
+        "coils": coils,
         "arrays": _arrays(sensors),
         "sensor_sets": _build_sets(sets_raw),
     }

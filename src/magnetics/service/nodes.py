@@ -19,7 +19,7 @@ from functools import lru_cache
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import diiid, h5source
+from ..data import diiid, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
 
@@ -167,23 +167,30 @@ def _stack(shot, names):
     return _stack_cached(str(shot), tuple(names))
 
 
-# ── geometry: sensor φ–θ wall map ────────────────────────────────────────────
+# ── geometry: R–Z sensor map + first wall + vacuum vessel + coils ────────────
 def _geometry(shot, params=None) -> dict:
-    points = []
-    for name in h5source.channel_names(shot):
-        s = diiid.sensor(name, shot)
-        if s["phi"] is None:
-            continue
-        points.append({"x": s["phi"], "y": s["theta"], "label": s["family"], "group": s["family"]})
-    if not points:
-        raise ValueError("no sensors with a parseable toroidal angle")
+    """The device's magnetic-sensor layout at `shot` for the Sensors view: R-Z
+    scatter points plus a rich ``meta`` (sensors, first wall, vacuum-vessel plates,
+    perturbation coils, and named sensor sets), all shot-resolved from the device
+    table."""
+    geo = diiid_geometry.device_geometry(int(shot))
+    sensors = geo["sensors"]
+    if not sensors:
+        raise ValueError("no sensors with geometry at this shot")
+    points = [{"x": s["r"], "y": s["z"], "label": s["name"], "group": s["kind"]} for s in sensors]
     return contracts.scatter2d(
         points,
-        {"x": "φ (deg)", "y": "θ (deg)"},
+        {"x": "R (m)", "y": "Z (m)"},
         meta={
-            "n_sensors": len(points),
+            "n_sensors": len(sensors),
             "shot": str(shot),
-            "note": "φ, θ from the device geometry table at this shot (θ derived from r, z)",
+            "device": geo["device"],
+            "sensors": sensors,
+            "wall": geo["wall"],
+            "vv": geo["vacuum_vessel"],
+            "coils": geo["coils"],
+            "arrays": geo["arrays"],
+            "sensor_sets": geo["sensor_sets"],
         },
     )
 
