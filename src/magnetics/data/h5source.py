@@ -23,8 +23,8 @@ def data_dir() -> Path:
     env = os.environ.get("MAGNETICS_DATA_DIR")
     if env:
         return Path(env).expanduser().resolve()
-    # analysis/src/magnetics/data/h5source.py -> repo root is parents[4]
-    return Path(__file__).resolve().parents[4] / "data"
+    # src/magnetics/data/h5source.py -> repo root is parents[3]
+    return Path(__file__).resolve().parents[3] / "data"
 
 
 @lru_cache(maxsize=1)

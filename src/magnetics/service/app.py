@@ -315,7 +315,7 @@ async def stream(machine: str, result: str, request: Request):
 # ── single-origin (cluster) deploy: serve the built GUI at / if it exists ──
 # Mounted LAST so the /api/* routes above take precedence. Present only after a
 # `npm run build` (the `run.sh --prod` path); harmless in dev.
-_DIST = Path(__file__).resolve().parents[4] / "gui" / "web" / "dist"
+_DIST = Path(__file__).resolve().parents[3] / "gui" / "web" / "dist"
 if _DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="gui")
 

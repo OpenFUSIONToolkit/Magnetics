@@ -31,9 +31,9 @@ case "$MODE" in
 
   --live|live|"")
     echo "▶ syncing Python deps (uv)…"
-    ( cd analysis && uv sync --extra service --quiet )
+    uv sync --extra service --quiet
     echo "▶ starting service (:8000) + GUI dev server (:5173)…"
-    ( cd analysis && uv run --extra service magnetics-service ) &
+    uv run --extra service magnetics-service &
     SERVICE_PID=$!
     ( cd gui/web && VITE_API_BASE=http://127.0.0.1:8000 npm run dev ) &
     GUI_PID=$!

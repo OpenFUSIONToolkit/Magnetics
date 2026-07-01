@@ -23,8 +23,8 @@ from pathlib import Path
 from magnetics.core import contracts
 from magnetics.data import diiid_geometry
 
-# repo_root/analysis/scripts/export_geometry.py -> repo_root
-_MOCK = Path(__file__).resolve().parents[2] / "gui" / "web" / "public" / "mock"
+# repo_root/scripts/export_geometry.py -> repo_root
+_MOCK = Path(__file__).resolve().parents[1] / "gui" / "web" / "public" / "mock"
 _MACHINES = ("MOCK-A", "MOCK-B")
 
 
