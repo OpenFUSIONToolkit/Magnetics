@@ -1,7 +1,7 @@
-"""Adapt fit.py's xarray Dataset output → GUI kind-node dicts.
+"""Adapt the ``qs_fit`` xarray Dataset output → GUI kind-node dicts.
 
 Pure output-side bridge — no data loading, no fit logic. Takes the Dataset
-produced by ``magnetics-code/fit.fit()`` (or any equivalent) and converts it
+produced by ``qs_fit.fit()`` (or any equivalent) and converts it
 to the JSON contract consumed by the GUI's NodeView / Plot components.
 
 Input contract (fit Dataset variables):
@@ -80,7 +80,10 @@ def _reconstruct_grid(
     z = np.zeros((len(theta_grid), len(phi_grid)))
     for i, (n, m) in enumerate(zip(ns, ms)):
         c = coeffs_t[i]
-        # outer: [n_theta, n_phi] — sign matches plot_slice reconstruction
+        # SIGN CONVENTION (do not "fix" to +i): the fit basis is exp(+i(nφ+mθ)) with a
+        # real/imag column split, so reconstruction MUST use exp(-i(...)) to reproduce
+        # the fitted field. Matches OMFIT plot_magnetics_slice / qs_plots.plot_slice.
+        # outer: [n_theta, n_phi]
         phase = np.exp(-1j * m * theta_rad)[:, None] * np.exp(-1j * n * phi_rad)[None, :]
         z += (c * phase).real
     return z
@@ -286,6 +289,8 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
     coeffs = fit_ds["fit_coeffs"].values  # [n_mode, n_time] complex
 
     # field[n_phi, n_time] = Re Sum_m coeff[m,t] * exp(-i*(n*phi + m*theta))
+    # SIGN CONVENTION (do not "fix" to +i): fit basis exp(+i(nφ+mθ)) + real/imag split
+    # ⇒ reconstruction uses exp(-i(...)). See _reconstruct_grid / qs_plots.plot_slice.
     n_t = len(t_ms)
     z = np.zeros((n_phi, n_t))
     for i, (n, m) in enumerate(zip(ns, ms)):

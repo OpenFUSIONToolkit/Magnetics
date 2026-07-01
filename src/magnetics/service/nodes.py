@@ -1208,7 +1208,7 @@ def _mode_over_time(shot, params=None) -> dict:
     )
 
 
-# ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────
+# ── quasi-stationary fit (SLCONTOUR via the core.qs_* pipeline) ─────────────
 
 _QS_RUN_LOCK = threading.Lock()
 
@@ -1229,12 +1229,12 @@ def _qs_run(
 ):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
-    Delegates to magnetics-code/run.run_steps. All tuning parameters are
+    Delegates to core.qs_run.run_steps. All tuning parameters are
     explicit cache-key arguments so the result is reused across node requests
     that share the same settings. tmin_s/tmax_s are in seconds and come from
     _prep_qs_ds (which reads HDF5 defaults and applies any user override).
     """
-    from .._slcontour.run import run_steps
+    from ..core.qs_run import run_steps
 
     # detrend_band is in ms from the GUI; (0, 0) = auto → first 10ms of shot window
     if detrend_band == (0.0, 0.0):
@@ -1383,9 +1383,9 @@ def _sensor_map_rz(shot, params=None) -> dict:
     channels = list(run.prepared["channel"].values)
     device = str(raw.attrs.get("device", "DIII-D"))
 
-    from .._slcontour.omfit_compat import load_wall
+    from ..core.qs_device import load_wall
 
-    r_wall, z_wall = load_wall(device)
+    r_wall, z_wall = load_wall(device, shot)
 
     series = []
     for c in channels:
