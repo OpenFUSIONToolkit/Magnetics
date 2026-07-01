@@ -505,14 +505,17 @@ export default function RotatingTab({ machine }: { machine: string }) {
     });
 
     const freqs = baseNode.y;
-    const power = freqs.map((_, fIdx) => Math.pow(10, baseNode.z[fIdx][tIdx])); // Convert log power to linear power
+    const power = freqs.map((_, fIdx) => {
+      const zc = baseNode.z[fIdx][tIdx]; // null where denoise gated the cell
+      return zc == null ? NaN : Math.pow(10, zc); // gap the trace there; else log→linear
+    });
 
     // LIVE: real coherence + real mode number at the cursor column (same grid).
     const liveCoh = hasStaticFiles && coherenceNode?.kind === "heatmap" ? coherenceNode : null;
     const liveN = hasStaticFiles && modeNumberNode?.kind === "heatmap" ? modeNumberNode : null;
 
     const coh = liveCoh
-      ? freqs.map((_, fIdx) => (liveCoh.z[fIdx] ? liveCoh.z[fIdx][tIdx] : 0))
+      ? freqs.map((_, fIdx) => liveCoh.z[fIdx]?.[tIdx] ?? 0) // null (gated) → 0
       // Live but coherence node not yet loaded → zeros, never a synthesized stand-in.
       : live
       ? freqs.map(() => 0)
@@ -899,7 +902,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       xaxis: { title: { text: "Time (ms)" } },
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
-    const stripePlot = (d: { x: number[]; y: number[]; z: number[][] }, axisTitle: string, nodeId?: string) => (
+    const stripePlot = (d: { x: number[]; y: number[]; z: (number | null)[][] }, axisTitle: string, nodeId?: string) => (
       <Plot
         data={[{ type: "heatmap" as const, x: d.x, y: d.y, z: d.z, colorscale: POWER_SEQUENTIAL, showscale: false }]}
         layout={{ ...baseLayout, yaxis: { title: { text: axisTitle } } }}
