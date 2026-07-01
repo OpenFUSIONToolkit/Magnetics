@@ -7,6 +7,13 @@
       "runtimeArgs": ["--prefix", "gui/web", "run", "dev"],
       "port": 5173,
       "autoPort": false
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "magnetics.service.app:app", "--port", "8000", "--reload"],
+      "port": 8000,
+      "autoPort": false
     }
   ]
 }
