@@ -196,6 +196,82 @@ class Channel:
         self.error = error
 
 
+# --- EFIT profile record (2-D: value vs ψ_N, evolving in time) ----------------
+class Profile:
+    """One fetched EFIT profile: time (ms, float64) + psi_n axis + data[ntime, npsi]."""
+
+    __slots__ = ("name", "time", "psi", "data", "ok", "error")
+
+    def __init__(self, name, time=None, psi=None, data=None, ok=False, error=""):
+        self.name = name
+        self.time = time
+        self.psi = psi
+        self.data = data
+        self.ok = ok
+        self.error = error
+
+
+def _mdsthin_tree_profiles(connect, shot, tree_profiles, tmin, tmax, progress):
+    """Fetch EFIT 2-D profiles (e.g. q(ψ_N, t)) on one connection (openTree + node).
+
+    Mirrors :func:`_mdsthin_tree_channels` but for a 2-D signal: reads the array plus
+    its time axis (``dim_of``), orients it so axis 0 is time (EFIT gEQDSK QPSI comes as
+    either [ntime, nψ] or its transpose depending on the tree), and builds the ψ_N axis
+    as the uniform gEQDSK flux grid linspace(0, 1, nψ). Window applied client-side. Each
+    candidate (tree, node) is tried in order; the first usable 2-D array wins. Failures
+    are non-fatal — the profile is just marked missing."""
+    out: list[Profile] = []
+    if not tree_profiles:
+        return out
+    conn = connect()
+    for name, candidates in tree_profiles.items():
+        pf = Profile(name, ok=False, error="no data")
+        for tree, node in candidates:
+            try:
+                conn.openTree(tree, shot)
+            except Exception as exc:
+                pf.error = f"open {tree}: {exc}"
+                continue
+            try:
+                raw = np.asarray(conn.get(node).data(), dtype=np.float64)
+                if raw.ndim != 2 or raw.size == 0:
+                    pf.error = f"{tree}{node}: not 2-D (shape={raw.shape})"
+                    continue
+                t = np.atleast_1d(conn.get(f"dim_of({node})").data()).astype(np.float64)
+                # orient so axis 0 = time (QPSI ships either way across EFIT trees)
+                if raw.shape[0] == t.size:
+                    data = raw
+                elif raw.shape[1] == t.size:
+                    data = raw.T
+                else:
+                    pf.error = f"{tree}{node}: time dim {t.size} matches neither axis {raw.shape}"
+                    continue
+                if not np.all(np.isfinite(t)):
+                    pf.error = f"{tree}{node}: non-finite time"
+                    continue
+                sel = np.ones(t.size, dtype=bool)
+                if tmin is not None:
+                    sel &= t >= tmin
+                if tmax is not None:
+                    sel &= t <= tmax
+                t, data = t[sel], data[sel]
+                psi = np.linspace(0.0, 1.0, data.shape[1])  # uniform gEQDSK flux grid
+                if t.size >= 1 and data.shape[1] >= 2:
+                    pf = Profile(
+                        name,
+                        t.astype(np.float64, copy=False),
+                        psi.astype(np.float64, copy=False),
+                        data.astype(np.float32, copy=False),
+                        ok=True,
+                    )
+                    break
+            except Exception as exc:
+                pf.error = f"{tree}{node}: {exc}"
+        out.append(pf)
+        progress(1.0, f"profile:{name} ({'ok' if pf.ok else 'missing'})")
+    return out
+
+
 def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
     """Client-side window + decimate fallback (used after a full fetch)."""
     if tmin is not None or tmax is not None:
@@ -389,6 +465,7 @@ def _fetch_mdsthin(
     batch_size,
     progress,
     tree_signals=None,
+    tree_profiles=None,
     ssh_env=None,
     per_channel=False,
 ):
@@ -551,6 +628,7 @@ def _fetch_mdsthin(
 
         results = run_all(connect, f"{len(batches)} batches x{batch_size} ({workers} conns)")
         results += _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress)
+        results += _mdsthin_tree_profiles(connect, shot, tree_profiles, tmin, tmax, progress)
         return results
     # Off-network: one SSH tunnel, then a few TCP mdsip conns through it.
     with _ssh_tunnel(username, gateway, mds_host, mds_port, env=ssh_env) as lport:
@@ -560,6 +638,7 @@ def _fetch_mdsthin(
 
         results = run_all(connect, f"{len(batches)} batches x{batch_size} via tunnel")
         results += _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress)
+        results += _mdsthin_tree_profiles(connect, shot, tree_profiles, tmin, tmax, progress)
         return results
 
 
@@ -876,6 +955,10 @@ def _write_h5(
     channel_geometry = channel_geometry or {}
 
     comp = None if compression in (None, "none") else compression
+    # EFIT 2-D profiles (q(ψ_N, t), ...) ride in the same results list but are stored
+    # as their own group, not as (data, time) channels — split them out first.
+    profiles = [c for c in channels if isinstance(c, Profile)]
+    channels = [c for c in channels if not isinstance(c, Profile)]
     missing = [c for c in channels if not c.ok]
 
     # A channel can fetch data samples yet come back with a degenerate time axis
@@ -964,6 +1047,22 @@ def _write_h5(
             for k, v in channel_geometry.get(c.name, {}).items():
                 if v is not None:
                     g.attrs[k] = float(v)
+
+        # EFIT profiles: one group per profile with data[ntime, nψ] + its own time (ms)
+        # and psi (ψ_N) axes. Stored outside the channel/timebase machinery so profile
+        # arrays never masquerade as (data, time) channels downstream.
+        for pf in profiles:
+            if not pf.ok:
+                continue
+            if pf.name in h5:  # re-fetched: replace
+                del h5[pf.name]
+            pg = h5.create_group(pf.name)
+            pg.attrs["kind"] = "efit_profile"
+            pg.create_dataset("data", data=pf.data, compression=comp, chunks=True if comp else None)
+            pg.create_dataset("time", data=pf.time, compression=comp, chunks=True if comp else None)
+            pg.create_dataset("psi", data=pf.psi, compression=comp, chunks=True if comp else None)
+            pg.attrs["time_units"] = "ms"
+            pg.attrs["axis"] = "psi_n"
 
         # Union new channels with whatever the file already recorded; a name that
         # is now fetched is removed from the missing list.
@@ -1176,6 +1275,10 @@ def fetch_shot(
         tree_signals = ms.tree_signals_for(analysis)
         label = analysis
 
+    # EFIT02 q-profile (and any other 2-D profiles) for this analysis — fetched only on
+    # the mdsthin backend; empty for analyses that don't request it.
+    tree_profiles = ms.tree_profiles_for(analysis)
+
     # Shot-aware pointname resolution: map canonical ids -> the pointnames valid
     # at THIS shot, dropping channels the shot can't have so we never query them.
     shot_i = int(shot)
@@ -1212,12 +1315,13 @@ def fetch_shot(
             )
         else:
             merge = True
-            before = len(pointnames) + len(tree_signals)
+            before = len(pointnames) + len(tree_signals) + len(tree_profiles)
             pointnames = [p for p in pointnames if p not in existing]
             tree_signals = {k: v for k, v in tree_signals.items() if k not in existing}
-            n_skipped = before - (len(pointnames) + len(tree_signals))
+            tree_profiles = {k: v for k, v in tree_profiles.items() if k not in existing}
+            n_skipped = before - (len(pointnames) + len(tree_signals) + len(tree_profiles))
 
-    if merge and not pointnames and not tree_signals:
+    if merge and not pointnames and not tree_signals and not tree_profiles:
         sys.stderr.write(f"All {n_skipped} requested signals already in {out}; nothing to fetch.\n")
         return out
 
@@ -1294,6 +1398,7 @@ def fetch_shot(
                 batch_size=batch_size,
                 progress=progress,
                 tree_signals=tree_signals,
+                tree_profiles=tree_profiles,
                 ssh_env=ssh_env,
                 per_channel=per_channel,
             )

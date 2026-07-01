@@ -128,7 +128,27 @@ def device_id(shot: str | int) -> str:
 
 def channel_names(shot: str | int) -> list[str]:
     with h5py.File(shot_file(shot), "r") as h5:
-        return [k for k in h5.keys() if k != "_timebases"]
+        # Exclude the timebase store and any EFIT profile groups (q(ψ_N, t), …): those
+        # are not (data, time) channels, so array-builders must never see them.
+        return [
+            k
+            for k in h5.keys()
+            if k != "_timebases" and _attr_str(h5[k].attrs.get("kind"), "") != "efit_profile"
+        ]
+
+
+def load_q_profile(shot: str | int):
+    """The EFIT q-profile as (time_ms float64, psi_n float64, q[ntime, npsi] float32),
+    or None if the shot was pulled without it (older pulls, or no EFIT02 q available)."""
+    with h5py.File(shot_file(shot), "r") as h5:
+        if "q_profile" not in h5:
+            return None
+        g = h5["q_profile"]
+        return (
+            np.asarray(g["time"][:], dtype=np.float64),
+            np.asarray(g["psi"][:], dtype=np.float64),
+            np.asarray(g["data"][:], dtype=np.float32),
+        )
 
 
 def load_channel(shot: str | int, name: str):

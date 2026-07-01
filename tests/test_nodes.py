@@ -263,6 +263,49 @@ def test_poloidal_phase_fit_node():
     assert "m_fit" in n["meta"]
 
 
+def test_poloidal_m_spectrum_node(synthetic_shot):
+    shot = synthetic_shot  # the full DIII-D synthetic (poloidal array + EFIT02 q-profile)
+    try:
+        n = nodes.build_node(shot, "poloidal_m_spectrum", {"time": 50})
+    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    assert n["kind"] == "bar"
+    assert len(n["x"]) == len(n["y"])  # one probability per candidate m
+    m = n["meta"]
+    assert "best_m" in m and "verdict" in m
+    assert 0.0 <= m["mac_best"] <= 1.0
+    assert m["quality"] in {"clean", "marginal", "weak", "ambiguous", "q-anchored"}
+    assert 0 < m["n_used"] <= m["n_probes"]  # SNR gate keeps a subset of the array
+    # P(m) is a proper distribution over the candidates (draws + per-probe σ present)
+    assert m["n_draws"] > 0
+    assert abs(sum(n["y"]) - 1.0) < 1e-6
+    assert 0.0 <= m["p_even"] <= 1.0 and 0.0 <= m["p_odd"] <= 1.0
+    assert abs(m["p_even"] + m["p_odd"] - 1.0) < 1e-6
+    # the synthetic fixture ships an EFIT02-style q-profile → the fit is q-anchored to a
+    # real rational surface (the ground-truth 2/1 emerges even though MAC aliases it)
+    assert m["q_anchored"] is True
+    assert m["q_surface"] is not None and m["quality"] == "q-anchored"
+    assert "resonant q" in m["verdict"]
+    assert m["margin"] is not None and isinstance(m["alias_ms"], list)
+
+
+def test_poloidal_m_spectrum_falls_back_without_q_profile(synthetic_shot, monkeypatch):
+    """With no q-profile the fit runs unanchored: quality is never 'q-anchored' and a
+    near-tie is reported as 'ambiguous' with an alias set, not a false-confident m."""
+    shot = synthetic_shot
+    monkeypatch.setattr(nodes, "_q_at", lambda *a, **k: None)
+    try:
+        n = nodes.build_node(shot, "poloidal_m_spectrum", {"time": 50})
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    m = n["meta"]
+    assert m["q_anchored"] is False and m["q_surface"] is None
+    assert m["quality"] in {"clean", "marginal", "weak", "ambiguous"}
+    if m["quality"] == "ambiguous":
+        assert "∈" in m["verdict"]  # reports the alias set, not one confident m
+    assert n["secondary"]["y"] and len(n["secondary"]["y"]) == len(n["x"])  # nominal MAC
+
+
 def test_unknown_node_raises():
     shot = _first_shot()
     with pytest.raises(KeyError):

@@ -301,6 +301,28 @@ ANALYSIS_TREE_SIGNALS: dict[str, list[str]] = {
     "both": ["kappa"],
 }
 
+# EFIT PROFILES (2-D: value vs normalized flux ψ_N, evolving in time) -- unlike the
+# scalar TREE_SIGNALS above, these are q(ψ_N, t)-style arrays. Fetched from EFIT02
+# specifically: it is the MSE-constrained reconstruction, so its q-profile (hence the
+# rational-surface / mode-number anchoring built on it) is trustworthy in the core,
+# where a magnetics-only efit01 q can be off by enough to move a rational surface. We
+# do NOT fall back to efit01 here: a silently-substituted non-MSE q would defeat the
+# point, so if efit02 is absent the profile is simply omitted (analysis degrades to the
+# unanchored MAC). The ψ_N axis is the uniform gEQDSK flux grid (linspace 0..1).
+TREE_PROFILES: dict[str, list[tuple[str, str]]] = {
+    "q_profile": [
+        ("efit02", r"\top.results.geqdsk:qpsi"),
+        ("efit02", r"\efit_geqdsk:qpsi"),
+        ("efit02", r"\qpsi"),
+    ],
+}
+
+ANALYSIS_TREE_PROFILES: dict[str, list[str]] = {
+    "quasi-stationary": ["q_profile"],
+    "rotating": ["q_profile"],
+    "both": ["q_profile"],
+}
+
 
 def signals_for(analysis: str) -> list[str]:
     """Return the de-duplicated, ordered pointname list for an analysis type."""
@@ -333,6 +355,16 @@ def tree_signals_for(analysis: str) -> dict[str, list[tuple[str, str]]]:
             f"unknown analysis {analysis!r}; choose from {', '.join(ANALYSES)}"
         ) from None
     return {name: TREE_SIGNALS[name] for name in names}
+
+
+def tree_profiles_for(analysis: str) -> dict[str, list[tuple[str, str]]]:
+    """Return {profile_name: [(tree, node), ...]} EFIT 2-D profiles for an analysis.
+
+    Like :func:`tree_signals_for` but for ψ_N-resolved profiles (q(ψ_N, t)); fetched
+    from EFIT02 only (MSE-constrained). Absent for an unknown analysis rather than
+    raising — a missing q-profile is non-fatal (the mode fit degrades to unanchored).
+    """
+    return {name: TREE_PROFILES[name] for name in ANALYSIS_TREE_PROFILES.get(analysis, [])}
 
 
 def decimate_allowed(analysis: str) -> bool:

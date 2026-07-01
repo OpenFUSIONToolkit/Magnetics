@@ -66,6 +66,26 @@ def line(series, axes, *, meta=None) -> dict:
     return _clean({"kind": "line", "series": series, "axes": axes, "meta": meta})
 
 
+def bar(x, y, axes, *, highlight=None, secondary=None, meta=None) -> dict:
+    """A categorical bar chart — e.g. the MAC / probability spectrum over mode number.
+
+    ``x`` are the categories (mode numbers), ``y`` the bar heights. ``highlight`` marks
+    one category (the best-fit mode) for emphasis; ``secondary`` is an optional parallel
+    series shown as an overlaid marker (e.g. the nominal MAC behind the probability).
+    """
+    return _clean(
+        {
+            "kind": "bar",
+            "x": x,
+            "y": y,
+            "axes": axes,
+            "highlight": highlight,
+            "secondary": secondary,
+            "meta": meta,
+        }
+    )
+
+
 def equilibrium(
     r, z, psi_n, boundary, axis, *, levels=None, time_ms=0.0, axes=None, meta=None
 ) -> dict:
