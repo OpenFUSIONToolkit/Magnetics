@@ -19,9 +19,28 @@ from functools import lru_cache
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import diiid, diiid_geometry, h5source
+from ..data import device_geom, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=8)
+def _dev_geom(shot: str):
+    """The device-aware geometry/naming accessor for this shot's device (resolved
+    from the HDF5 ``device_id`` attr). Used by the channel selectors so an NSTX
+    shot is classified by its own sensor sets instead of DIII-D pointname families."""
+    from ..data import devices
+
+    try:
+        did = h5source.device_id(str(shot))
+    except Exception:  # noqa: BLE001 - shot file missing/unreadable → default device
+        did = "diiid"
+    # Canonicalize to a config id: an older/synthetic file may store a display name
+    # ('diii-d') that isn't a device-file stem — resolve it (else default to diiid).
+    if not (devices.DEVICE_DIR / f"{did.lower()}.json").exists():
+        did = devices.resolve_device_id(did) or "diiid"
+    return device_geom.get(did)
+
 
 T_TO_GAUSS = 1.0e4  # PTDATA integrated field is ~Tesla; show Gauss like the GUI
 
@@ -92,18 +111,20 @@ def channel_usage(shot: str) -> dict:
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run):
+    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run, _dev_geom):
         fn.cache_clear()
 
 
 def _array_channels(shot, families: tuple[str, ...]):
     """Channels present in this shot belonging to `families`, with a parseable
-    phi, sorted by phi. Returns list of (name, phi)."""
+    phi, sorted by phi. Returns list of (name, phi). ``families`` are the device's
+    own family tokens (DIII-D pointname families, or an NSTX sensor-set name)."""
+    dg = _dev_geom(str(shot))
     fam_set = set(families)
     out = []
     for name in h5source.channel_names(shot):
-        if diiid.family_of(name) in fam_set:
-            phi = diiid.phi_of(name, shot)
+        if dg.family_of(name) in fam_set:
+            phi = dg.phi_of(name, shot)
             if phi is not None:
                 out.append((name, phi))
     out.sort(key=lambda np_: np_[1])
@@ -116,9 +137,10 @@ def _real_theta(shot) -> dict:
     shot-correct (r, z) about the machine axis. Only channels with genuine table
     geometry at this shot appear, so callers can still select 'probes that have a
     physical θ' (vs ``diiid``'s cosmetic per-array offset)."""
+    dg = _dev_geom(str(shot))
     out: dict[str, float] = {}
     for name in h5source.channel_names(shot):
-        th = diiid.real_theta_of(name, shot)
+        th = dg.real_theta_of(name, shot)
         if th is not None:
             out[name] = th
     return out
@@ -173,7 +195,7 @@ def _geometry(shot, params=None) -> dict:
     scatter points plus a rich ``meta`` (sensors, first wall, vacuum-vessel plates,
     perturbation coils, and named sensor sets), all shot-resolved from the device
     table."""
-    geo = diiid_geometry.device_geometry(int(shot))
+    geo = diiid_geometry.device_geometry(int(shot), _dev_geom(str(shot)).device_id)
     sensors = geo["sensors"]
     if not sensors:
         raise ValueError("no sensors with geometry at this shot")
@@ -195,16 +217,61 @@ def _geometry(shot, params=None) -> dict:
     )
 
 
+# ── device-specific array-family preferences ────────────────────────────────
+def _toroidal_prefs(shot) -> tuple[tuple[str, ...], ...]:
+    """Ordered family-token groups to try for the toroidal (midplane) array,
+    per device. DIII-D uses pointname families; other devices use the toroidal
+    ``sensor_sets`` present in their config."""
+    dg = _dev_geom(str(shot))
+    if dg.device_id == "diiid":
+        return (("MPI_BDOT",), ("MPID",), ("MPI_BDOT", "MPID", "MPIF"))
+    # Other devices: any set named "... toroidal ..." (each is one family token).
+    tor = _named_sets(dg, "toroidal")
+    return tuple((s,) for s in tor) + ((tuple(tor),) if len(tor) > 1 else ())
+
+
+def _poloidal_prefs(shot) -> tuple[tuple[str, ...], ...]:
+    """Ordered family-token groups to try for the poloidal array, per device."""
+    dg = _dev_geom(str(shot))
+    if dg.device_id == "diiid":
+        return (("MPID",),)
+    pol = _named_sets(dg, "poloidal")
+    return tuple((s,) for s in pol)
+
+
+def _named_sets(dg, substr: str) -> list[str]:
+    """Names of the device's list-type sensor sets whose name contains ``substr``
+    (case-insensitive), e.g. 'toroidal' → ['HF toroidal array','HN toroidal array']."""
+    return [
+        nm
+        for nm, spec in dg.sensor_sets().items()
+        if isinstance(spec, dict) and spec.get("type") == "list" and substr in nm.lower()
+    ]
+
+
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
 def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     """Two toroidally-separated probes for the 2-point cross-spectrogram.
-    Prefer the fast Mirnov dB/dt array (MPI_BDOT), then integrated Bp (MPID).
-    Returns ((name1, phi1), (name2, phi2)) with the widest non-zero separation."""
-    for families in (("MPI_BDOT",), ("MPID",), ("MPI_BDOT", "MPID", "MPIF")):
+    Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set),
+    then integrated Bp. Returns ((name1, phi1), (name2, phi2)) with the widest
+    non-zero separation."""
+    for families in _pick_pair_prefs(shot):
         arr = _array_channels(shot, families)  # (name, phi), sorted by phi
         if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
             return arr[0], arr[-1]
     raise ValueError("need two toroidally-separated probes for a spectrogram")
+
+
+def _pick_pair_prefs(shot) -> tuple[tuple[str, ...], ...]:
+    """The toroidal-array preferences, plus (for other devices) an all-toroidal
+    combined group, so the 2-point pair can straddle multiple toroidal sets."""
+    prefs = _toroidal_prefs(shot)
+    dg = _dev_geom(str(shot))
+    if dg.device_id != "diiid":
+        tor = _named_sets(dg, "toroidal")
+        if len(tor) > 1:
+            prefs = prefs + (tuple(tor),)
+    return prefs
 
 
 @lru_cache(maxsize=8)
@@ -668,18 +735,26 @@ def _toroidal_arr(shot):
     pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
     probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
     scrambles the fit, so they're excluded."""
-    arr = _array_channels(shot, ("MPI_BDOT",))
-    if len(arr) >= 4:
+    dg = _dev_geom(str(shot))
+    if dg.device_id == "diiid":
+        arr = _array_channels(shot, ("MPI_BDOT",))
+        if len(arr) >= 4:
+            return arr
+        theta = _real_theta(shot)  # integrated-Bp midplane fallback
+        arr = [
+            (n, p)
+            for n, p in _array_channels(shot, ("MPID",))
+            if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)
+        ]
+        if len(arr) < 4:
+            raise ValueError("not enough toroidal-array channels for a mode fit")
         return arr
-    theta = _real_theta(shot)  # integrated-Bp midplane fallback
-    arr = [
-        (n, p)
-        for n, p in _array_channels(shot, ("MPID",))
-        if (th := theta.get(n)) is not None and (th < 20.0 or th > 340.0)
-    ]
-    if len(arr) < 4:
-        raise ValueError("not enough toroidal-array channels for a mode fit")
-    return arr
+    # Other devices: the largest toroidal sensor-set with ≥ 4 distinct-φ probes.
+    for families in _toroidal_prefs(shot):
+        arr = _array_channels(shot, families)
+        if len(arr) >= 4 and len({round(p, 1) for _, p in arr}) >= 4:
+            return arr
+    raise ValueError("not enough toroidal-array channels for a mode fit")
 
 
 def _toroidal_mode(shot, params):
@@ -727,7 +802,7 @@ def _phase_fit(shot, params=None) -> dict:
     perr = mode.phase_error if mode.phase_error is not None else [None] * len(arr)
     points = []
     for (nm, p), ph, e in zip(arr, mode.phase, perr):
-        pt = {"x": float(p), "y": float(ph), "group": diiid.kind_of(nm)}
+        pt = {"x": float(p), "y": float(ph), "group": _dev_geom(str(shot)).kind_of(nm)}
         if e is not None and np.isfinite(e):
             pt["error_y"] = round(float(e), 3)
         points.append(pt)
@@ -828,11 +903,16 @@ def _poloidal_shape(shot, params=None) -> dict:
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
+    dg = _dev_geom(str(shot))
     theta = _real_theta(shot)
+    if dg.device_id == "diiid":
+        pol_families = {"MPID"}
+    else:
+        pol_families = set(_named_sets(dg, "poloidal"))
     arr = [
         (name, theta[name])
         for name in h5source.channel_names(shot)
-        if diiid.family_of(name) == "MPID" and name in theta
+        if dg.family_of(name) in pol_families and name in theta
     ]
     arr.sort(key=lambda nt: nt[1])
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
@@ -871,7 +951,8 @@ def _poloidal_mode(shot, params):
     arr = _poloidal_arr(str(shot))
     kappa = _kappa_at(str(shot), t0_ms)
     thetas, _used = _theta_star([th for _, th in arr], kappa)
-    pphis = np.array([diiid.phi_of(n, shot) or 0.0 for n, _ in arr], dtype=float)
+    dg = _dev_geom(str(shot))
+    pphis = np.array([dg.phi_of(n, shot) or 0.0 for n, _ in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
@@ -933,9 +1014,10 @@ def _pattern_overlay(shot, kappa=None) -> dict:
     pts = []
     try:
         arr = _poloidal_arr(str(shot))
+        dg = _dev_geom(str(shot))
         th_star, _ = _theta_star([th for _, th in arr], kappa)
         for (nm, _th), ths in zip(arr, th_star):
-            phi = diiid.phi_of(nm, shot)
+            phi = dg.phi_of(nm, shot)
             if phi is not None:
                 pts.append({"x": float(phi), "y": float(ths), "label": nm})
     except ValueError:
