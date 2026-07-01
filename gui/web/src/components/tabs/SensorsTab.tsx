@@ -59,10 +59,10 @@ const PAN_CONFIG: Partial<Plotly.Config> = {
   modeBarButtonsToRemove: ["lasso2d", "select2d"],
 };
 
-const LEGEND = { orientation: "h" as const, font: { size: 10 }, y: 1.12 };
+const LEGEND = { orientation: "h" as const, font: { size: 13 }, y: 1.12 };
 // 2D: legend sits BELOW the R-Z plot so it never overlaps the (tall, narrow) scene.
 const LEGEND_2D = {
-  orientation: "h" as const, font: { size: 10 },
+  orientation: "h" as const, font: { size: 13 },
   x: 0.5, xanchor: "center" as const, y: -0.16, yanchor: "top" as const,
 };
 
@@ -359,13 +359,13 @@ export default function SensorsTab({ machine }: { machine: string }) {
       {meta && (
         <>
           {/* Sensor-set selection, grouped by kind. Check any sets to show them. */}
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: 13 }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: 14 }}>
             {KINDS.map((kind) => {
               const ks = sets.filter((s) => s.kind === kind);
               if (!ks.length) return null;
               return (
                 <div key={kind} style={{ minWidth: 150 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, marginBottom: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
                     <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR[kind], display: "inline-block" }} />
                     {KIND_LABEL[kind]}
                   </div>
@@ -381,7 +381,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
               );
             })}
             <div style={{ minWidth: 150 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>overlays</div>
+              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>overlays</div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />

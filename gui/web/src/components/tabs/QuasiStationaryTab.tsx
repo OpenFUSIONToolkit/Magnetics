@@ -561,28 +561,28 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       </div>
 
       {/* ── Settings bar ──────────────────────────────────────────────── */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 15, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           Array
           <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
-            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            style={{ fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
             {CHANNEL_FILTERS.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           n modes
           <input value={ns} onChange={e => setNs(e.target.value)}
-            style={{ width: 60, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 60, fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           m modes
           <input value={ms} onChange={e => setMs(e.target.value)}
-            style={{ width: 40, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 40, fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           Detrend
           <select value={detrendType} onChange={e => setDetrendType(e.target.value)}
-            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            style={{ fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
             <option value="baseline">baseline</option>
             <option value="none">none</option>
             <option value="linear">linear</option>
@@ -593,28 +593,28 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
             band (ms)
             <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
-              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+              style={{ width: 52, fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
             –
             <input placeholder="auto" value={detrendHi} onChange={e => setDetrendHi(e.target.value)}
-              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+              style={{ width: 52, fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           </label>
         )}
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           t trim (ms)
           <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 52, fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           –
           <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 52, fontSize: 15, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {paramsDirty && (
-            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
+            <span style={{ fontSize: 14, color: "var(--text-dim)" }}>settings changed</span>
           )}
           <button
             onClick={() => setCommittedParams(qsParams)}
             style={{
-              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              fontSize: 15, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
               background: paramsDirty ? "var(--accent)" : "var(--panel)",
               color: paramsDirty ? "#fff" : "var(--text-dim)",
               border: "1px solid var(--border)",
@@ -655,7 +655,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               {(["rdbu", "cividis", "viridis"] as const).map(cm => (
                 <button key={cm} onClick={() => setColormapChoice(cm)}
                   style={{
-                    fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
+                    fontSize: 12, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
                     background: colormapChoice === cm ? "var(--accent)" : "var(--panel)",
                     color: colormapChoice === cm ? "#fff" : "var(--text-dim)",
                     border: "1px solid var(--border)",
