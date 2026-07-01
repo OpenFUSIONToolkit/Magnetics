@@ -1,7 +1,7 @@
-"""Adapt fit.py's xarray Dataset output → GUI kind-node dicts.
+"""Adapt the ``qs_fit`` xarray Dataset output → GUI kind-node dicts.
 
 Pure output-side bridge — no data loading, no fit logic. Takes the Dataset
-produced by ``magnetics-code/fit.fit()`` (or any equivalent) and converts it
+produced by ``qs_fit.fit()`` (or any equivalent) and converts it
 to the JSON contract consumed by the GUI's NodeView / Plot components.
 
 Input contract (fit Dataset variables):
@@ -11,11 +11,13 @@ Input contract (fit Dataset variables):
     fit_sigmas [mode, time] — complex 1-σ errors (same value at every t; shape for broadcast)
     red_chi_sq [time]     — reduced chi-squared
     basis    [basis_channel, basis_mode] — design matrix A (for SVD diagnostics)
+    signal_precon_svals [signal_svd_index] — data-matrix singular values (SVD conditioning)
     time     [time]       — time coordinate; assumed seconds, converted to ms here
 
 Dataset attrs used:
     condition_number, raw_cn, eff_cn — fit condition numbers
     fit_condition — fit_cond threshold
+    signal_energy_limit, signal_effective_rank — data-matrix SVD energy cutoff + effective rank
     shot
 
 Output contract: dicts matching core/contracts.py (ContourNode, LineNode, MetricsNode).
@@ -80,7 +82,10 @@ def _reconstruct_grid(
     z = np.zeros((len(theta_grid), len(phi_grid)))
     for i, (n, m) in enumerate(zip(ns, ms)):
         c = coeffs_t[i]
-        # outer: [n_theta, n_phi] — sign matches plot_slice reconstruction
+        # SIGN CONVENTION (do not "fix" to +i): the fit basis is exp(+i(nφ+mθ)) with a
+        # real/imag column split, so reconstruction MUST use exp(-i(...)) to reproduce
+        # the fitted field. Matches OMFIT plot_magnetics_slice / qs_plots.plot_slice.
+        # outer: [n_theta, n_phi]
         phase = np.exp(-1j * m * theta_rad)[:, None] * np.exp(-1j * n * phi_rad)[None, :]
         z += (c * phase).real
     return z
@@ -286,6 +291,8 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
     coeffs = fit_ds["fit_coeffs"].values  # [n_mode, n_time] complex
 
     # field[n_phi, n_time] = Re Sum_m coeff[m,t] * exp(-i*(n*phi + m*theta))
+    # SIGN CONVENTION (do not "fix" to +i): fit basis exp(+i(nφ+mθ)) + real/imag split
+    # ⇒ reconstruction uses exp(-i(...)). See _reconstruct_grid / qs_plots.plot_slice.
     n_t = len(t_ms)
     z = np.zeros((n_phi, n_t))
     for i, (n, m) in enumerate(zip(ns, ms)):
@@ -327,6 +334,69 @@ def fit_to_chi_sq_node(fit_ds) -> dict:
         [{"name": "χ²", "x": np.round(t_ms, 2).tolist(), "y": np.round(chi_sq, 6).tolist()}],
         {"x": "time (ms)", "y": "reduced χ²"},
         meta={"log_y": True, "reference_line": 1.0, "shot": str(fit_ds.attrs.get("shot", ""))},
+    )
+
+
+def fit_to_svd_energy_node(fit_ds) -> dict:
+    """Data-matrix SVD cumulative energy fraction vs index → LineNode.
+
+    Mirrors ``qs_plots.plot_svds``'s top subplot: points beyond the effective
+    rank (kept out of the fit's SVD-conditioned data) are surfaced as markers
+    so the GUI can render them distinctly, and ``meta.reference_line`` carries
+    the requested energy cutoff for a dashed threshold line.
+    """
+    from ..core import contracts
+
+    s = fit_ds["signal_precon_svals"].values
+    energy = np.cumsum(s**2) / np.sum(s**2)
+    idx = np.arange(1, len(s) + 1)
+    rank = int(fit_ds.attrs.get("signal_effective_rank", len(s)))
+    energy_limit = float(fit_ds.attrs.get("signal_energy_limit", 1.0))
+
+    series = {
+        "name": "cumulative energy",
+        "x": idx.tolist(),
+        "y": np.round(energy, 6).tolist(),
+    }
+    if rank < len(s):
+        series["markers"] = {"x": idx[rank:].tolist(), "y": np.round(energy[rank:], 6).tolist()}
+
+    return contracts.line(
+        [series],
+        {"x": "singular value index", "y": "energy fraction"},
+        meta={"reference_line": energy_limit, "rank": rank},
+    )
+
+
+def fit_to_svd_condition_node(fit_ds) -> dict:
+    """Design-matrix per-singular-value condition number vs index → LineNode.
+
+    Mirrors ``qs_plots.plot_svds``'s bottom subplot: the design matrix's own
+    singular values aren't stored on the fit Dataset (only the two scalar
+    reductions ``raw_cn``/``eff_cn`` are), so they're recomputed here from the
+    stored ``basis`` matrix, exactly as the notebook plot does.
+    """
+    from ..core import contracts
+
+    A = fit_ds["basis"].values
+    w_a = np.linalg.svd(A, compute_uv=False)
+    cond = np.abs(w_a[0] / w_a)
+    idx = np.arange(1, len(cond) + 1)
+    fit_cond = float(fit_ds.attrs.get("fit_condition", 10.0))
+
+    series = {
+        "name": "condition number",
+        "x": idx.tolist(),
+        "y": np.round(cond, 6).tolist(),
+    }
+    removed = cond >= fit_cond
+    if removed.any():
+        series["markers"] = {"x": idx[removed].tolist(), "y": np.round(cond[removed], 6).tolist()}
+
+    return contracts.line(
+        [series],
+        {"x": "singular value index", "y": "condition number"},
+        meta={"log_y": True, "reference_line": fit_cond},
     )
 
 

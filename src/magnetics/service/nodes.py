@@ -1160,7 +1160,7 @@ def _mode_over_time(shot, params=None) -> dict:
     )
 
 
-# ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────
+# ── quasi-stationary fit (SLCONTOUR via the core.qs_* pipeline) ─────────────
 
 _QS_RUN_LOCK = threading.Lock()
 
@@ -1178,15 +1178,18 @@ def _qs_run(
     energy: float,
     tmin_s: float,
     tmax_s: float,
+    fit_basis: str,
+    fit_cond: float,
+    sigma: float | None,
 ):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
-    Delegates to magnetics-code/run.run_steps. All tuning parameters are
+    Delegates to core.qs_run.run_steps. All tuning parameters are
     explicit cache-key arguments so the result is reused across node requests
     that share the same settings. tmin_s/tmax_s are in seconds and come from
     _prep_qs_ds (which reads HDF5 defaults and applies any user override).
     """
-    from .._slcontour.run import run_steps
+    from ..core.qs_run import run_steps
 
     # detrend_band is in ms from the GUI; (0, 0) = auto → first 10ms of shot window
     if detrend_band == (0.0, 0.0):
@@ -1206,6 +1209,11 @@ def _qs_run(
             energy=energy,
             detrend_type=detrend_type,
             detrend_band=(db_lo_s, db_hi_s),
+        ),
+        fit_kwargs=dict(
+            fit_basis=fit_basis,
+            fit_cond=fit_cond,
+            sigma_override=sigma,
         ),
         verbose=False,
     )
@@ -1270,6 +1278,10 @@ def _prep_qs_ds(shot, params):
     cutoff_lo = float(params.get("cutoff_lo", 5.0)) if params else 5.0
     cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
     energy = float(params.get("energy", 0.98)) if params else 0.98
+    fit_basis = params.get("fit_basis", "sinusoidal-integral") if params else "sinusoidal-integral"
+    fit_cond = float(params.get("fit_cond", 10.0)) if params else 10.0
+    sigma_str = params.get("sigma") if params else None
+    sigma = float(sigma_str) if sigma_str is not None else None
 
     # Time trim: read shot-window defaults from HDF5, then apply any user override.
     path = h5source.shot_file(str(shot))
@@ -1297,6 +1309,9 @@ def _prep_qs_ds(shot, params):
             energy,
             tmin_s,
             tmax_s,
+            fit_basis,
+            fit_cond,
+            sigma,
         )
 
 
@@ -1335,9 +1350,9 @@ def _sensor_map_rz(shot, params=None) -> dict:
     channels = list(run.prepared["channel"].values)
     device = str(raw.attrs.get("device", "DIII-D"))
 
-    from .._slcontour.omfit_compat import load_wall
+    from ..core.qs_device import load_wall
 
-    r_wall, z_wall = load_wall(device)
+    r_wall, z_wall = load_wall(device, shot)
 
     series = []
     for c in channels:
@@ -1399,6 +1414,16 @@ def _chi_sq_t(shot, params=None) -> dict:
     return qs_bridge.fit_to_chi_sq_node(_prep_qs_ds(shot, params).fit)
 
 
+def _svd_energy(shot, params=None) -> dict:
+    """Data-matrix SVD cumulative energy fraction vs index → LineNode."""
+    return qs_bridge.fit_to_svd_energy_node(_prep_qs_ds(shot, params).fit)
+
+
+def _svd_design_condition(shot, params=None) -> dict:
+    """Design-matrix per-singular-value condition number vs index → LineNode."""
+    return qs_bridge.fit_to_svd_condition_node(_prep_qs_ds(shot, params).fit)
+
+
 def _fit_signals(shot, params=None) -> dict:
     """Fitted signal per channel vs time → LineNode (Section 6 middle panel)."""
     return qs_bridge.fit_to_fit_signals_node(_prep_qs_ds(shot, params).fit)
@@ -1427,6 +1452,8 @@ _BUILDERS = {
     "sensor_map_cylindrical": _sensor_map_cylindrical,
     "signal_conditioning": _signal_conditioning,
     "chi_sq_t": _chi_sq_t,
+    "svd_energy": _svd_energy,
+    "svd_condition": _svd_design_condition,
     "fit_signals": _fit_signals,
     "fit_residuals": _fit_residuals,
     # rotating eigspec (develop): GP mode shapes + patterns + tracks
