@@ -52,7 +52,8 @@ include `device`, `shot`, `tmin`/`tmax` (ms).
   per-channel geometry joined from the device JSON, including the derived `*_end1/2` coordinates. All
   sensor channels are interpolated onto one common time axis (the densest native grid, clipped to the
   window they share).
-- `plasma` — `Ip`, `Bt` from the `ip`/`bt` channels (time in **ms**), `helicity` attr (default −1).
+- `plasma` — `Ip`, `Bt` from the `ip`/`bt` channels (time in **ms**), and a `helicity` attr computed
+  as sign(Bt·Ip) from those traces (−1 fallback when they're absent).
 - `coupling` — `None`; the new files carry no DC vacuum-coupling matrix, so `qs_prep`'s DC
   compensation (`dc_comp=True`) is unavailable.
 
@@ -108,8 +109,8 @@ flips helicity. A regression test in `tests/test_qs_bridge.py` pins this.
 ## Notes & limitations
 
 - Reduced χ² typically runs above 1 because the constant 2e-5 T sensor σ is optimistic relative to
-  higher-n structure not in the basis; residuals stay small versus the signals. Per-sensor σ /
-  helicity from the data layer is an open item.
+  higher-n structure not in the basis; residuals stay small versus the signals. Per-sensor σ from the
+  data layer is an open item (helicity is now computed from the shot's Ip·Bt in `qs_io_data`).
 - The pure-numpy relatives of `qs_fit` (a device-agnostic `core` port) and the `data/`-layer
   set-flattening dedup are open follow-ups.
 - Out of scope for this path: the rotating-mode spectrogram/MODESPEC analysis, 3D coil-current fits,

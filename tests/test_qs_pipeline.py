@@ -20,6 +20,28 @@ def _all_finite_grid(node):
     return np.all(np.isfinite(z))
 
 
+def test_compute_helicity_from_ip_bt():
+    """Helicity = sign(median Bt)/sign(median Ip); fallback when a trace is missing or
+    its median sign is indeterminate."""
+    from magnetics.core.qs_io_data import _compute_helicity
+
+    assert _compute_helicity({"bt": np.array([-2.0, -2.1]), "ip": np.array([1e6, 1.1e6])}) == -1
+    assert _compute_helicity({"bt": np.array([2.0]), "ip": np.array([1e6])}) == 1
+    assert _compute_helicity({"bt": np.array([-2.0]), "ip": np.array([-1e6])}) == 1
+    assert _compute_helicity({}, fallback=-1) == -1
+    assert _compute_helicity({"ip": np.array([1e6])}, fallback=-1) == -1
+    assert _compute_helicity({"bt": np.array([0.0]), "ip": np.array([1e6])}, fallback=-1) == -1
+
+
+def test_pipeline_helicity_is_computed_not_defaulted(synthetic_shot):
+    """The synthetic shot has +Bt / +Ip, so the loaded plasma helicity is the computed
+    +1 — not the -1 fallback."""
+    from magnetics.core.qs_io_data import load_shot
+
+    sd = load_shot(synthetic_shot)
+    assert sd.plasma.attrs["helicity"] == 1
+
+
 def test_qs_fit_returns_a_finite_contour(synthetic_shot):
     node = nodes.build_node(synthetic_shot, "qs_fit")
     assert node["kind"] == "contour"

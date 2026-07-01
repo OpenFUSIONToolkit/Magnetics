@@ -39,7 +39,7 @@ DIII-D shots:
 - **QS live (Day-3 night):** `qs_fit` / `phi_t` / `fit_quality` / `chi_sq_t` / sensor-map / signal
   nodes serve the **real** SLCONTOUR fit. Shots pulled rotating-only (no Bp LFS midplane array)
   return a clean 422 and the QS tab shows a "no quasi-stationary array" banner. Remaining fidelity
-  gap: the data layer's per-sensor σ / helicity (fit currently uses a constant σ).
+  gap: the data layer's per-sensor σ (the fit uses a constant σ; helicity is computed from Ip·Bt).
 - **Geometry shot-indexed (Day-3 night):** `data/device/diiid.json` sensor availability + positions
   are now segmented back to shot 124400 (legacy dense set) / 151593 (3D-upgrade). The Sensors tab
   renders wall + vacuum vessel + perturbation coils + saddle loops (2D honoring each loop's tilt).
@@ -71,13 +71,13 @@ rather than fabricating data in the GUI. Keep `contracts.py` and `contract.ts` i
   label → live via `usingLiveBackend()`; build the Sensors geometry view).
 - **Slow Rollers + Meg (quasi-stationary):** the real `qs_fit` node (K / χ² / modes) + the QS GUI
   tab are **live** (Day-3 night). Remaining: finish the pure `core/quasistationary.py` port and
-  wire it in place of the `_slcontour` reference pipeline (#40); consume real per-sensor σ +
-  helicity once the data layer provides them (the fit currently uses a constant σ).
+  wire it in place of the `_slcontour` reference pipeline (#40); consume real per-sensor σ once the
+  data layer provides it (the fit currently uses a constant σ; helicity is computed from Ip·Bt).
 - **Data Streamers:** the DIII-D geometry table is now **shot-indexed** (`diiid.json` segmented to
   124400 / 151593; the cosmetic θ in `magnetics/data/diiid.py` — now a thin shim over the
   device-agnostic `data/device_geom.py` — is superseded by the real device table). NSTX/NSTX-U
   fetch + node rendering landed on `feature/nstxu-data-fetch` (see the NSTX status bullet above).
-  Remaining: give `h5source` per-sensor σ + helicity (last QS-fidelity gap); a `DataSource`
+  Remaining: give `h5source` per-sensor σ (last QS-fidelity gap; helicity now computed from Ip·Bt); a `DataSource`
   abstraction with an array cache; populate the shot-segmented legacy-NSTX tree/wall from the
   `config_hf/hn.mm` files; import other-device geometry the same way.
 - **Structural cleanup (LANDED — PR #41, Day-2 night):** the project was hoisted to the repo root
