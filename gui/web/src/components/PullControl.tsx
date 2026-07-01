@@ -45,17 +45,40 @@ export default function PullControl() {
   // fire setState on an unmounted component.
   const esRef = useRef<EventSource | null>(null);
 
-  // load supported devices; default the picker to the first one
+  // Snap backend / sensor-set / window / shot to sensible per-device defaults. A
+  // tree device (NSTX) has no cluster and no analysis→signal map, so it must use
+  // mdsthin + a sensor set, over a NARROW window (its raw signals are ~15 MHz and
+  // seconds long — a wide window is gigabytes). Called from event handlers (device
+  // change, initial load) — NOT a synchronous effect (react-hooks/set-state-in-effect).
+  function snapDeviceDefaults(dev: DeviceInfo) {
+    const tree = dev.access === "mdsplus_tree";
+    setBackend(dev.remote_capable ? "remote" : "mdsthin");
+    setSensorSet(tree ? (dev.sensor_sets[0] ?? "") : "");
+    setTmin(tree ? "250" : "1000");
+    setTmax(tree ? "350" : "5000");
+    if (dev.default_shot != null) setShot(String(dev.default_shot));
+  }
+
+  // load supported devices; default the picker to the first one + its defaults (the
+  // setState calls run in an async .then callback, not synchronously in the effect)
   useEffect(() => {
     void fetchDevices().then((ds) => {
       setDevices(ds);
-      if (ds[0]) setDeviceId((cur) => cur || ds[0].id);
+      if (ds[0] && !deviceId) {
+        setDeviceId(ds[0].id);
+        snapDeviceDefaults(ds[0]);
+      }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // close any open pull stream when the component unmounts
   useEffect(() => () => esRef.current?.close(), []);
   const device = devices.find((d) => d.id === deviceId);
+  // A tree device (NSTX/NSTX-U) pulls ONLY via mdsthin + a named sensor set; only a
+  // device with a cluster block can use the fast `remote` backend (DIII-D).
+  const isTree = device?.access === "mdsplus_tree";
+  const remoteCapable = device?.remote_capable ?? false;
 
   if (!usingLiveBackend()) return null;
   const needsCreds = backend === "remote" || backend === "mdsthin";
@@ -117,7 +140,11 @@ export default function PullControl() {
       <h3>Pull a shot (live)</h3>
       {devices.length > 0 && (
         <select className="pull-input" value={deviceId} aria-label="device"
-          onChange={(e) => { setDeviceId(e.target.value); setSensorSet(""); }}>
+          onChange={(e) => {
+            const d = devices.find((x) => x.id === e.target.value);
+            setDeviceId(e.target.value);
+            if (d) snapDeviceDefaults(d);
+          }}>
           {devices.map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
@@ -135,7 +162,8 @@ export default function PullControl() {
         <>
           <select className="pull-input" value={sensorSet}
             onChange={(e) => setSensorSet(e.target.value)}>
-            <option value="">— by analysis (above) —</option>
+            {/* a tree device (NSTX) has no analysis groups — a sensor set is required */}
+            {!isTree && <option value="">— by analysis (above) —</option>}
             <optgroup label={`${device.name} sensor sets`}>
               {device.sensor_sets.map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -152,9 +180,11 @@ export default function PullControl() {
       )}
       <select className="pull-input" value={backend}
         onChange={(e) => setBackend(e.target.value)}>
-        <option value="remote">remote (cluster · fast)</option>
-        <option value="mdsthin">mdsthin (laptop · slow, no cluster)</option>
-        <option value="auto">auto</option>
+        {remoteCapable && <option value="remote">remote (cluster · fast)</option>}
+        <option value="mdsthin">
+          mdsthin ({isTree ? "MDSplus tree · direct" : "laptop · slow, no cluster"})
+        </option>
+        {remoteCapable && <option value="auto">auto</option>}
       </select>
 
       {/* speed knobs — a window + decimation make a pull seconds instead of minutes */}
@@ -167,21 +197,24 @@ export default function PullControl() {
           onChange={(e) => setDecimate(e.target.value)} placeholder="decim." />
       </div>
       <div className="note pull-hint">
-        window (ms) prefilled to flat-top — clear tmin/tmax for the whole shot
+        {isTree
+          ? "window (ms) — keep it NARROW: raw signals are ~15 MHz, so a wide window pulls gigabytes"
+          : "window (ms) prefilled to flat-top — clear tmin/tmax for the whole shot"}
       </div>
 
       {needsCreds && (
         <>
           <div className="note pull-hint">
-            cluster address is built in — just your GA username; leave password
-            blank if your SSH key is set up (else password + Duo)
+            the data host + gateway are built in — enter your{" "}
+            {device ? device.name : "site"} username; leave password blank if key/Duo
+            auth is set up (else password + Duo)
           </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="GA username" autoComplete="username" />
+            placeholder="username" autoComplete="username" />
           <input className="pull-input" type="password" value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="GA password (blank if key auth)"
+            placeholder="password (blank if key/Duo auth)"
             autoComplete="current-password" />
           <div className="note pull-hint">Duo two-factor</div>
           <select className="pull-input" value={duoMode} aria-label="Duo authentication"

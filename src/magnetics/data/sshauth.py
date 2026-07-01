@@ -23,7 +23,7 @@ _ASKPASS = (
 )
 
 
-def askpass_env(password: str, duo: str | None = None):
+def askpass_env(password: str | None, duo: str | None = None):
     """Return (env, cleanup): an environment that makes ssh answer prompts from
     `password`/`duo` with no terminal interaction. `duo` defaults to "1" (Duo
     Push). Call cleanup() when done to remove the temp helper."""
@@ -36,7 +36,10 @@ def askpass_env(password: str, duo: str | None = None):
         {
             "SSH_ASKPASS": path,
             "SSH_ASKPASS_REQUIRE": "force",  # use askpass even with a tty (OpenSSH ≥8.4)
-            "MS_PW": password,
+            # subprocess env values must be strings: a key-based + Duo login has no
+            # password, so coerce None → "" (else Popen raises "expected str ... not
+            # NoneType"). The Duo prompt is still answered from MS_DUO.
+            "MS_PW": password or "",
             "MS_DUO": duo or "1",
             "DISPLAY": env.get("DISPLAY", ":0"),
         }
