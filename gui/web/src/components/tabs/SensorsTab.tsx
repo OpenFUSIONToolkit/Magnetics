@@ -74,7 +74,12 @@ export default function SensorsTab({ machine }: { machine: string }) {
   const cursorMs = useStore((s) => s.cursorMs);
   const setCursorMs = useStore((s) => s.setCursorMs);
   const { node, error, loading } = useNode(machine, "geometry");
-  const meta = (node?.meta as unknown as GeoMeta) ?? null;
+  // The Sensors scene needs the rich geometry meta (sensors + wall + sensor_sets);
+  // the backend geometry node currently supplies only n_sensors, so treat an
+  // incomplete meta as absent. The `if (!meta)` guards below then render an empty
+  // scene instead of crashing the whole app on meta.sensors / meta.wall.
+  const rawMeta = node?.meta as unknown as GeoMeta | undefined;
+  const meta = rawMeta?.sensors && rawMeta?.wall ? rawMeta : null;
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
   const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
   // 3D vessel shell — brighter/whiter than the 2D outline so it reads in the
