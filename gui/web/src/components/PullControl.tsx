@@ -72,6 +72,9 @@ export default function PullControl() {
     setSensorSet(tree ? (device.sensor_sets[0] ?? "") : "");
     setTmin(tree ? "250" : "1000");
     setTmax(tree ? "350" : "5000");
+    // snap the shot to this device's example (a DIII-D shot number isn't valid on
+    // NSTX's fastmag tree, and vice-versa)
+    if (device.default_shot != null) setShot(String(device.default_shot));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, devices]);
 

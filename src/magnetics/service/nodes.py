@@ -118,17 +118,29 @@ def refresh() -> None:
 def _array_channels(shot, families: tuple[str, ...]):
     """Channels present in this shot belonging to `families`, with a parseable
     phi, sorted by phi. Returns list of (name, phi). ``families`` are the device's
-    own family tokens (DIII-D pointname families, or an NSTX sensor-set name)."""
+    own family tokens (DIII-D pointname families, or NSTX sensor-set names)."""
     dg = _dev_geom(str(shot))
-    fam_set = set(families)
-    out = []
-    for name in h5source.channel_names(shot):
-        if dg.family_of(name) in fam_set:
-            phi = dg.phi_of(name, shot)
-            if phi is not None:
-                out.append((name, phi))
+    names = h5source.channel_names(shot)
+    if dg.device_id == "diiid":
+        sel = [n for n in names if dg.family_of(n) in set(families)]
+    else:
+        # For a set-classified device the tokens ARE sensor-set names; select by
+        # MEMBERSHIP (a channel can belong to several sets — the first-wins family
+        # map would strand probes shared between, e.g., toroidal & poloidal arrays).
+        members = _members_of(dg, families)
+        sel = [n for n in names if n in members]
+    out = [(n, dg.phi_of(n, shot)) for n in sel]
+    out = [(n, p) for n, p in out if p is not None]
     out.sort(key=lambda np_: np_[1])
     return out
+
+
+def _members_of(dg, set_names) -> set:
+    """Union of channel ids across the named sensor sets (empty for DIII-D families)."""
+    members: set = set()
+    for s in set_names:
+        members.update(dg.sensor_set_members(s))
+    return members
 
 
 @lru_cache(maxsize=8)
@@ -905,15 +917,15 @@ def _poloidal_shape(shot, params=None) -> dict:
 def _poloidal_arr(shot):
     dg = _dev_geom(str(shot))
     theta = _real_theta(shot)
+    names = h5source.channel_names(shot)
     if dg.device_id == "diiid":
-        pol_families = {"MPID"}
+        sel = [n for n in names if dg.family_of(n) == "MPID"]
     else:
-        pol_families = set(_named_sets(dg, "poloidal"))
-    arr = [
-        (name, theta[name])
-        for name in h5source.channel_names(shot)
-        if dg.family_of(name) in pol_families and name in theta
-    ]
+        # membership, not first-wins family (see _array_channels): the NSTX poloidal
+        # set overlaps the toroidal set, so family_of would drop the shared probes.
+        members = _members_of(dg, _named_sets(dg, "poloidal"))
+        sel = [n for n in names if n in members]
+    arr = [(name, theta[name]) for name in sel if name in theta]
     arr.sort(key=lambda nt: nt[1])
     if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
         raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")

@@ -83,6 +83,7 @@ export interface DeviceInfo {
   sensor_sets: string[]; // selectable as sensor_set (composites included)
   access?: string; // "mdsplus_tree" (NSTX: mdsthin + sensor_set only) | "ptdata"
   remote_capable?: boolean; // device has a network.cluster block (remote backend)
+  default_shot?: number | null; // per-device example shot (prefilled on select)
 }
 
 /** List available device configs + their sensor-set names (GET /api/devices).

@@ -9,6 +9,7 @@
   "access": "mdsplus_tree",
   "tree": "fastmag",
   "time_units": "s",
+  "default_shot": 204718,
   "note": "Shot-aware NSTX & NSTX-U magnetics, built from the shot-indexed config files /u/eric/nstx/mm (config_hf.mm + config_hn.mm and all referenced per-shot tables) the OMFIT get_bdot_info_NSTX.py way. Each channel's segments carry the toroidal (phi) and poloidal (theta) ANGLES + gain/na for that shot range; signal = raw*gain/na. A segment with pointname 'NotAvailable' = channel dropped for that range. Sensor keys are the 'fastmag' tree node paths (used directly as the fetch TDI). Fetch is tree-based (openTree), NOT PTDATA. r,z are APPROXIMATE (minor radius 0.62 m about R0=0.934 from theta) for the cross-section view only; phi/theta are authoritative. Wall + plasma pointnames are the NSTX-U values from EFIT01 (shot 204718); the NSTX-era (<200000) wall differs and is not yet captured.",
   "wall": {
     "segments": [

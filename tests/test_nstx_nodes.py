@@ -58,6 +58,24 @@ def test_nstx_geometry_not_all_coil(nstx_shot):
     assert "Bp" in kinds
 
 
+def test_nstx_poloidal_membership_not_stranded():
+    """A channel can belong to several sets, so array selection must use set
+    MEMBERSHIP, not the first-wins family map — otherwise probes shared between the
+    NSTX toroidal and poloidal sets get stranded and the poloidal fit is degraded."""
+    dg = device_geom.get("nstx")
+    tor = set(dg.sensor_set_members("HF toroidal array"))
+    pol = dg.sensor_set_members("HF poloidal array")
+    assert pol, "no poloidal members"
+    # the stranding precondition: some poloidal probes are also in the toroidal set
+    assert any(m in tor for m in pol), "expected overlap between toroidal & poloidal sets"
+    # first-wins family map would assign those to the toroidal set...
+    stranded = [m for m in pol if dg.family_of(m) != "HF poloidal array"]
+    assert stranded, "test premise (first-wins stranding) no longer holds"
+    # ...but membership selection recovers the full poloidal array.
+    members = nodes._members_of(dg, ["HF poloidal array"])
+    assert set(pol) <= members
+
+
 def test_nstx_device_geom_prefers_explicit_theta(nstx_shot):
     """NSTX stores authoritative φ/θ per sensor; the accessor must use the explicit
     θ (not derive it from r,z)."""

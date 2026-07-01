@@ -642,11 +642,14 @@ def _fetch_mdsthin_tree(
         cur_tree = None
         for node in node_ids:
             gain, na, tree = _segment(node)
-            if tree != cur_tree:
-                conn.openTree(tree, shot_i)
-                cur_tree = tree
             ch = Channel(node, ok=False, error="no data")
             try:
+                # openTree is inside the try: a bad per-segment tree (e.g. a legacy
+                # era whose tree isn't on the server) must drop just this channel,
+                # not abort the whole pull.
+                if tree != cur_tree:
+                    conn.openTree(tree, shot_i)
+                    cur_tree = tree
                 t, y = _read(conn, _sub(node))
                 if y.size >= 1 and t.size == y.size and np.all(np.isfinite(t)):
                     ch = Channel(

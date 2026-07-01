@@ -90,6 +90,7 @@ def devices():
             {
                 "id": path.stem,  # e.g. "diiid" → --device diiid
                 "name": d.get("name", path.stem),  # e.g. "DIII-D"
+                "default_shot": d.get("default_shot"),  # per-device example shot
                 "sensor_sets": list(d.get("sensor_sets", {}).keys()),
                 # `access` = "mdsplus_tree" for NSTX-style devices whose sensors live
                 # in an MDSplus tree: those pull ONLY via mdsthin + a named sensor_set

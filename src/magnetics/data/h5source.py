@@ -91,14 +91,17 @@ def list_shots() -> list[dict]:
 
 
 def meta(shot: str | int) -> dict:
+    from . import devices
+
     with h5py.File(shot_file(shot), "r") as h5:
         fetched = h5.attrs.get("channels_fetched")
         return {
             "shot": int(np.asarray(h5.attrs.get("shot", shot))),
             "device": _attr_str(h5.attrs.get("device"), "DIII-D"),
-            "device_id": _attr_str(
-                h5.attrs.get("device_id"), _attr_str(h5.attrs.get("device"), "diiid").lower()
-            ),
+            # Prefer the stored config id; else resolve the display name -> id (a bare
+            # .lower() would yield an invalid "diii-d" that load_device can't open).
+            "device_id": _attr_str(h5.attrs.get("device_id"), "")
+            or (devices.resolve_device_id(_attr_str(h5.attrs.get("device"), "DIII-D")) or "diiid"),
             "analysis": _attr_str(h5.attrs.get("analysis"), "both"),
             "backend": _attr_str(h5.attrs.get("backend"), "?"),
             "n_channels": len([k for k in h5.keys() if k != "_timebases"]),
