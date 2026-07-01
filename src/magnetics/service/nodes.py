@@ -19,7 +19,7 @@ from functools import lru_cache
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import diiid, diiid_geometry, h5source
+from ..data import devices, diiid, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,68 @@ def refresh() -> None:
     h5source.refresh()
     for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run):
         fn.cache_clear()
+
+
+# ── device dispatch: declared sensor-array sets (non-DIII-D) ─────────────────
+def _device_key(shot):
+    """The device-file key for this shot's display name (``DIII-D``→``diii-d`` has no
+    JSON → None, so DIII-D keeps its legacy channel selectors). Returns (dev, key)."""
+    disp = (h5source.meta(shot).get("device") or "").lower()
+    try:
+        return devices.load_device(disp), disp
+    except Exception:  # noqa: BLE001 — unknown device → legacy path
+        return None, None
+
+
+def _arrays(shot):
+    """(dev, arrays) when this shot's device declares its rotating-array sets
+    (``device["arrays"] = {"toroidal": <set>, "poloidal": <set>}``), else (None, None).
+    A device that declares arrays routes the selectors through ``_set_channels``
+    instead of the DIII-D family heuristics."""
+    dev, _ = _device_key(shot)
+    a = dev.get("arrays") if dev else None
+    return (dev, a) if a else (None, None)
+
+
+def _set_channels(dev, set_name, shot, angle="phi"):
+    """Channels of a declared device sensor set that are present in this shot, each with
+    its geometry ``angle`` (phi/theta), sorted by that angle. Returns list of (name,
+    angle_deg). A ``composite`` set expands its members recursively. Channels absent from
+    the pull or lacking the requested angle are dropped (so a set with no ``theta`` yields
+    an empty list — the caller then raises its usual 'not enough probes').
+
+    When ``angle == "theta"`` and a channel carries (r, z) but no explicit ``theta``,
+    θ is derived as ``atan2(z, r - R0)`` about the machine axis (mirrors
+    ``diiid.real_theta_of``), so supplying r/z alone is enough to unblock poloidal nodes."""
+    present = set(h5source.channel_names(shot))
+    sets = dev.get("sensor_sets", {})
+    r0 = float(dev.get("R0", 1.69))
+
+    def _names(name, seen):
+        spec = sets.get(name, {})
+        if spec.get("type") == "composite":
+            out = []
+            for sub in spec.get("sets", []):
+                if sub not in seen:
+                    seen.add(sub)
+                    out.extend(_names(sub, seen))
+            return out
+        return list(spec.get("sensors", []))
+
+    out = []
+    for n in _names(set_name, {set_name}):
+        if n not in present:
+            continue
+        g = devices.geometry_at(dev, n, int(shot))
+        if not g:
+            continue
+        val = g.get(angle)
+        if val is None and angle == "theta" and g.get("r") is not None and g.get("z") is not None:
+            val = float(np.degrees(np.arctan2(float(g["z"]), float(g["r"]) - r0)) % 360.0)
+        if val is not None:
+            out.append((n, float(val)))
+    out.sort(key=lambda na: na[1])
+    return out
 
 
 def _array_channels(shot, families: tuple[str, ...]):
@@ -173,7 +235,8 @@ def _geometry(shot, params=None) -> dict:
     scatter points plus a rich ``meta`` (sensors, first wall, vacuum-vessel plates,
     perturbation coils, and named sensor sets), all shot-resolved from the device
     table."""
-    geo = diiid_geometry.device_geometry(int(shot))
+    _dev, key = _device_key(shot)
+    geo = diiid_geometry.device_geometry(int(shot), key or "diiid")
     sensors = geo["sensors"]
     if not sensors:
         raise ValueError("no sensors with geometry at this shot")
@@ -200,6 +263,12 @@ def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     """Two toroidally-separated probes for the 2-point cross-spectrogram.
     Prefer the fast Mirnov dB/dt array (MPI_BDOT), then integrated Bp (MPID).
     Returns ((name1, phi1), (name2, phi2)) with the widest non-zero separation."""
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares its toroidal set → use it instead of DIII-D families
+        arr = _set_channels(dev, arrays["toroidal"], shot)
+        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
+            return arr[0], arr[-1]
+        raise ValueError("need two toroidally-separated probes for a spectrogram")
     for families in (("MPI_BDOT",), ("MPID",), ("MPI_BDOT", "MPID", "MPIF")):
         arr = _array_channels(shot, families)  # (name, phi), sorted by phi
         if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
@@ -668,6 +737,12 @@ def _toroidal_arr(shot):
     pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
     probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
     scrambles the fit, so they're excluded."""
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares its toroidal set → use it instead of DIII-D families
+        arr = _set_channels(dev, arrays["toroidal"], shot)
+        if len(arr) < 4:
+            raise ValueError("not enough toroidal-array channels for a mode fit")
+        return arr
     arr = _array_channels(shot, ("MPI_BDOT",))
     if len(arr) >= 4:
         return arr
@@ -828,6 +903,12 @@ def _poloidal_shape(shot, params=None) -> dict:
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares its poloidal set → select by geometry θ
+        arr = _set_channels(dev, arrays["poloidal"], shot, angle="theta")
+        if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
+            raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
+        return arr
     theta = _real_theta(shot)
     arr = [
         (name, theta[name])
@@ -1152,9 +1233,16 @@ def _prep_qs_ds(shot, params):
     ms_raw = params.get("ms", "0") if params else "0"
     ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())
     ms = tuple(int(x.strip()) for x in str(ms_raw).split(",") if x.strip())
-    channel_filter = (
-        params.get("channel_filter", "Bp_LFS_midplane") if params else "Bp_LFS_midplane"
-    )
+    # Default QS sensor set is device-specific: prefer the device's declared
+    # ``qs_default_set``, else its ``quasi_stationary`` composite if present, else
+    # DIII-D's ``Bp_LFS_midplane``. The GUI may still override via ?channel_filter=.
+    dev, _ = _device_key(str(shot))
+    default_cf = "Bp_LFS_midplane"
+    if dev:
+        default_cf = dev.get("qs_default_set") or (
+            "quasi_stationary" if "quasi_stationary" in dev.get("sensor_sets", {}) else default_cf
+        )
+    channel_filter = params.get("channel_filter", default_cf) if params else default_cf
     detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
     # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
     # so _qs_run defaults to the first 10ms of the shot window.
