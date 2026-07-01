@@ -173,8 +173,7 @@ export default function PullControl() {
       {needsCreds && (
         <>
           <div className="note pull-hint">
-            cluster address is built in — just your GA username; leave password
-            blank if your SSH key is set up (else password + Duo)
+            leave password blank if your SSH key (ssh-config alias) is set up
           </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
