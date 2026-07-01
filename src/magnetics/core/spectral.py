@@ -691,6 +691,12 @@ def extract_mode_at_frequency(
         return out
 
     ref_sig = prep(signals[0])
+    # Reference cross-spectrum (probe 0 vs itself); reused for i == 0 in the loop
+    # and to resolve the target frequency (peak-power bin) when the caller passes None.
+    ref_result = cross_spectrum(ref_sig, ref_sig, sample_rate, nperseg=nperseg)
+    if frequency is None:
+        frequency = float(np.round(ref_result.frequency[np.argmax(ref_result.power)]))
+
     phases = np.empty(n_probes)
     amplitudes = np.empty(n_probes)
     coherences = np.empty(n_probes)
@@ -698,18 +704,17 @@ def extract_mode_at_frequency(
     amplitude_errors = np.empty(n_probes)
 
     for i in range(n_probes):
-        sig = ref_sig if i == 0 else prep(signals[i])
-
-        result = cross_spectrum(ref_sig, sig, sample_rate, nperseg=nperseg)
-
-        if i == 0 and frequency is None:
-            frequency = float(np.round(result.frequency[np.argmax(result.power)]))
-
+        if i == 0:
+            result = ref_result
+        else:
+            result = cross_spectrum(ref_sig, prep(signals[i]), sample_rate, nperseg=nperseg)
         freq_idx = int(np.argmin(np.abs(result.frequency - frequency)))
 
         phases[i] = result.phase[freq_idx]
         amplitudes[i] = result.power[freq_idx]
         coherences[i] = result.coherence[freq_idx]
+        # cross_spectrum always populates the 1σ errors (see _cross_spectral_errors)
+        assert result.phase_error is not None and result.amplitude_error is not None
         phase_errors[i] = result.phase_error[freq_idx]
         amplitude_errors[i] = result.amplitude_error[freq_idx]
 
