@@ -65,7 +65,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const ink = dark ? "rgba(255,255,255,0.85)" : "rgba(20,34,46,0.9)";
   
   // View states
-  const [displayMode, setDisplayMode] = useState<"n" | "power">("n");
+  const [displayMode, setDisplayMode] = useState<"n" | "power" | "parity">("n");
   const [sidebarExpanded, setSidebarExpanded] = useState<boolean>(true);
   const [channelInfo, setChannelInfo] = useState<ChannelUsage | null>(null);
 
@@ -207,6 +207,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const { node: modeNumberNode } = useNode(machine, "mode_number", {
     slice_duration: specSliceMs / 1000, fmin, fmax, n_amp_pct: powerGate, n_gate: nGate,
     ...smoothParams,
+  });
+
+  // Poloidal parity (even/odd m): inboard-vs-outboard toroidal phase, one value per
+  // (t,f) cell (0 = even/in-phase, 1 = odd/out-of-phase), gated server-side. Errors
+  // (422) when the shot lacks distinct inboard AND outboard toroidal arrays → node null.
+  const { node: modeParityNode } = useNode(machine, "mode_parity", {
+    slice_duration: specSliceMs / 1000, fmin, fmax, n_gate: nGate,
   });
 
   // Real 2-point coherence γ²(t,f) ∈ [0,1] — feeds the coherence gate honestly,
@@ -371,6 +378,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
         // [-0.5,6.5] aligns the 7-colour |n| palette's bins to integers 0…6 (and modeColor()).
         return { ...modeNumberNode, discrete: true, zrange: [-0.5, 6.5] as [number, number] };
       }
+      // "parity" → even/odd poloidal-m map (0/1), gated server-side. [-0.5,1.5] bins
+      // the 2-colour palette to the integers 0 (even) and 1 (odd).
+      if (displayMode === "parity") {
+        if (!modeParityNode || modeParityNode.kind !== "heatmap") return null;
+        return { ...modeParityNode, discrete: true, zrange: [-0.5, 1.5] as [number, number] };
+      }
       // "power" → real log-power spectrogram. Band crop + coherence/power-floor gating
       // all run server-side (see specParams denoise), and gated cells arrive as null, so
       // render the node as-is — no client-side blanking on the live path.
@@ -470,7 +483,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         zrange: [-3, 0] as [number, number],
       };
     }
-  }, [hasStaticFiles, specNode, modeNumberNode, syntheticSpecNode, displayMode, fmin, fmax, powerGate, gateFrac]);
+  }, [hasStaticFiles, specNode, modeNumberNode, modeParityNode, syntheticSpecNode, displayMode, fmin, fmax, powerGate, gateFrac]);
 
   // Determine active mode frequencies at the current time slice
   const currentModeFreqs = useMemo(() => {
@@ -1563,6 +1576,21 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 }}
               >
                 Log Power
+              </button>
+              <button
+                onClick={() => setDisplayMode("parity")}
+                style={{
+                  background: displayMode === "parity" ? "var(--border-2)" : "transparent",
+                  color: displayMode === "parity" ? "#fff" : "var(--text-dim)",
+                  border: "none",
+                  padding: "4px 10px",
+                  borderRadius: "3px",
+                  cursor: "pointer",
+                  fontSize: "11px",
+                  fontWeight: 500,
+                }}
+              >
+                Parity
               </button>
             </div>
             </div>
