@@ -96,6 +96,9 @@ def meta(shot: str | int) -> dict:
         return {
             "shot": int(np.asarray(h5.attrs.get("shot", shot))),
             "device": _attr_str(h5.attrs.get("device"), "DIII-D"),
+            "device_id": _attr_str(
+                h5.attrs.get("device_id"), _attr_str(h5.attrs.get("device"), "diiid").lower()
+            ),
             "analysis": _attr_str(h5.attrs.get("analysis"), "both"),
             "backend": _attr_str(h5.attrs.get("backend"), "?"),
             "n_channels": len([k for k in h5.keys() if k != "_timebases"]),
@@ -104,6 +107,20 @@ def meta(shot: str | int) -> dict:
                 for c in (fetched if fetched is not None else [])
             ],
         }
+
+
+def device_id(shot: str | int) -> str:
+    """The device *config id* (``nstx``/``diiid``) for a shot file. Prefers the
+    ``device_id`` attr written at fetch time; falls back to resolving the display
+    ``device`` name -> id (older files), defaulting to ``diiid``."""
+    from . import devices
+
+    with h5py.File(shot_file(shot), "r") as h5:
+        did = h5.attrs.get("device_id")
+        if did is not None:
+            return _attr_str(did, "diiid")
+        name = _attr_str(h5.attrs.get("device"), "DIII-D")
+    return devices.resolve_device_id(name) or "diiid"
 
 
 def channel_names(shot: str | int) -> list[str]:
