@@ -134,8 +134,7 @@ class FetchRequest(BaseModel):
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
     device: str | None = None  # data/device/<device>.json
     sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
-    # remote backend overrides (None → device file's network.cluster block: explicit
-    # omega.gat.com host + auto cybele ProxyJump + env python — no ssh-config alias)
+    # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
     remote_host: str | None = None
     ssh_jump: str | None = None
     remote_dir: str | None = None
