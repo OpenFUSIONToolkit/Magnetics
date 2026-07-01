@@ -32,22 +32,16 @@ import xarray as xr
 from ..data import devices as _devices
 from ..data import diiid_geometry as _diiid_geo
 
-# ``data.devices.load_device`` resolves ``<name>.json`` by lowercasing the name; a few
-# display names don't slugify by lowercasing alone (``"DIII-D"`` → ``diiid.json``, not
-# ``diii-d.json``). Preserve the alias the old shim carried.
-_DEVICE_ALIAS = {"DIII-D": "diiid"}
-
-
-def _device_key(device: str) -> str:
-    """Map a device display name to its ``data/device/<key>.json`` stem."""
-    if device in _DEVICE_ALIAS:
-        return _DEVICE_ALIAS[device]
-    return re.sub(r"[^a-z0-9]", "", str(device).lower())
-
 
 def load_device(device: str = "DIII-D") -> dict:
-    """The parsed device JSON dict, via the data layer (with QS name aliasing)."""
-    return _devices.load_device(_device_key(device))
+    """The parsed device JSON dict, via the data layer's name/id resolver.
+
+    ``devices.resolve_device_id`` maps a display name (e.g. ``"DIII-D"``) or a config
+    id to the JSON file stem using each device file's ``name`` field — so no device
+    alias is hardcoded here. Falls back to a slugified name if it can't be resolved.
+    """
+    dev_id = _devices.resolve_device_id(device) or re.sub(r"[^a-z0-9]", "", str(device).lower())
+    return _devices.load_device(dev_id)
 
 
 # ── device-name comparison ─────────────────────────────────────────────────────
