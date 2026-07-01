@@ -1,8 +1,11 @@
 {
   "name": "NSTX/NSTX-U",
   "R0": 0.934,
-  "gateway": "flux.pppl.gov",
-  "server": "skylark.pppl.gov:8501",
+  "network": {
+    "domain": "pppl.gov",
+    "jump": { "host": "flux.pppl.gov", "port": 22, "duo": true },
+    "mdsip": { "host": "skylark.pppl.gov", "port": 8501, "duo": true }
+  },
   "access": "mdsplus_tree",
   "tree": "fastmag",
   "time_units": "s",

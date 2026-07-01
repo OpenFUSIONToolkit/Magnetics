@@ -166,6 +166,9 @@ def test_fetch_shot_tree_route_writes_device_id_and_geometry(fake_mdsthin, tmp_p
         sensor_set="pair",  # tree route, our two nodes
         backend="mdsthin",
         tcp=True,
+        # explicit server: the fake device isn't on disk, so the network-block
+        # resolver (which loads the file directly) can't supply one.
+        server="fakehost:8501",
         tmin=250.0,
         tmax=270.0,
         out=out,

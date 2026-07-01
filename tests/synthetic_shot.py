@@ -20,16 +20,29 @@ ground truth: n=1 (with a poloidal m=1 component) at 5 kHz and n=2 at 8 kHz.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 
 from magnetics.data import device_geom, devices, diiid, signals
 from magnetics.data.fetch.toksearch import Channel, _write_h5, resolve_sensor_set
 
+
+class _Mode(NamedTuple):
+    """A ground-truth rotating mode. Named fields so consumers read ``.amp`` etc.
+    rather than positional indices."""
+
+    n: int
+    m: int
+    f_hz: float
+    amp: float
+
+
 # Known ground-truth modes (recoverable by the fits).
 _FS = 50_000.0  # Hz
 _DURATION = 0.1  # s  → 5000 samples
-_MODE1 = (1, 1, 5_000.0, 1.0)  # (n, m, f_Hz, amplitude)
-_MODE2 = (2, 0, 8_000.0, 0.6)
+_MODE1 = _Mode(n=1, m=1, f_hz=5_000.0, amp=1.0)
+_MODE2 = _Mode(n=2, m=0, f_hz=8_000.0, amp=0.6)
 
 #: Off-midplane integrated-Bp arrays that give the poloidal fit a θ spread.
 _MPID_POLOIDAL = [

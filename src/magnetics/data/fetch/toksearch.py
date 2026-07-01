@@ -63,6 +63,10 @@ from .. import signals as ms
 # valid at a shot (None = out of range / decommissioned).
 from ..devices import geometry_at, load_device, pointname_at
 
+# Connection endpoints (mdsip / gateway) + automatic on-site detection, resolved
+# from the device file's `network` block so the hop count is picked for the user.
+from .network import gateway_address, mdsip_address, on_site_network
+
 # All fetched shot files land in the runtime data dir (data/datafile/) — the same
 # place h5source reads back from ($MAGNETICS_DATA_DIR or the repo's data/ dir).
 DATA_DIR = h5source.data_dir() / "datafile"
@@ -375,6 +379,7 @@ def _fetch_mdsthin(
     progress,
     tree_signals=None,
     ssh_env=None,
+    per_channel=False,
 ):
     """Pull pointnames concurrently over a pool of mdsthin connections.
 
@@ -387,6 +392,12 @@ def _fetch_mdsthin(
     is a single password/Duo prompt; on-network (--tcp) each worker connects to
     mdsip directly. Reduction (window + stride) is pushed server-side via a TDI
     subscript so only the reduced samples cross the wire.
+
+    By default each worker tries `getMany` (one round trip per batch) and only
+    drops to the per-channel path if that fails. `per_channel=True` skips the
+    batch attempt entirely and fetches one pointname at a time from the start --
+    for servers where getMany reliably fails, this avoids the wasted first-batch
+    round trip (and its stderr warning) per worker.
     """
     try:
         from mdsthin import Connection
@@ -498,7 +509,7 @@ def _fetch_mdsthin(
 
     def run_worker(connect, my_batches):
         conn = connect()
-        use_many = True
+        use_many = not per_channel
         out: list[Channel] = []
         for batch in my_batches:
             got, use_many = fetch_batch(conn, batch, use_many)
@@ -997,10 +1008,11 @@ def fetch_shot(
     decimate: int = 1,
     workers: int = 4,
     batch_size: int = 40,
+    per_channel: bool | None = None,
     out: str | None = None,
     compression: str = "lzf",
     force: bool = False,
-    remote_host: str = "omega",
+    remote_host: str | None = None,
     ssh_jump: str | None = None,
     remote_dir: str = "~/magnetics_fetch",
     remote_python: str | None = None,
@@ -1013,9 +1025,11 @@ def fetch_shot(
     toksearch_d3d reads PTDATA natively), "remote" (orchestrate the toksearch pull on
     the cluster from here and copy the compact .h5 back — no manual copying), or
     "auto" (toksearch if importable, else mdsthin).
-    `device` selects data/device/<device>.json, whose `gateway`/`server` keys supply
-    the mdsip addresses (so the fetcher is device-agnostic); an explicit
-    `gateway`/`server` still overrides the device file.
+    `device` selects data/device/<device>.json, whose `network` block supplies the
+    mdsip data server + SSH gateway (so the fetcher is device-agnostic); an explicit
+    `gateway`/`server` still overrides. When running inside the device's site network
+    we dial mdsip directly (`tcp`) and skip the gateway automatically -- see
+    `network.on_site_network`; pass `tcp=True` to force the direct path off-site.
     `sensor_set` (optional) names a set under the device file's `sensor_sets`: when
     given, the pull is that set's signals (composites flattened) plus the device's
     plasma current, toroidal field, and elongation -- instead of the `analysis`
@@ -1023,9 +1037,12 @@ def fetch_shot(
     Incremental by default: if a shot file already exists with the SAME window +
     decimation, signals already in it (fetched or previously missing) are skipped
     and the newly-pulled ones are merged in. `force=True` re-pulls everything.
-    `remote_host`/`ssh_jump` are normally ~/.ssh/config aliases (default host "omega"
-    carries its own ProxyJump, so ssh_jump stays None). `remote_python` overrides the
-    cluster env interpreter run_remote invokes directly.
+    `remote_host`/`ssh_jump`/`remote_python` default (when None) to the device file's
+    `network.cluster` block — the explicit cluster host, gateway ProxyJump, and env
+    interpreter — so no ~/.ssh/config alias is needed; pass them to override.
+    `per_channel` (None → auto) skips the mdsthin `getMany` batch attempt: it
+    defaults to True off-site (where getMany reliably fails through the tunnel) and
+    False on-site (where the batch round trip is the fast path).
     GUI callers pass `username` and a `progress` callback instead of relying on the
     CLI prompt/stderr bar.
     """
@@ -1070,8 +1087,19 @@ def fetch_shot(
             f"device {device!r} (access='mdsplus_tree') supports only backend='mdsthin'; "
             f"got {backend!r} (cluster/toksearch backends aren't wired for it yet)."
         )
-    gateway = gateway or dev.get("gateway")
-    server = server or dev.get("server")
+    # Connection endpoints come from the device file's `network` block (machine-
+    # agnostic); an explicit gateway/server still overrides.
+    gateway = gateway or gateway_address(device)
+    server = server or mdsip_address(device)
+    # Pick the hop count for the user: inside the device's site network the data
+    # host is directly reachable, so dial mdsip over TCP and skip the SSH gateway;
+    # off-site (a laptop) keep the tunnel. getMany batches likewise fail through the
+    # tunnel but work on-site, so per_channel tracks the same signal when unset.
+    on_site = on_site_network(device)
+    if not tcp and on_site:
+        tcp = True
+    if per_channel is None:
+        per_channel = not on_site
     if backend == "mdsthin":
         if not server:
             raise ValueError(f"device {device!r} has no 'server'; pass --server")
@@ -1223,6 +1251,7 @@ def fetch_shot(
                 progress=progress,
                 tree_signals=tree_signals,
                 ssh_env=ssh_env,
+                per_channel=per_channel,
             )
         finally:
             _ssh_cleanup()
@@ -1331,6 +1360,14 @@ def main(argv=None) -> int:
         help="mdsthin: channels per getMany round trip (bigger=fewer "
         "round trips; smaller=finer progress/less memory)",
     )
+    ap.add_argument(
+        "--per-channel",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="mdsthin: skip the getMany batch attempt and fetch one channel at a "
+        "time (getMany reliably fails off-site through the tunnel). Default: auto "
+        "— per-channel off-site, batch-first on-site. Use --no-per-channel to force",
+    )
     ap.add_argument("--compression", choices=("none", "lzf", "gzip"), default="lzf")
     ap.add_argument(
         "--device",
@@ -1348,16 +1385,19 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--gateway",
         default=None,
-        help="mdsthin SSH gateway as host[:port], or an ~/.ssh/config "
-        "Host alias; overrides the device file's gateway",
+        help="mdsthin SSH gateway as host[:port], or an ~/.ssh/config Host alias; "
+        "overrides the device file's network.jump",
     )
     ap.add_argument(
         "--server",
         default=None,
-        help="mdsip host:port reached from the gateway; overrides the device file's server",
+        help="mdsip host:port reached from the gateway; overrides the device file's network.mdsip",
     )
     ap.add_argument(
-        "--tcp", action="store_true", help="mdsthin: direct TCP mdsip instead of SSH gateway"
+        "--tcp",
+        action="store_true",
+        help="mdsthin: force direct TCP mdsip (no SSH gateway); auto-enabled when "
+        "running inside the device's site network",
     )
     ap.add_argument(
         "--username",
@@ -1375,15 +1415,16 @@ def main(argv=None) -> int:
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
     ap.add_argument(
         "--remote-host",
-        default="omega",
-        help="remote: cluster host — normally an ssh-config alias whose "
-        "ProxyJump handles the gateway (default 'omega')",
+        default=None,
+        help="remote: cluster host; defaults to the device file's network.cluster "
+        "(DIII-D: omega.gat.com). Pass to override (e.g. an ssh-config alias)",
     )
     ap.add_argument(
         "--ssh-jump",
         default=None,
-        help="remote: explicit SSH jump host[:port] for a RAW host; leave "
-        "unset when --remote-host is an alias (its ProxyJump applies)",
+        help="remote: SSH jump host[:port]; defaults to the device file's "
+        "network.jump (DIII-D: cybele.gat.com:2039), and is skipped automatically "
+        "when on-site. Pass an explicit value (or empty for none) to override",
     )
     ap.add_argument(
         "--remote-dir",
@@ -1413,6 +1454,7 @@ def main(argv=None) -> int:
         decimate=args.decimate,
         workers=args.workers,
         batch_size=args.batch_size,
+        per_channel=args.per_channel,
         out=args.out,
         force=args.force,
         compression=args.compression,
