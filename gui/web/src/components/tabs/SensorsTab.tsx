@@ -15,7 +15,6 @@ import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
 import { usingLiveBackend } from "../../lib/api";
-import { mockEquilibrium, EQ_TIME_RANGE } from "../../lib/mockEquilibrium";
 import type { EquilibriumNode } from "../../lib/contract";
 import Plot from "../../lib/Plot";
 
@@ -45,6 +44,8 @@ const KIND_LABEL: Record<Kind, string> = {
 };
 const KINDS: Kind[] = ["Bp", "Br", "coil"];
 const d2r = (deg: number) => (deg * Math.PI) / 180;
+// Sensors time-cursor window (ms), until a real equilibrium node supplies bounds.
+const EQ_TIME_RANGE: [number, number] = [100, 5000];
 
 // 2D cross-section: scroll to zoom, drag to pan, toolbar for zoom/reset.
 const PAN_CONFIG: Partial<Plotly.Config> = {
@@ -55,11 +56,17 @@ const PAN_CONFIG: Partial<Plotly.Config> = {
 };
 
 const LEGEND = { orientation: "h" as const, font: { size: 10 }, y: 1.12 };
+// 2D: legend sits BELOW the R-Z plot so it never overlaps the (tall, narrow) scene.
+const LEGEND_2D = {
+  orientation: "h" as const, font: { size: 10 },
+  x: 0.5, xanchor: "center" as const, y: -0.16, yanchor: "top" as const,
+};
 
 // Stable layouts (module constants) + a constant `uirevision`, so re-plotting on
 // a slider move never resets the user's 3D camera or 2D zoom/pan.
 const LAYOUT_2D = {
-  showlegend: true, legend: LEGEND, dragmode: "pan", uirevision: "sensors",
+  showlegend: true, legend: LEGEND_2D, dragmode: "pan", uirevision: "sensors",
+  margin: { t: 24, r: 16, b: 96, l: 56 },
   xaxis: { title: { text: "R (m)" } },
   yaxis: { title: { text: "Z (m)" }, scaleanchor: "x", scaleratio: 1 },
 } as Partial<Plotly.Layout>;
@@ -123,16 +130,17 @@ export default function SensorsTab({ machine }: { machine: string }) {
       return { ...base, [name]: !base[name] };
     });
 
-  // Equilibrium overlay (time-parametrized). On a live backend, pull the real
-  // node; otherwise synthesize a swappable stand-in from the time cursor.
+  // Equilibrium overlay. Only the real backend node is drawn; when absent (today
+  // it always is — no equilibrium node yet) nothing is added to the plot or the
+  // legend. Real EFIT/boundary plotting is tracked as a follow-up.
   const live = usingLiveBackend();
   const [tmin, tmax] = EQ_TIME_RANGE;
   const tNow = Math.min(tmax, Math.max(tmin, cursorMs || tmin));
   const eqLive = useNode(live ? machine : null, "equilibrium", { time: tNow });
   const equilibrium = useMemo<EquilibriumNode | null>(() => {
     if (!showEq) return null;
-    return (eqLive.node as unknown as EquilibriumNode | null) ?? mockEquilibrium(tNow);
-  }, [showEq, eqLive.node, tNow]);
+    return eqLive.node as unknown as EquilibriumNode | null;
+  }, [showEq, eqLive.node]);
 
   // Sensors visible under the current set selection (union of checked sets).
   const visibleSensors = useMemo(() => {
@@ -373,7 +381,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
-                equilibrium {!live && <em style={{ opacity: 0.6 }}>(synthetic)</em>}
+                equilibrium
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />
