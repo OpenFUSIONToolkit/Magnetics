@@ -134,9 +134,9 @@ def node_download(shot: str, node_id: str, request: Request):
     # raw stack trace — the HDF5 writer sits outside the block above, so guard it too.
     try:
         payload = export.node_to_hdf5(shot, node_id, n, params)
-    except Exception as e:  # noqa: BLE001 — serializer failure → clean 500, logged server-side
+    except Exception:  # noqa: BLE001 — serializer failure → clean 500, logged server-side
         logger.exception("HDF5 export failed for shot %s node %s", shot, node_id)
-        raise HTTPException(500, f"could not serialize node '{node_id}' to HDF5: {e}")
+        raise HTTPException(500, f"could not serialize node '{node_id}' to HDF5")
     filename = f"shot_{shot}_{node_id}.h5"
     return StreamingResponse(
         io.BytesIO(payload),
