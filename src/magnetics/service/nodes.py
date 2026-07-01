@@ -1234,7 +1234,7 @@ def _sensor_map_rz(shot, params=None) -> dict:
 
     from .._slcontour.omfit_compat import load_wall
 
-    r_wall, z_wall = load_wall(device)
+    r_wall, z_wall = load_wall(device, int(shot))
 
     series = []
     for c in channels:

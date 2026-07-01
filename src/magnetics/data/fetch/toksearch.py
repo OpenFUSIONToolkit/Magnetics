@@ -626,8 +626,14 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
 
     # Resolve EFIT-tree signals: first candidate key with usable data wins. No
     # decimation (EFIT time bases are already coarse), window-trim only.
-    for name, keys in tree_keys.items():
-        ch = Channel(name, ok=False, error="no data")
+    # Every requested tree signal is recorded, fetched or not: when MdsSignal is
+    # unavailable tree_keys is empty, so iterate the full request set and mark the
+    # unfetched ones missing (parity with the mdsthin path — never silently drop).
+    for name in tree_signals:
+        keys = tree_keys.get(name, [])
+        ch = Channel(
+            name, ok=False, error="MdsSignal unavailable" if MdsSignal is None else "no data"
+        )
         for key, tree, node in keys:
             sig = None if key in errors else (rec[key] if key in rec.keys() else None)
             if not sig or "data" not in sig:

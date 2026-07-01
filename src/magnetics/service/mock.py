@@ -20,6 +20,8 @@ Each generator returns a list of (progress, data) frames, coarse → fine.
 
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 
 from ..data import diiid
@@ -126,7 +128,9 @@ def qs_fit_frames(machine: str, params: dict) -> list[tuple[float, dict]]:
 # ── spectrogram (Burgess) — coarse → fine, mode that locks or rotates ────────
 def spectrogram_frames(machine: str, params: dict) -> list[tuple[float, dict]]:
     p = _profile(machine)
-    rng = np.random.default_rng(abs(hash(machine)) % 2**32)
+    # Stable across process restarts: the builtin str hash() is per-process salted
+    # (PYTHONHASHSEED), which would make the mock non-deterministic between runs.
+    rng = np.random.default_rng(zlib.crc32(machine.encode()))
     t0, t1 = p["t_ms"]
     resolutions = [(60, 45), (120, 90), (240, 180)]  # (nt, nf), → real 360×180
     frames = []

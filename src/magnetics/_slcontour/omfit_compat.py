@@ -348,16 +348,21 @@ def load_sensor_table(device="DIII-D"):
     return sensor_geometry(device)
 
 
-def load_wall(device="DIII-D"):
+def load_wall(device="DIII-D", shot=None):
     """Return the ``(r, z)`` first-wall outline arrays from the device JSON.
 
-    Returns ``(None, None)`` if no device file or wall section is found.
+    Resolves the shot-segmented ``wall`` (``{segments: [...]}``) through the device
+    SSOT resolver :func:`magnetics.data.devices.feature_at`, which also tolerates a
+    legacy flat ``{r, z}`` record. A ``None`` shot (device-level / plotting) takes
+    the latest segment, since the wall changes rarely between campaigns.
+
+    Returns ``(None, None)`` if no device file or wall segment is found.
     """
     try:
         dev = load_device(device)
     except (FileNotFoundError, OSError):
         return None, None
-    wall = dev.get("wall")
-    if not wall or "r" not in wall or "z" not in wall:
+    seg = _devices.feature_at(dev, "wall", shot if shot is not None else 2_000_000)
+    if not seg or "r" not in seg or "z" not in seg:
         return None, None
-    return np.array(wall["r"], dtype=float), np.array(wall["z"], dtype=float)
+    return np.array(seg["r"], dtype=float), np.array(seg["z"], dtype=float)
