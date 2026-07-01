@@ -2,11 +2,12 @@
 """
 Offline tests for the analysis-type signal downselection (no network/deps).
 
-Run:  uv run --with pytest python -m pytest data/test_magnetics_signals.py -q
+Run:  uv run python -m pytest tests/test_signals.py -q
 """
+
 from __future__ import annotations
 
-import magnetics_signals as ms
+from magnetics.data import signals as ms
 
 
 def test_quasi_stationary_uses_integrated_not_bdot():
@@ -52,6 +53,7 @@ def test_reduction_policy():
 
 def test_unknown_analysis_raises():
     import pytest
+
     with pytest.raises(ValueError):
         ms.signals_for("nonsense")
     with pytest.raises(ValueError):

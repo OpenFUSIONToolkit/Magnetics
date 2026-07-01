@@ -18,14 +18,15 @@ rather than ``fetch_shot`` so the test is a quick smoke of the transport, not a
 full shot download.
 
 Run locally (needs key-based SSH to the gateway alias already working):
-    MAGNETICS_GA_USER=<user> uv run --with mdsthin,h5py,numpy,pytest \
-        python -m pytest data/test_mdsthin_integration.py -q -s
+    MAGNETICS_GA_USER=<user> uv run --with mdsthin \
+        python -m pytest tests/test_mdsthin_integration.py -q -s
 
 Override the gateway alias / server / shot via env:
     MAGNETICS_GA_GATEWAY (default "cybele" -- an ssh-config Host carrying the port)
     MAGNETICS_GA_SERVER  (default "atlas.gat.com:8000")
     MAGNETICS_GA_SHOT    (default 184927)
 """
+
 from __future__ import annotations
 
 import os
@@ -58,9 +59,21 @@ def _require_passwordless_gateway():
     target = f"{GA_USER}@{GATEWAY}"
     try:
         r = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-             "-o", "StrictHostKeyChecking=accept-new", target, "true"],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                target,
+                "true",
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
@@ -80,18 +93,25 @@ def _require_passwordless_gateway():
 
 def test_fetch_real_pointnames_through_gateway():
     """Pull a handful of real pointnames and assert physical data came back."""
-    from toksearch_fetch import _fetch_mdsthin
+    from magnetics.data.fetch.toksearch import _fetch_mdsthin
 
     # Turn a missing ssh-copy-id into a fast, clear failure (not a 120s hang).
     _require_passwordless_gateway()
 
-
     pts = ["ip", "bt", "MPID66M067"]
     channels = _fetch_mdsthin(
-        SHOT, pts,
-        username=GA_USER, gateway=GATEWAY, server=SERVER, tcp=False,
-        tmin=2000.0, tmax=3000.0, stride=8,
-        workers=2, batch_size=10, progress=lambda frac, msg: None,
+        SHOT,
+        pts,
+        username=GA_USER,
+        gateway=GATEWAY,
+        server=SERVER,
+        tcp=False,
+        tmin=2000.0,
+        tmax=3000.0,
+        stride=8,
+        workers=2,
+        batch_size=10,
+        progress=lambda frac, msg: None,
     )
 
     by_name = {c.name: c for c in channels}
