@@ -88,7 +88,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // Advanced Parameter states
   const [advancedExpanded, setAdvancedExpanded] = useState<boolean>(false);
   const [fftWindow, setFftWindow] = useState<number>(512);
-  const [fftOverlap, setFftOverlap] = useState<number>(75);
   const [probePhi1, setProbePhi1] = useState<number>(307);
   const [probePhi2, setProbePhi2] = useState<number>(340);
   // θ origin (deg) for the 2D modal pattern: pans the periodic poloidal axis so this
@@ -235,16 +234,22 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // static mock JSON. The label keys off usingLiveBackend() so real data reads as the
   // device it came from (e.g. "DIII-D").
   const hasStaticFiles = !!specNode && !specError;
+  // `live` = there's a backend to fetch nodes from; it gates whether the synthetic
+  // generators below run (they never fabricate against a backend).
   const live = usingLiveBackend();
-  // In LIVE mode no synthetic/mock data is ever produced (every generator below
-  // short-circuits on `live`), so the source is always the live backend — labeled
-  // with the device it came from (e.g. "DIII-D"); while a node loads we show a
-  // loading state, never "Synthetic Generator".
-  const deviceName = useStore((s) => s.machines).find((m) => m.id === machine)?.device;
-  const dataSourceText = live
+  // The DATA-SOURCE LABEL keys off the SELECTED machine's `mock` flag, not `live`:
+  // a live backend with zero fetched shots still serves the mock machines, so `live`
+  // alone would dishonestly badge demo data as the real device. Fall back to
+  // usingLiveBackend only when the flag is absent (older payloads).
+  const selectedMachine = useStore((s) => s.machines).find((m) => m.id === machine);
+  const deviceName = selectedMachine?.device;
+  const mock = selectedMachine?.mock ?? !live;
+  const dataSourceText = !mock
     ? `${deviceName ?? "Live backend"}${machine ? ` · shot ${machine}` : ""}`
-    : hasStaticFiles ? "Mock fixtures (static demo)" : "Synthetic generator (demo)";
-  const dataSourceColor = live
+    : live
+      ? "Demo data (no shots fetched)"
+      : hasStaticFiles ? "Mock fixtures (static demo)" : "Synthetic generator (demo)";
+  const dataSourceColor = !mock
     ? "var(--good)"
     : hasStaticFiles ? "var(--accent)" : "var(--warn)";
 
@@ -429,6 +434,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
       };
     }
   }, [hasStaticFiles, specNode, modeNumberNode, syntheticSpecNode, displayMode, fmin, fmax, powerGate, gateFrac]);
+
+  // Time scrubber source: keep the scrubber alive when the "n" mode map is still
+  // computing (processedSpecNode null) by falling back to the loaded power spectrogram's
+  // time axis, so the cursor never disappears mid-compute.
+  const scrubberNode = processedSpecNode ?? (specNode?.kind === "heatmap" ? specNode : null);
 
   // Determine active mode frequencies at the current time slice
   const currentModeFreqs = useMemo(() => {
@@ -669,7 +679,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
     if (specLoading && !syntheticSpecNode) {
       return <div className="placeholder">Loading spectrogram...</div>;
     }
-    if (!processedSpecNode) return null;
+    if (!processedSpecNode) {
+      // In "n" mode the heavy array-STFT mode_number node can still be loading after the
+      // power spectrogram has already arrived (specLoading is false by then) — show an
+      // explicit indicator instead of a blank tile.
+      if (displayMode === "n" && hasStaticFiles) {
+        return <div className="placeholder">Computing mode map…</div>;
+      }
+      return null;
+    }
 
     const colorscale: [number, string][] = processedSpecNode.discrete
       ? (() => {
@@ -904,7 +922,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
         <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
           <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
-            Poloidal Phase Fit{poloidalMeta ? ` (m = ${String(poloidalMeta.m_fit ?? "")}, fittype = ${fittype})` : ""}
+            {/* fittype is an inert "(not wired)" knob in live mode — showing it next to
+                the real backend `m` would imply the fit honored it. Keep it only in the
+                synthetic/mock branch, where it actually shapes the fit. */}
+            Poloidal Phase Fit{poloidalMeta ? ` (m = ${String(poloidalMeta.m_fit ?? "")}${live ? "" : `, fittype = ${fittype}`})` : ""}
           </h4>
           {processedPoloidalNode
             ? <NodeView node={processedPoloidalNode} height={200} />
@@ -1078,7 +1099,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             )}
 
             {/* Time Cursor Scrubber Slider */}
-            {processedSpecNode && (
+            {scrubberNode && (
               <div style={{ display: "flex", flexDirection: "column", gap: "4px", borderBottom: "1px solid var(--border)", paddingBottom: "10px" }}>
                 <label htmlFor="time-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
                   Time Scrubber (t0): <strong style={{ color: "var(--good)" }}>{cursorMs.toFixed(0)} ms</strong>
@@ -1086,8 +1107,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 <input
                   id="time-range"
                   type="range"
-                  min={processedSpecNode.x[0]}
-                  max={processedSpecNode.x[processedSpecNode.x.length - 1]}
+                  min={scrubberNode.x[0]}
+                  max={scrubberNode.x[scrubberNode.x.length - 1]}
                   step={10}
                   value={cursorMs}
                   onChange={(e) => setCursorMs(parseFloat(e.target.value))}
@@ -1252,23 +1273,6 @@ export default function RotatingTab({ machine }: { machine: string }) {
                     </select>
                   </div>
 
-                  {/* FFT Overlap slider */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="fft-overlap-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                      FFT Overlap: <strong style={{ color: "var(--text)" }}>{fftOverlap}%</strong>
-                    </label>
-                    <input
-                      id="fft-overlap-range"
-                      type="range"
-                      min="0"
-                      max="90"
-                      step="5"
-                      value={fftOverlap}
-                      onChange={(e) => setFftOverlap(parseInt(e.target.value))}
-                      style={{ accentColor: "var(--accent)" }}
-                    />
-                  </div>
-
                   {/* Probe Angles input fields (side-by-side) */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                     <span style={{ fontSize: "10px", color: "var(--text-dim)" }}>Toroidal Probes (φ)</span>
@@ -1359,6 +1363,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             <div className="toggle-group" style={{ display: "flex", background: "var(--border)", padding: "2px", borderRadius: "4px" }}>
               <button
                 onClick={() => setDisplayMode("n")}
+                aria-pressed={displayMode === "n"}
                 style={{
                   background: displayMode === "n" ? "var(--border-2)" : "transparent",
                   color: displayMode === "n" ? "#fff" : "var(--text-dim)",
@@ -1374,6 +1379,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
               </button>
               <button
                 onClick={() => setDisplayMode("power")}
+                aria-pressed={displayMode === "power"}
                 style={{
                   background: displayMode === "power" ? "var(--border-2)" : "transparent",
                   color: displayMode === "power" ? "#fff" : "var(--text-dim)",
@@ -1456,6 +1462,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 <span style={{ fontSize: "9px", color: "var(--text-dim)", whiteSpace: "nowrap" }}>θ orig</span>
                 <input
                   type="range" min={0} max={360} step={2} value={patternCut}
+                  aria-label="θ origin (deg)"
                   onChange={(e) => setPatternCut(Number(e.target.value))}
                   style={{ writingMode: "vertical-lr", direction: "rtl", width: "18px", height: "210px" }}
                 />

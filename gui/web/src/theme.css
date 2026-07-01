@@ -99,18 +99,29 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .rail-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .rail-section h3 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); font-weight: 600; }
 
-/* shot selector */
-.machine-item { padding: 7px 9px; border-radius: 4px; cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; }
+/* shot selector — real <button>s (role=option) so the list is keyboard-reachable */
+.machine-item {
+  display: block; width: 100%; text-align: left;
+  padding: 7px 9px; border-radius: 4px; cursor: pointer; margin-bottom: 4px;
+  border: 1px solid transparent; background: none; color: inherit;
+  font-family: inherit; font-size: inherit;
+}
 .machine-item:hover { background: var(--panel-2); }
 .machine-item.active { background: var(--panel-2); border-color: var(--accent); }
+.machine-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .machine-item .id { font-family: "IBM Plex Mono", monospace; font-weight: 600; }
 .machine-item .note { color: var(--text-dim); font-size: 11px; }
 
-/* tabs */
+/* tabs — real <button>s styled to match; keyboard-operable + focus-visible */
 .tabbar { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
-.tab { padding: 8px 14px; cursor: pointer; color: var(--text-dim); border-bottom: 2px solid transparent; font-weight: 500; }
+.tab {
+  padding: 8px 14px; cursor: pointer; color: var(--text-dim);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  font-family: inherit; font-size: inherit; font-weight: 500;
+}
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 3px; }
 
 /* cards */
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 14px; box-shadow: var(--shadow); }
@@ -145,3 +156,12 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
   border: 1px solid var(--border, #24323f); border-radius: 3px; overflow: hidden; }
 .pull-bar-fill { height: 100%; background: var(--accent, #4aa3ff);
   transition: width 0.2s ease; }
+
+/* resizable pane divider (DraggableDivider.tsx) — thin visual line, wide (WCAG)
+   hit area, accent affordance on hover + keyboard focus */
+.draggable-divider-line {
+  background: var(--border); border-radius: 2px; transition: background 0.15s ease;
+}
+.draggable-divider:hover .draggable-divider-line,
+.draggable-divider:focus-visible .draggable-divider-line { background: var(--accent); }
+.draggable-divider:focus-visible { outline: none; }
