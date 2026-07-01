@@ -86,6 +86,8 @@ export interface FetchBody {
   decimate?: number;
   device?: string; // data/device/<device>.json (default: diiid)
   sensor_set?: string; // a set under the device's sensor_sets; overrides analysis
+  ssh_user?: string; // SSH login for devices that gateway over ssh (e.g. KSTAR)
+  ssh_password?: string; // sent to the local backend only; not stored
 }
 
 /** A device config (data/device/<id>.json) the backend can fetch from. */
@@ -93,9 +95,11 @@ export interface DeviceInfo {
   id: string; // --device value, e.g. "diiid"
   name: string; // display name, e.g. "DIII-D"
   sensor_sets: string[]; // selectable as sensor_set (composites included)
-  access?: string; // "mdsplus_tree" (NSTX: mdsthin + sensor_set only) | "ptdata"
+  access?: string; // "mdsplus_tree" (NSTX/KSTAR: mdsthin + sensor_set only) | "ptdata"
   remote_capable?: boolean; // device has a network.cluster block (remote backend)
   default_shot?: number | null; // per-device example shot (prefilled on select)
+  needs_ssh_creds?: boolean; // true → prompt for SSH user/password (e.g. KSTAR)
+  connect_note?: string | null; // short note/warning shown by the pull form
 }
 
 /** List available device configs + their sensor-set names (GET /api/devices).

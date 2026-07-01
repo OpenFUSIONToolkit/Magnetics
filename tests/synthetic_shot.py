@@ -115,6 +115,61 @@ def _channels(shot: int, *, include_qs: bool) -> list[Channel]:
     return chans
 
 
+def _kstar_channels(shot: int, dev: dict) -> list["Channel"]:
+    """Fabricated dBz/dt for KSTAR's MC1T toroidal array, using the committed
+    shot-aware geometry (φ + polarity gain) from the device table. Channel names
+    are the exact ``mirnov_toroidal`` sensor-set keys so ``_set_channels`` matches."""
+    from magnetics.data import devices
+
+    n = int(_FS * _DURATION)
+    t_ms = np.linspace(0.0, _DURATION * 1e3, n, endpoint=False)
+    t_s = t_ms * 1e-3
+
+    tor = dev["sensor_sets"]["mirnov_toroidal"]["sensors"]
+    chans: list[Channel] = []
+    for nm in tor:
+        if devices.pointname_at(dev, nm, shot) == "NotAvailable":
+            continue
+        g = devices.geometry_at(dev, nm, shot) or {}
+        if g.get("phi") is None:
+            continue  # no toroidal angle at this shot → fetcher would skip it
+        gain = float(g.get("gain", 1.0))
+        sig = gain * _sensor_signal(t_s, float(g["phi"]), 0.0)
+        chans.append(Channel(nm, t_ms.copy(), sig.astype(np.float32), ok=True))
+
+    # A κ trace so the plasma-context path has something to read (fabricated).
+    chans.append(Channel("kappa", t_ms.copy(), np.full(n, 1.7, np.float32), ok=True))
+    return chans
+
+
+def write_synthetic_kstar_shot(path, shot: int = 42485) -> str:
+    """Write a synthetic KSTAR ``shot_<n>.h5`` (device=``kstar``) and return the path.
+
+    Exercises the device-reactive rotating path: the MC1T toroidal array resolves
+    from ``devices.load_device('kstar')``, so ``_set_channels(...,'phi')`` and the
+    spectral nodes run offline (no VPN). ``shot`` defaults to 42485 — the live-
+    verified shot — where 13 MC1T channels carry φ. Poloidal-m and the SLCONTOUR
+    fit stay blocked until real MC1P θ / QS r,z land in ``kstar.json`` (see the
+    device 'alerts')."""
+    from magnetics.data import devices
+
+    dev = devices.load_device("kstar")
+    _write_h5(
+        str(path),
+        shot,
+        "rotating",  # analysis
+        "test",  # backend
+        _kstar_channels(shot, dev),
+        compression="lzf",
+        tmin=None,
+        tmax=None,
+        stride=1,
+        device="kstar",
+        source="MDSplus tree 'kstar' (synthetic)",
+    )
+    return str(path)
+
+
 def write_synthetic_shot(path, shot: int = 990000, *, include_qs: bool = True) -> str:
     """Write a synthetic ``shot_<n>.h5`` at ``path`` and return the path (str).
 

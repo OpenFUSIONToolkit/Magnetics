@@ -3,7 +3,7 @@
 // rotating views (VISION §6.4). Views read what they need and render nodes from
 // the API; heavy data stays in the nodes, not here.
 import { create } from "zustand";
-import { fetchMachines, type MachineInfo } from "./lib/api";
+import { fetchMachines, fetchDevices, type MachineInfo, type DeviceInfo } from "./lib/api";
 
 export type TabId = "sensors" | "qs" | "rotating";
 export type Theme = "dark" | "light";
@@ -62,6 +62,8 @@ applyFontScale(loadFontScale());
 interface State {
   machines: MachineInfo[];
   machine: string | null; // current machine/shot id
+  devices: DeviceInfo[]; // available device configs (GET /api/devices)
+  device: string; // selected device id (single source of truth)
   tab: TabId;
   cursorMs: number; // shared time cursor across views
   loadingMachines: boolean;
@@ -70,6 +72,7 @@ interface State {
 
   init: () => Promise<void>;
   setMachine: (id: string) => void;
+  setDevice: (id: string) => void;
   setTab: (t: TabId) => void;
   setCursorMs: (t: number) => void;
   toggleTheme: () => void;
@@ -79,6 +82,8 @@ interface State {
 export const useStore = create<State>((set) => ({
   machines: [],
   machine: null,
+  devices: [],
+  device: "",
   tab: "sensors",
   cursorMs: 0,
   loadingMachines: true,
@@ -86,14 +91,24 @@ export const useStore = create<State>((set) => ({
   fontScale: loadFontScale(),
 
   async init() {
-    const machines = await fetchMachines();
+    // fetchDevices() guards its own errors and returns [] (no live backend / no
+    // device files), so this Promise.all never rejects on the devices side.
+    const [machines, devices] = await Promise.all([fetchMachines(), fetchDevices()]);
+    // Default the device to the one matching the first machine's device name,
+    // falling back to the first configured device.
+    const firstDeviceName = machines[0]?.device;
+    const defaultDevice =
+      devices.find((d) => d.name === firstDeviceName)?.id ?? devices[0]?.id ?? "";
     set((s) => ({
       machines,
+      devices,
       loadingMachines: false,
       machine: s.machine ?? machines[0]?.id ?? null,
+      device: s.device || defaultDevice,
     }));
   },
   setMachine: (id) => set({ machine: id }),
+  setDevice: (id) => set({ device: id }),
   setTab: (t) => set({ tab: t }),
   setCursorMs: (t) => set({ cursorMs: t }),
   toggleTheme: () =>

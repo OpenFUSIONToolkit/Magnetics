@@ -19,7 +19,7 @@ from functools import lru_cache
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import device_geom, diiid_geometry, h5source
+from ..data import device_geom, devices, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,20 @@ def _i(params, key, default=None):
 
 def _flag(params, key) -> bool:
     return bool(params) and str(params.get(key, "")).lower() in ("1", "true", "yes", "on")
+
+
+def _smooth_sigma_bins(params) -> tuple[float, float]:
+    """Read the GUI's 2-D pre-smoothing widths, expressed directly as Gaussian σ in *grid
+    cells* (STFT bins) along (time, frequency). Cells are resolution-relative — one cell is
+    one (t, f) bin at whatever resolution knob is in effect — so the blur always spans the
+    same number of neighbours, and a "smoothing on" request can't silently round to a sub-bin
+    no-op the way physical ms/kHz widths did. Returns (0.0, 0.0) when ``smooth`` is off, so
+    callers skip the core op."""
+    if not _flag(params, "smooth"):
+        return 0.0, 0.0
+    st = _f(params, "smooth_t_cells", 0.0) or 0.0
+    sf = _f(params, "smooth_f_cells", 0.0) or 0.0
+    return max(0.0, st), max(0.0, sf)
 
 
 def machines() -> list[dict]:
@@ -113,6 +127,68 @@ def refresh() -> None:
     h5source.refresh()
     for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run, _dev_geom):
         fn.cache_clear()
+
+
+# ── device dispatch: declared sensor-array sets (non-DIII-D) ─────────────────
+def _device_key(shot):
+    """The device-file key for this shot's display name (``DIII-D``→``diii-d`` has no
+    JSON → None, so DIII-D keeps its legacy channel selectors). Returns (dev, key)."""
+    disp = (h5source.meta(shot).get("device") or "").lower()
+    try:
+        return devices.load_device(disp), disp
+    except Exception:  # noqa: BLE001 — unknown device → legacy path
+        return None, None
+
+
+def _arrays(shot):
+    """(dev, arrays) when this shot's device declares its rotating-array sets
+    (``device["arrays"] = {"toroidal": <set>, "poloidal": <set>}``), else (None, None).
+    A device that declares arrays routes the selectors through ``_set_channels``
+    instead of the DIII-D family heuristics."""
+    dev, _ = _device_key(shot)
+    a = dev.get("arrays") if dev else None
+    return (dev, a) if a else (None, None)
+
+
+def _set_channels(dev, set_name, shot, angle="phi"):
+    """Channels of a declared device sensor set that are present in this shot, each with
+    its geometry ``angle`` (phi/theta), sorted by that angle. Returns list of (name,
+    angle_deg). A ``composite`` set expands its members recursively. Channels absent from
+    the pull or lacking the requested angle are dropped (so a set with no ``theta`` yields
+    an empty list — the caller then raises its usual 'not enough probes').
+
+    When ``angle == "theta"`` and a channel carries (r, z) but no explicit ``theta``,
+    θ is derived as ``atan2(z, r - R0)`` about the machine axis (mirrors
+    ``diiid.real_theta_of``), so supplying r/z alone is enough to unblock poloidal nodes."""
+    present = set(h5source.channel_names(shot))
+    sets = dev.get("sensor_sets", {})
+    r0 = float(dev.get("R0", 1.69))
+
+    def _names(name, seen):
+        spec = sets.get(name, {})
+        if spec.get("type") == "composite":
+            out = []
+            for sub in spec.get("sets", []):
+                if sub not in seen:
+                    seen.add(sub)
+                    out.extend(_names(sub, seen))
+            return out
+        return list(spec.get("sensors", []))
+
+    out = []
+    for n in _names(set_name, {set_name}):
+        if n not in present:
+            continue
+        g = devices.geometry_at(dev, n, int(shot))
+        if not g:
+            continue
+        val = g.get(angle)
+        if val is None and angle == "theta" and g.get("r") is not None and g.get("z") is not None:
+            val = float(np.degrees(np.arctan2(float(g["z"]), float(g["r"]) - r0)) % 360.0)
+        if val is not None:
+            out.append((n, float(val)))
+    out.sort(key=lambda na: na[1])
+    return out
 
 
 def _array_channels(shot, families: tuple[str, ...]):
@@ -264,9 +340,15 @@ def _named_sets(dg, substr: str) -> list[str]:
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
 def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     """Two toroidally-separated probes for the 2-point cross-spectrogram.
-    Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set),
-    then integrated Bp. Returns ((name1, phi1), (name2, phi2)) with the widest
-    non-zero separation."""
+    Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set / a
+    KSTAR declared toroidal array), then integrated Bp. Returns ((name1, phi1),
+    (name2, phi2)) with the widest non-zero separation."""
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares an explicit toroidal set (KSTAR) → use it precisely
+        arr = _set_channels(dev, arrays["toroidal"], shot)
+        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
+            return arr[0], arr[-1]
+        raise ValueError("need two toroidally-separated probes for a spectrogram")
     for families in _pick_pair_prefs(shot):
         arr = _array_channels(shot, families)  # (name, phi), sorted by phi
         if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
@@ -323,8 +405,24 @@ def _prep_spec(shot, params):
         cs = _i(params, "smoothing", 5)
     mc = _i(params, "max_columns", 4000)
     res, probes, dphi = _spec_result(str(shot), sd, max(2, cs), max(2, mc))
+    # Optional 2-D Gaussian pre-smoothing on the FULL band, BEFORE the gates, so contiguous
+    # coherent structure survives gating (and the display + gate share one smoothed field).
+    # σ is in grid cells (resolution-relative); smooth_spectrogram returns a copy — the cached
+    # _spec_result is never mutated.
+    st, sf = _smooth_sigma_bins(params)
+    if st > 0 or sf > 0:
+        res = spectral.smooth_spectrogram(res, sigma_time_bins=st, sigma_freq_bins=sf)
     if _flag(params, "denoise"):
-        res = spectral.denoise_spectrogram(res, coherence_min=_f(params, "coherence_min", 0.5))
+        # power_floor_k=None (or ≤0) skips the per-frequency power floor; the GUI sends it
+        # only when the Power Gate is engaged. floor_percentile sets which percentile over
+        # time defines each frequency's floor (50 = median).
+        pfk = _f(params, "power_floor_k", None)
+        res = spectral.denoise_spectrogram(
+            res,
+            coherence_min=_f(params, "coherence_min", 0.0),
+            power_floor_k=pfk if (pfk is not None and pfk > 0) else None,
+            floor_percentile=_f(params, "floor_percentile", 50.0),
+        )
     f_khz = np.asarray(res.frequency) / 1e3
     mask = np.ones(f_khz.size, dtype=bool)
     fmin, fmax = _f(params, "fmin"), _f(params, "fmax")
@@ -339,11 +437,21 @@ def _spectrogram(shot, params=None) -> dict:
     res, mask, probes, dphi = _prep_spec(shot, params)
     f = np.asarray(res.frequency)[mask] / 1e3
     # power is [n_times, n_freqs]; heatmap z is [i_y=freq][i_x=time] → transpose.
-    z = np.log10(np.maximum(np.asarray(res.power, dtype=float)[:, mask].T, 1e-30))
+    power = np.asarray(res.power, dtype=float)[:, mask].T
+    z = np.log10(np.maximum(power, 1e-30))
+    # denoise_spectrogram zeroes gated cells; emit them as JSON null (not log10→-30, a
+    # solid floor block) so the heatmap renders them transparent, matching the old
+    # client-side blanking. Real cross-power is essentially never exactly 0, so this
+    # only fires on gated cells.
+    z_list = z.tolist()
+    if _flag(params, "denoise"):
+        gated = z.astype(object)
+        gated[power == 0.0] = None
+        z_list = gated.tolist()
     return contracts.heatmap(
         (np.asarray(res.time) * 1e3).tolist(),
         f.tolist(),
-        z.tolist(),
+        z_list,
         {"x": "time (ms)", "y": "f (kHz)", "z": "log<sub>10</sub> power"},
         discrete=False,
         meta={"probes": list(probes), "delta_phi_deg": dphi, "shot": str(shot)},
@@ -383,9 +491,10 @@ def _mode_number(shot, params=None) -> dict:
 
     Two knobs control the blanking, both separate from the spectrogram's coherence
     slider so the n-map stays clean regardless of the power view's gate: ``n_gate``
-    (mode-coherence, default 0.65) hides cells whose fit isn't a clean single-n, and
-    ``n_amp_pct`` (amplitude percentile, default 80) keeps only the strongest cells —
-    lower it to reveal weaker/broadband modes, raise it to show only the dominant one."""
+    (mode-coherence = harmonic energy fraction ∈ [1/M, 1], default 0.3) hides cells whose
+    fit isn't a clean single-n, and ``n_amp_pct`` (amplitude percentile, default 80) keeps
+    only the strongest cells — lower it to reveal weaker/broadband modes, raise it to show
+    only the dominant one."""
     try:
         arr = _toroidal_arr(str(shot))
     except ValueError:
@@ -394,6 +503,13 @@ def _mode_number(shot, params=None) -> dict:
     phis = tuple(float(p) for _, p in arr)
     sd = _f(params, "slice_duration", 0.002)  # honor the resolution knob (500 Hz default)
     ms = _array_mode_spec(str(shot), names, phis, sd)
+
+    # Optional 2-D Gaussian pre-smoothing on the NATIVE n-map grid (before the display-time
+    # decimation below). σ is in grid cells, so a coherent mode survives the gate across its
+    # neighborhood at any resolution. Returns a copy — the cache isn't mutated.
+    st, sf = _smooth_sigma_bins(params)
+    if st > 0 or sf > 0:
+        ms = spectral.smooth_mode_spectrogram(ms, sigma_time_bins=st, sigma_freq_bins=sf)
 
     f_khz = np.asarray(ms.freq_band) / 1e3
     mask = np.ones(f_khz.size, dtype=bool)
@@ -411,7 +527,7 @@ def _mode_number(shot, params=None) -> dict:
     q = np.asarray(ms.quality)[np.ix_(ti, mask)]
     amp = np.asarray(ms.amplitude)[np.ix_(ti, mask)]
 
-    gate = _f(params, "n_gate", 0.65)
+    gate = _f(params, "n_gate", 0.3)
     amp_pct = min(100.0, max(0.0, _f(params, "n_amp_pct", 80.0)))
     floor = float(np.percentile(amp, amp_pct)) if amp.size else 0.0
     show = (q >= gate) & (amp >= floor)
@@ -747,6 +863,12 @@ def _toroidal_arr(shot):
     pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
     probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
     scrambles the fit, so they're excluded."""
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares an explicit toroidal set (KSTAR) → use it precisely
+        arr = _set_channels(dev, arrays["toroidal"], shot)
+        if len(arr) < 4:
+            raise ValueError("not enough toroidal-array channels for a mode fit")
+        return arr
     dg = _dev_geom(str(shot))
     if dg.device_id == "diiid":
         arr = _array_channels(shot, ("MPI_BDOT",))
@@ -915,6 +1037,12 @@ def _poloidal_shape(shot, params=None) -> dict:
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares an explicit poloidal set (KSTAR) → select by geometry θ
+        arr = _set_channels(dev, arrays["poloidal"], shot, angle="theta")
+        if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
+            raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
+        return arr
     dg = _dev_geom(str(shot))
     theta = _real_theta(shot)
     names = h5source.channel_names(shot)
@@ -1255,9 +1383,16 @@ def _prep_qs_ds(shot, params):
     ms_raw = params.get("ms", "0") if params else "0"
     ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())
     ms = tuple(int(x.strip()) for x in str(ms_raw).split(",") if x.strip())
-    channel_filter = (
-        params.get("channel_filter", "Bp_LFS_midplane") if params else "Bp_LFS_midplane"
-    )
+    # Default QS sensor set is device-specific: prefer the device's declared
+    # ``qs_default_set``, else its ``quasi_stationary`` composite if present, else
+    # DIII-D's ``Bp_LFS_midplane``. The GUI may still override via ?channel_filter=.
+    dev, _ = _device_key(str(shot))
+    default_cf = "Bp_LFS_midplane"
+    if dev:
+        default_cf = dev.get("qs_default_set") or (
+            "quasi_stationary" if "quasi_stationary" in dev.get("sensor_sets", {}) else default_cf
+        )
+    channel_filter = params.get("channel_filter", default_cf) if params else default_cf
     detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
     # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
     # so _qs_run defaults to the first 10ms of the shot window.

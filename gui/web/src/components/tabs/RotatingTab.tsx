@@ -8,7 +8,7 @@ import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
 import { usingLiveBackend, fetchChannelUsage, type ChannelUsage } from "../../lib/api";
 import type { Node } from "../../lib/contract";
-import { GATE_POS_MAX, gatePosToPct, percentile } from "../../lib/rotatingTransforms";
+import { GATE_POS_MAX, gatePosToPct, medianStep, percentile } from "../../lib/rotatingTransforms";
 
 // Slider position that yields ≈70% by default (a sensible noise floor to start).
 const GATE_POS_DEFAULT = 227;
@@ -81,6 +81,26 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [gatePos, setGatePos] = useState<number>(GATE_POS_DEFAULT);
   const powerGate = gatePosToPct(gatePos);
   const gateFrac = powerGate / 100;
+  // Coherence gate γ² ∈ [0,1]: drops spectrogram cells whose 2-point magnitude-squared
+  // coherence is below this (incoherent electronic noise), via the core denoise_spectrogram.
+  // 0 = off, so the default view is unchanged. Applies to the POWER spectrogram only.
+  const [coherenceMin, setCoherenceMin] = useState<number>(0);
+  // Mode-coherence gate for the n-map: the per-cell harmonic energy fraction ∈ [1/M, 1]
+  // (1 = a pure single-n pattern, 1/M = white across harmonics = noise; M = 2·n_max+1).
+  // Distinct quantity from the 2-point γ² above — it gates the mode-number plot, not the
+  // power view. Default 0.3 (real cells rarely exceed ~0.5, unlike the resultant length).
+  const [nGate, setNGate] = useState<number>(0.3);
+  // Optional 2-D Gaussian pre-smoothing (before the gates): blurs power/coherence (and the
+  // n-map quality/amplitude) over (time, frequency) so contiguous coherent structure survives
+  // aggressive gating. Off by default (σ=0 ⇒ exact no-op).
+  const [smoothOn, setSmoothOn] = useState<boolean>(false);
+  // σ in *grid cells* (STFT bins), not physical ms/kHz: one cell = one (t, f) bin at the
+  // current resolution, so the blur spans the same number of neighbours regardless of the
+  // slice/column knobs — and can't collapse to a sub-bin no-op. The readout below the sliders
+  // shows the physical equivalent for the live grid. Skewed to σ_time > σ_freq to fill gaps
+  // along a ridge without merging neighbouring modes in frequency.
+  const [smoothTcells, setSmoothTcells] = useState<number>(3);
+  const [smoothFcells, setSmoothFcells] = useState<number>(1.5);
   // STFT window for the LIVE backend spectrogram (ms). Frequency resolution is
   // 1/window, so 2 ms → 500 Hz bins (sharper than the 1 ms / 1 kHz default).
   const [specSliceMs, setSpecSliceMs] = useState<number>(2);
@@ -140,7 +160,28 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // band ×3 nodes. These don't depend on the time cursor, so scrubbing never refetches.
   // `smoothing` is the coherence-estimation window (backend `coherence_smooth`): it
   // re-runs the core and changes the real coherence map → the sub-interval coherence trace.
-  const specParams = { slice_duration: specSliceMs / 1000, max_columns: 1000, fmin, fmax, smoothing };
+  // Server-side denoise: the coherence gate and the per-frequency power floor both run in
+  // the core (denoise_spectrogram) so the spectrogram, 2-point n-map, and n-spectrum all
+  // threshold on ONE consistent (t, f) grid — no client-side blanking on the live path.
+  // The Power Gate slider is a percentile floor: keep cells ≥ the p-th percentile of each
+  // frequency's power over time (power_floor_k=1 × that percentile). 0 on both = no-op.
+  const denoiseOn = coherenceMin > 0 || powerGate > 0;
+  // 2-D Gaussian pre-smoothing params, shared by every spectral node so all views smooth on
+  // one basis. Effective only when the toggle is on and a σ is non-zero (else a server no-op).
+  const smoothActive = smoothOn && (smoothTcells > 0 || smoothFcells > 0);
+  const smoothParams = {
+    smooth: smoothActive ? 1 : 0,
+    smooth_t_cells: smoothActive ? smoothTcells : 0,
+    smooth_f_cells: smoothActive ? smoothFcells : 0,
+  };
+  const specParams = {
+    slice_duration: specSliceMs / 1000, max_columns: 1000, fmin, fmax, smoothing,
+    denoise: denoiseOn ? 1 : 0,
+    coherence_min: coherenceMin,
+    power_floor_k: powerGate > 0 ? 1.0 : 0,
+    floor_percentile: powerGate,
+    ...smoothParams,
+  };
 
   // Fetch main spectrogram node (real log-power Ḃp(t,f) from the live backend)
   const {
@@ -149,11 +190,23 @@ export default function RotatingTab({ machine }: { machine: string }) {
     error: specError,
   } = useNode(machine, "spectrogram", specParams);
 
+  // Physical width of one spectrogram cell on the live grid (x = time ms, y = freq kHz),
+  // for the σ-in-cells readout: σ_time ≈ smoothTcells·dtMs ms, σ_freq ≈ smoothFcells·dfKhz kHz.
+  // NaN (no live grid yet) renders as "—".
+  const specGrid = specNode?.kind === "heatmap" ? specNode : null;
+  const dtMs = medianStep(specGrid?.x);
+  const dfKhz = medianStep(specGrid?.y);
+  const cellsToMs = (cells: number) =>
+    Number.isFinite(dtMs) ? `≈ ${(cells * dtMs).toFixed(1)} ms` : "—";
+  const cellsToKhz = (cells: number) =>
+    Number.isFinite(dfKhz) ? `≈ ${(cells * dfKhz).toFixed(2)} kHz` : "—";
+
   // Real toroidal mode-number map n(t,f) — a full-array fit per cell (resolves n=1,2,3,4…
   // that the 2-point estimate aliases away). Backs the "Mode n" toggle, gated server-side.
   // Honors the same resolution knob + band as the power view so the two stay consistent.
   const { node: modeNumberNode } = useNode(machine, "mode_number", {
-    slice_duration: specSliceMs / 1000, fmin, fmax, n_amp_pct: powerGate,
+    slice_duration: specSliceMs / 1000, fmin, fmax, n_amp_pct: powerGate, n_gate: nGate,
+    ...smoothParams,
   });
 
   // Real 2-point coherence γ²(t,f) ∈ [0,1] — feeds the coherence gate honestly,
@@ -318,22 +371,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
         // [-0.5,6.5] aligns the 7-colour |n| palette's bins to integers 0…6 (and modeColor()).
         return { ...modeNumberNode, discrete: true, zrange: [-0.5, 6.5] as [number, number] };
       }
-      // "power" → real log-power spectrogram, gated by the power floor: cells below the
-      // chosen percentile of the visible band's power are blanked (noise cropping).
+      // "power" → real log-power spectrogram. Band crop + coherence/power-floor gating
+      // all run server-side (see specParams denoise), and gated cells arrive as null, so
+      // render the node as-is — no client-side blanking on the live path.
       if (!specNode || specNode.kind !== "heatmap") return null;
-      const keep = specNode.y
-        .map((f, i) => ({ f, i }))
-        .filter((o) => o.f >= fmin && o.f <= fmax)
-        .map((o) => o.i);
-      const y = keep.map((i) => specNode.y[i]);
-      const rows = keep.map((fi) => specNode.z[fi]);
-      const flat: number[] = [];
-      for (const row of rows) for (const v of row) if (Number.isFinite(v)) flat.push(v);
-      const floor = percentile(flat, powerGate);
-      const z = rows.map((row) =>
-        row.map((v) => (Number.isFinite(v) && v >= floor ? v : null)),
-      );
-      return { ...specNode, y, z: z as unknown as number[][], discrete: false, zrange: undefined };
+      return { ...specNode, discrete: false, zrange: undefined };
     }
 
     // ── NO BACKEND: synthetic generator + fabricated n/coherence (demo only).
@@ -463,14 +505,17 @@ export default function RotatingTab({ machine }: { machine: string }) {
     });
 
     const freqs = baseNode.y;
-    const power = freqs.map((_, fIdx) => Math.pow(10, baseNode.z[fIdx][tIdx])); // Convert log power to linear power
+    const power = freqs.map((_, fIdx) => {
+      const zc = baseNode.z[fIdx][tIdx]; // null where denoise gated the cell
+      return zc == null ? NaN : Math.pow(10, zc); // gap the trace there; else log→linear
+    });
 
     // LIVE: real coherence + real mode number at the cursor column (same grid).
     const liveCoh = hasStaticFiles && coherenceNode?.kind === "heatmap" ? coherenceNode : null;
     const liveN = hasStaticFiles && modeNumberNode?.kind === "heatmap" ? modeNumberNode : null;
 
     const coh = liveCoh
-      ? freqs.map((_, fIdx) => (liveCoh.z[fIdx] ? liveCoh.z[fIdx][tIdx] : 0))
+      ? freqs.map((_, fIdx) => liveCoh.z[fIdx]?.[tIdx] ?? 0) // null (gated) → 0
       // Live but coherence node not yet loaded → zeros, never a synthesized stand-in.
       : live
       ? freqs.map(() => 0)
@@ -857,7 +902,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       xaxis: { title: { text: "Time (ms)" } },
       margin: { l: 50, r: 15, t: 10, b: 35 },
     };
-    const stripePlot = (d: { x: number[]; y: number[]; z: number[][] }, axisTitle: string, nodeId?: string) => (
+    const stripePlot = (d: { x: number[]; y: number[]; z: (number | null)[][] }, axisTitle: string, nodeId?: string) => (
       <Plot
         data={[{ type: "heatmap" as const, x: d.x, y: d.y, z: d.z, colorscale: POWER_SEQUENTIAL, showscale: false }]}
         layout={{ ...baseLayout, yaxis: { title: { text: axisTitle } } }}
@@ -1169,43 +1214,170 @@ export default function RotatingTab({ machine }: { machine: string }) {
               </select>
             </div>
 
-            {/* smoothing — coherence-estimation window (backend coherence_smooth) */}
+            {/* ── Denoise group ──────────────────────────────────────────────
+                Two *gates* (thresholds that blank noisy cells) — one by coherence,
+                one by power — plus the coherence gate's own estimation knob nested
+                beneath it. Grouped + captioned so they don't read as three redundant
+                "smoothing" sliders. The coherence gate is context-aware: 2-point γ²
+                for the power view, array mode-fit quality for the n-map. */}
             <div
-              style={{ display: "flex", flexDirection: "column", gap: "4px" }}
-              title="Frequency-bin width for the coherence estimate — smooths the coherence map and the sub-interval coherence trace."
+              style={{
+                borderTop: "1px solid var(--border)",
+                paddingTop: "10px",
+                marginTop: "4px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+              }}
             >
-              <label htmlFor="smoothing-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
-                Coherence Smoothing: <strong style={{ color: "var(--text)" }}>{smoothing} pts</strong>
-              </label>
-              <input
-                id="smoothing-range"
-                type="range"
-                min="1"
-                max="15"
-                value={smoothing}
-                onChange={(e) => setSmoothing(parseInt(e.target.value))}
-                style={{ accentColor: "var(--accent)" }}
-              />
-            </div>
+              <div style={{ fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--text)" }}>
+                Denoise{" "}
+                <em style={{ opacity: 0.6, textTransform: "none", fontWeight: 400 }}>
+                  — hide noisy cells ({displayMode === "n" ? "n-map" : "power"})
+                </em>
+              </div>
 
-            {/* power gate — percentile noise floor, applied to every data-driven view */}
-            <div
-              style={{ display: "flex", flexDirection: "column", gap: "4px" }}
-              title="Hides cells below this power percentile (noise floor) across the spectrogram, n-map, and spectrum."
-            >
-              <label htmlFor="power-gate-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
-                Power Gate: <strong style={{ color: "var(--text)" }}>{powerGate.toFixed(1)}%</strong>
-              </label>
-              <input
-                id="power-gate-range"
-                type="range"
-                min="0"
-                max={GATE_POS_MAX}
-                step="1"
-                value={gatePos}
-                onChange={(e) => setGatePos(parseInt(e.target.value))}
-                style={{ accentColor: "var(--accent)" }}
-              />
+              {/* Pre-smooth — a 2-D Gaussian blur applied BEFORE the gates (feeds both the
+                  gate decision and the display), so contiguous coherent structure survives
+                  aggressive gating. Anisotropic: σ in grid cells (STFT bins) along time and
+                  frequency — resolution-relative, with the physical equivalent shown. Off by
+                  default. */}
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: "6px" }}
+                title="Optional 2-D Gaussian blur of the spectrogram before gating, so contiguous coherent structure survives aggressive gates. σ is in grid cells (one STFT time/frequency bin) so the blur spans the same number of neighbours at any resolution. Time-heavy settings fill gaps along a mode ridge; keep the frequency width small so nearby modes don't merge. Off = no smoothing."
+              >
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smoothOn}
+                    onChange={(e) => setSmoothOn(e.target.checked)}
+                    style={{ accentColor: "var(--accent)" }}
+                  />
+                  Pre-smooth (2-D Gaussian)
+                </label>
+                {smoothOn && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginLeft: "12px", paddingLeft: "8px", borderLeft: "2px solid var(--border-2)" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <label htmlFor="smooth-t-range" style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>
+                        σ time: <strong style={{ color: "var(--text)" }}>{smoothTcells.toFixed(1)} cells</strong>{" "}
+                        <span style={{ opacity: 0.6 }}>{cellsToMs(smoothTcells)}</span>
+                      </label>
+                      <input
+                        id="smooth-t-range"
+                        type="range"
+                        min="0"
+                        max="8"
+                        step="0.5"
+                        value={smoothTcells}
+                        onChange={(e) => setSmoothTcells(parseFloat(e.target.value))}
+                        style={{ accentColor: "var(--accent)" }}
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <label htmlFor="smooth-f-range" style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>
+                        σ freq: <strong style={{ color: "var(--text)" }}>{smoothFcells.toFixed(1)} cells</strong>{" "}
+                        <span style={{ opacity: 0.6 }}>{cellsToKhz(smoothFcells)}</span>
+                      </label>
+                      <input
+                        id="smooth-f-range"
+                        type="range"
+                        min="0"
+                        max="5"
+                        step="0.5"
+                        value={smoothFcells}
+                        onChange={(e) => setSmoothFcells(parseFloat(e.target.value))}
+                        style={{ accentColor: "var(--accent)" }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Coherence gate — POWER view: drops incoherent cells (2-point γ²). */}
+              {displayMode === "power" && (
+                <>
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: "4px" }}
+                    title="Gate: hides spectrogram cells whose 2-point magnitude-squared coherence γ² is below this — incoherent electronic noise. 0 = off. Server-side via denoise_spectrogram."
+                  >
+                    <label htmlFor="coherence-gate-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
+                      Coherence Gate (γ²): <strong style={{ color: "var(--text)" }}>{coherenceMin.toFixed(2)}</strong>
+                    </label>
+                    <input
+                      id="coherence-gate-range"
+                      type="range"
+                      min="0"
+                      max="0.95"
+                      step="0.02"
+                      value={coherenceMin}
+                      onChange={(e) => setCoherenceMin(parseFloat(e.target.value))}
+                      style={{ accentColor: "var(--accent)" }}
+                    />
+                  </div>
+
+                  {/* γ² averaging — NOT a gate: the frequency-bin window used to *measure*
+                      γ² before the gate thresholds it. Nested to show it feeds the gate. */}
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: "4px", marginLeft: "12px", paddingLeft: "8px", borderLeft: "2px solid var(--border-2)" }}
+                    title="Not a gate — the frequency-bin window used to measure γ² before gating. More points = a steadier coherence estimate (and coherence trace); it doesn't itself hide cells."
+                  >
+                    <label htmlFor="smoothing-range" style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>
+                      ↳ γ² averaging: <strong style={{ color: "var(--text)" }}>{smoothing} pts</strong>
+                    </label>
+                    <input
+                      id="smoothing-range"
+                      type="range"
+                      min="1"
+                      max="15"
+                      value={smoothing}
+                      onChange={(e) => setSmoothing(parseInt(e.target.value))}
+                      style={{ accentColor: "var(--accent)" }}
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Mode-coherence gate — n-MAP: drops cells whose array-fit quality is low. */}
+              {displayMode === "n" && (
+                <div
+                  style={{ display: "flex", flexDirection: "column", gap: "4px" }}
+                  title="Gate: hides mode-number cells whose harmonic energy fraction (share of toroidal power in the single best-fit n, ∈ [1/M,1]) is below this — where n isn't a clean single mode. n-map only; real cells rarely exceed ~0.5."
+                >
+                  <label htmlFor="n-gate-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
+                    Mode Coherence: <strong style={{ color: "var(--text)" }}>{nGate.toFixed(2)}</strong>
+                  </label>
+                  <input
+                    id="n-gate-range"
+                    type="range"
+                    min="0"
+                    max="0.95"
+                    step="0.02"
+                    value={nGate}
+                    onChange={(e) => setNGate(parseFloat(e.target.value))}
+                    style={{ accentColor: "var(--accent)" }}
+                  />
+                </div>
+              )}
+
+              {/* Power floor — both views: per-frequency amplitude percentile threshold. */}
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: "4px" }}
+                title="Gate: hides cells below this per-frequency power percentile (a noise floor by amplitude, not coherence) across the spectrogram, n-map, and spectrum. Server-side via denoise_spectrogram."
+              >
+                <label htmlFor="power-gate-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
+                  Power Floor: <strong style={{ color: "var(--text)" }}>{powerGate.toFixed(1)}%</strong>
+                </label>
+                <input
+                  id="power-gate-range"
+                  type="range"
+                  min="0"
+                  max={GATE_POS_MAX}
+                  step="1"
+                  value={gatePos}
+                  onChange={(e) => setGatePos(parseInt(e.target.value))}
+                  style={{ accentColor: "var(--accent)" }}
+                />
+              </div>
             </div>
 
             {/* Advanced Parameters Divider & Header */}

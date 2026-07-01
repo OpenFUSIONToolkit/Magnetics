@@ -1,0 +1,3972 @@
+{
+  "name": "KSTAR",
+  "R0": 1.8,
+  "access": "mdsplus_tree",
+  "tree": "kstar",
+  "server": "mdsr.kstar.kfe.re.kr:8005",
+  "gateway": "",
+  "note": "KSTAR magnetics config. MC1T toroidal array is shot-aware from kstar_mirnov_config.json (/PRISM/mirnov_archive); other groups are from the KSTAR Diagnostics Data User Guide v.20241211 (pp.12-32). Sensor keys are MDS+ node tags; fetch is tree-based (per-signal openTree), not PTDATA. KSTAR signals span multiple trees (see signal_groups[*].tree + plasma pointnames). Reached via the KFE VPN + nkstar tunnel (see 'connection'); device-level 'tree' is the Mirnov default 'kstar'.",
+  "connection": {
+    "transport": "kstar_transport",
+    "vpn_url": "https://vpn.kfe.re.kr",
+    "vpn_executable_candidates": [
+      "/opt/cisco/secureclient/bin/vpn",
+      "/opt/cisco/anyconnect/bin/vpn"
+    ],
+    "ssh_host": "nkstar.kstar.kfe.re.kr",
+    "ssh_port": 2201,
+    "mds_host": "mdsr.kstar.kfe.re.kr",
+    "mds_port": 8005,
+    "local_port": 8005,
+    "username_scheme": "VPN username is 'k-<id>'; SSH/MDS username is '<id>' (VPN adds a 'k-' prefix to the same account id).",
+    "note": "Reached only via the KFE VPN + nkstar SSH tunnel; see magnetics.data.fetch.kstar_transport.session(). No credentials stored here."
+  },
+  "plasma pointnames": {
+    "current": {
+      "name": "Ip",
+      "tree": "PCS_KSTAR",
+      "node": "\\PCS_KSTAR::TOP:PC:PCRC03*(-1)*(1e-6)"
+    },
+    "toroidal field": {
+      "name": "B_T",
+      "tree": "PCS_KSTAR",
+      "node": "\\PCS_KSTAR::TOP:PC:PCITFMSRD"
+    },
+    "elongation": {
+      "name": "kappa",
+      "tree": "efitrt1"
+    }
+  },
+  "arrays": {
+    "toroidal": "mirnov_toroidal",
+    "poloidal": "mirnov_poloidal"
+  },
+  "qs_default_set": "quasi_stationary",
+  "signal_groups": {
+    "mirnov_toroidal": {
+      "unit": "T/s",
+      "sampling_khz": 2000,
+      "description": "MC Mirnov toroidal array (dBz/dt) for toroidal mode number n; shot-aware angles+polarity from kstar_mirnov_config.json",
+      "tree": "kstar"
+    },
+    "mirnov_poloidal": {
+      "unit": "T/s",
+      "sampling_khz": 2000,
+      "description": "MC Mirnov poloidal array (dBz/dt) for poloidal mode number m",
+      "tree": "kstar"
+    },
+    "ntm_control": {
+      "unit": "T/s",
+      "sampling_khz": 100,
+      "description": "MC NTM-control coils",
+      "tree": "kstar"
+    },
+    "locked_mode": {
+      "unit": "Wb",
+      "sampling_khz": 20,
+      "description": "LM locked-mode coils (radial flux, midplane); Br=Fr/0.4603",
+      "tree": "MAGNETIC"
+    },
+    "saddle_loops": {
+      "unit": "Wb",
+      "sampling_khz": 20,
+      "description": "SL saddle loops (vertical flux); 4 toroidal banks",
+      "tree": "MAGNETIC"
+    },
+    "flux_loops": {
+      "unit": "Wb",
+      "sampling_khz": 20,
+      "description": "FL poloidal flux loops",
+      "tree": "MAGNETIC"
+    },
+    "loop_voltage": {
+      "unit": "V",
+      "sampling_khz": 20,
+      "description": "LV loop voltage",
+      "tree": "MAGNETIC"
+    },
+    "poloidal_field_probes": {
+      "unit": "T",
+      "sampling_khz": 20,
+      "description": "MP integrated poloidal-field probes (Bz tangential, Br normal)",
+      "tree": "MAGNETIC"
+    },
+    "plasma_current": {
+      "unit": "A",
+      "sampling_khz": 20,
+      "description": "RC Rogowski plasma current",
+      "tree": "MAGNETIC"
+    },
+    "total_current": {
+      "unit": "A",
+      "sampling_khz": 20,
+      "description": "VCM total toroidal current",
+      "tree": "MAGNETIC"
+    }
+  },
+  "alerts": [
+    "MC Mirnov POLOIDAL array (MC1P/MC2P) per-channel angles (theta) are MISSING — the copied /PRISM/mirnov_archive covers only the toroidal (N-mode) system. Poloidal sensors are node-only. (The toroidal MC1T angles + polarity ARE populated, shot-aware, from kstar_mirnov_config.json.)",
+    "MDS trees CONFIRMED only for MC Mirnov ('kstar', from the archive) and locked-mode ('MAGNETIC', from KDT helpers.py). signal_groups[*].tree for SL/FL/LV/MP is INFERRED (MAGNETIC family) and must be confirmed before fetching those groups.",
+    "MC sampling is 2 MHz — large data volume; expect to window/decimate on pull.",
+    "MP array channel ranges (e.g. MP4P01-42) are expanded uniformly; some individual channels may not exist for a given shot. MP poloidal positions (theta/r/z) not provided.",
+    "No wall / vacuum-vessel / coil geometry for KSTAR yet (Sensors view will lack a wall).",
+    "Plasma pointnames use PCS_KSTAR (Ip, B_T) and efitrt1 (elongation/q95/betaN) per KDT; the efitrt1 elongation node itself is a best-guess ('\\kappa')."
+  ],
+  "sensors": {
+    "\\MC1T01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 2343,
+          "phi": 1.6,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 9428,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1T02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 20.35,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 35.35,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 49.3,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T05": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 70.5,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T06": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 91.6,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T07": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 110.35,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 9428,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 11725,
+          "phi": 110.35,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T08": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 132.5,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 9428,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 11725,
+          "phi": 132.5,
+          "gain": 1.0
+        }
+      ]
+    },
+    "\\MC1T09": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 2343,
+          "phi": 142.7,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 9428,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 11725,
+          "phi": 142.7,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 17377,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1T10": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 160.5,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "phi": 160.5,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 11725,
+          "phi": 160.5,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 14408,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 17377,
+          "phi": 160.5,
+          "gain": -1.0,
+          "pointname": "\\MC1P03"
+        }
+      ]
+    },
+    "\\MC1T11": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 181.6,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 9428,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 11725,
+          "phi": 181.6,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 32769,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1T12": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 200.35,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 4469,
+          "phi": 200.35,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1T13": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 215.35,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "phi": 215.35,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 215.35,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1T14": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 229.3,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "phi": 229.3,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 229.3,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1T15": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 257.3,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "phi": 257.3,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 257.3,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1T16": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 271.6,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "phi": 271.6,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 271.6,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 37742,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1T17": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 2343,
+          "phi": 290.35,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 290.35,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 9428,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1T18": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 2343,
+          "phi": 312.5,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 312.5,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 11725,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 14408,
+          "phi": 312.5,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 17377,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1T19": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 319.3,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 2343,
+          "phi": 319.3,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 4469,
+          "phi": 319.3,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1T20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 6471,
+          "phi": 343.9,
+          "gain": 1.0
+        },
+        {
+          "since_shot": 8355,
+          "pointname": "NotAvailable"
+        },
+        {
+          "since_shot": 11725,
+          "phi": 343.9,
+          "gain": -1.0
+        },
+        {
+          "since_shot": 17377,
+          "pointname": "NotAvailable"
+        }
+      ]
+    },
+    "\\MC1P01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P05": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P06": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P08": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P10": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P11": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P12": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P13": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P15": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P16": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P17": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\MC1P20": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P21": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC1P22": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC2P10": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MC2P11": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "gain": -1.0
+        }
+      ]
+    },
+    "\\PCMCTL01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 2.0
+        }
+      ]
+    },
+    "\\PCMCTL02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 92.0
+        }
+      ]
+    },
+    "\\PCMCTL05": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 182.0
+        }
+      ]
+    },
+    "\\PCMCTL09": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 212.0
+        }
+      ]
+    },
+    "\\MAGNETIC::TOP.LOCKED_MODE:LM01": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MAGNETIC::TOP.LOCKED_MODE:LM02": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MAGNETIC::TOP.LOCKED_MODE:LM03": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MAGNETIC::TOP.LOCKED_MODE:LM04": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\SL1P01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P05": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P06": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P07": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P08": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P09": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL1P10": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 67.5
+        }
+      ]
+    },
+    "\\SL2P01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P05": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P06": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P07": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P08": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P09": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL2P10": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 157.5
+        }
+      ]
+    },
+    "\\SL3P01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P05": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P06": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P07": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P08": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P09": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL3P10": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 247.5
+        }
+      ]
+    },
+    "\\SL4P01": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P02": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P05": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P06": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P07": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P08": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P09": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\SL4P10": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 337.5
+        }
+      ]
+    },
+    "\\FL01": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL02": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL03": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL04": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL05": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL06": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL07": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL08": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL09": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL10": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL11": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL12": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL13": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL14": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL15": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL16": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL17": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL18": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL19": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL20": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL21": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL22": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL23": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL24": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL25": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL26": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL27": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL28": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL29": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL30": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL31": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL32": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL33": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL34": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL35": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL36": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL37": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL38": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL39": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL40": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL41": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL42": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL43": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL44": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\FL45": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\LV01": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\LV12": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\LV23": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\LV34": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\LV45": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\MP4P01Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P02Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P03Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P04Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P05Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P06Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P07Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P08Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P09Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P10Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P11Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P12Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P13Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P14Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P15Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P16Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P17Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P18Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P19Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P20Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P21Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P22Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P23Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P24Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P25Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P26Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P27Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P28Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P29Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P30Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P31Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P32Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P33Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P34Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P35Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P36Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P37Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P38Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P39Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P40Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P41Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P42Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P01R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P02R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P03R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P04R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P05R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P06R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P07R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P08R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P09R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P10R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P11R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P12R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P13R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P14R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P15R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P16R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P17R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P18R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P19R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P20R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P21R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P22R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P23R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P24R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P25R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P26R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P27R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P28R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P29R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P30R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P31R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P32R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P33R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P34R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P35R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P36R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P37R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P38R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P39R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P40R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P41R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P42R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP1P01Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P02Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P03Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P04Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P05Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P06Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P07Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P08Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P09Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P10Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P11Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P12Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P13Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P14Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P15Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P16Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P17Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P18Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P19Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P20Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P21Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P22Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P23Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P24Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P25Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P26Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P27Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P28Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P29Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P30Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P31Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P32Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P33Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P34Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P35Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P36Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P37Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P38Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P39Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P40Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P41Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P42Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P01R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P02R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P03R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P04R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P05R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P06R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P07R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P08R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P09R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P10R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P11R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P12R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P13R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P14R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P15R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P16R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P17R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P18R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P19R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P20R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P21R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P22R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P23R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P24R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P25R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P26R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P27R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P28R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P29R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P30R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P31R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P32R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P33R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P34R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P35R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P36R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P37R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P38R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P39R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P40R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P41R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP1P42R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 31.1
+        }
+      ]
+    },
+    "\\MP4P43Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P44Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P45Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P50Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P51Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\MP4P52Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 255.9
+        }
+      ]
+    },
+    "\\PLMP01Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.0
+        }
+      ]
+    },
+    "\\PLMP02Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.0
+        }
+      ]
+    },
+    "\\PLMP03Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.0
+        }
+      ]
+    },
+    "\\PLMP04Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.0
+        }
+      ]
+    },
+    "\\MP5P01Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P02Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P03Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P04Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P05Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P06Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P07Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P08Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P09Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P10Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P11Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P12Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P13Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P14Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P15Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P16Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P17Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P18Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P19Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P20Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P21Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P22Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P23Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P24Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P25Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P26Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P27Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P28Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P29Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P30Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P31Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P32Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P33Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P34Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P35Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P36Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P37Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P38Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P39Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P40Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P41Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P42Z": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P06R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P07R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P08R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P09R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P10R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P11R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P12R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P13R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P14R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P15R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P16R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P27R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P28R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P29R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P30R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P31R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P32R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P33R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P34R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P35R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P36R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MP5P37R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 324.6
+        }
+      ]
+    },
+    "\\MPZ028U03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 28.0
+        }
+      ]
+    },
+    "\\MPZ028U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 28.0
+        }
+      ]
+    },
+    "\\MPZ028L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 28.0
+        }
+      ]
+    },
+    "\\MPZ049U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 49.0
+        }
+      ]
+    },
+    "\\MPZ049L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 49.0
+        }
+      ]
+    },
+    "\\MPZ118U03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 118.0
+        }
+      ]
+    },
+    "\\MPZ118U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 118.0
+        }
+      ]
+    },
+    "\\MPZ118L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 118.0
+        }
+      ]
+    },
+    "\\MPZ142U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 142.0
+        }
+      ]
+    },
+    "\\MPZ142L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 142.0
+        }
+      ]
+    },
+    "\\MPZ208U03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 208.0
+        }
+      ]
+    },
+    "\\MPZ208U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 208.0
+        }
+      ]
+    },
+    "\\MPZ208L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 208.0
+        }
+      ]
+    },
+    "\\MPZ229U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 229.0
+        }
+      ]
+    },
+    "\\MPZ229L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 229.0
+        }
+      ]
+    },
+    "\\MPZ298U03": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 298.0
+        }
+      ]
+    },
+    "\\MPZ298U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 298.0
+        }
+      ]
+    },
+    "\\MPZ298L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 298.0
+        }
+      ]
+    },
+    "\\MPZ322U04": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 322.0
+        }
+      ]
+    },
+    "\\MPZ322L20": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "phi": 322.0
+        }
+      ]
+    },
+    "\\RC01": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\RC02": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\RC03": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\VCM01": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\VCM02": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    },
+    "\\VCM03": {
+      "segments": [
+        {
+          "since_shot": 0
+        }
+      ]
+    }
+  },
+  "sensor_sets": {
+    "mirnov_toroidal": {
+      "type": "list",
+      "sensors": [
+        "\\MC1T01",
+        "\\MC1T02",
+        "\\MC1T03",
+        "\\MC1T04",
+        "\\MC1T05",
+        "\\MC1T06",
+        "\\MC1T07",
+        "\\MC1T08",
+        "\\MC1T09",
+        "\\MC1T10",
+        "\\MC1T11",
+        "\\MC1T12",
+        "\\MC1T13",
+        "\\MC1T14",
+        "\\MC1T15",
+        "\\MC1T16",
+        "\\MC1T17",
+        "\\MC1T18",
+        "\\MC1T19",
+        "\\MC1T20"
+      ]
+    },
+    "mirnov_poloidal": {
+      "type": "list",
+      "sensors": [
+        "\\MC1P01",
+        "\\MC1P02",
+        "\\MC1P03",
+        "\\MC1P04",
+        "\\MC1P05",
+        "\\MC1P06",
+        "\\MC1P08",
+        "\\MC1P10",
+        "\\MC1P11",
+        "\\MC1P12",
+        "\\MC1P13",
+        "\\MC1P15",
+        "\\MC1P16",
+        "\\MC1P17",
+        "\\MC1P20",
+        "\\MC1P21",
+        "\\MC1P22",
+        "\\MC2P10",
+        "\\MC2P11"
+      ]
+    },
+    "ntm_control": {
+      "type": "list",
+      "sensors": [
+        "\\PCMCTL01",
+        "\\PCMCTL02",
+        "\\PCMCTL05",
+        "\\PCMCTL09"
+      ]
+    },
+    "locked_mode": {
+      "type": "list",
+      "sensors": [
+        "\\MAGNETIC::TOP.LOCKED_MODE:LM01",
+        "\\MAGNETIC::TOP.LOCKED_MODE:LM02",
+        "\\MAGNETIC::TOP.LOCKED_MODE:LM03",
+        "\\MAGNETIC::TOP.LOCKED_MODE:LM04"
+      ]
+    },
+    "saddle_loops": {
+      "type": "list",
+      "sensors": [
+        "\\SL1P01",
+        "\\SL1P02",
+        "\\SL1P03",
+        "\\SL1P04",
+        "\\SL1P05",
+        "\\SL1P06",
+        "\\SL1P07",
+        "\\SL1P08",
+        "\\SL1P09",
+        "\\SL1P10",
+        "\\SL2P01",
+        "\\SL2P02",
+        "\\SL2P03",
+        "\\SL2P04",
+        "\\SL2P05",
+        "\\SL2P06",
+        "\\SL2P07",
+        "\\SL2P08",
+        "\\SL2P09",
+        "\\SL2P10",
+        "\\SL3P01",
+        "\\SL3P02",
+        "\\SL3P03",
+        "\\SL3P04",
+        "\\SL3P05",
+        "\\SL3P06",
+        "\\SL3P07",
+        "\\SL3P08",
+        "\\SL3P09",
+        "\\SL3P10",
+        "\\SL4P01",
+        "\\SL4P02",
+        "\\SL4P03",
+        "\\SL4P04",
+        "\\SL4P05",
+        "\\SL4P06",
+        "\\SL4P07",
+        "\\SL4P08",
+        "\\SL4P09",
+        "\\SL4P10"
+      ]
+    },
+    "flux_loops": {
+      "type": "list",
+      "sensors": [
+        "\\FL01",
+        "\\FL02",
+        "\\FL03",
+        "\\FL04",
+        "\\FL05",
+        "\\FL06",
+        "\\FL07",
+        "\\FL08",
+        "\\FL09",
+        "\\FL10",
+        "\\FL11",
+        "\\FL12",
+        "\\FL13",
+        "\\FL14",
+        "\\FL15",
+        "\\FL16",
+        "\\FL17",
+        "\\FL18",
+        "\\FL19",
+        "\\FL20",
+        "\\FL21",
+        "\\FL22",
+        "\\FL23",
+        "\\FL24",
+        "\\FL25",
+        "\\FL26",
+        "\\FL27",
+        "\\FL28",
+        "\\FL29",
+        "\\FL30",
+        "\\FL31",
+        "\\FL32",
+        "\\FL33",
+        "\\FL34",
+        "\\FL35",
+        "\\FL36",
+        "\\FL37",
+        "\\FL38",
+        "\\FL39",
+        "\\FL40",
+        "\\FL41",
+        "\\FL42",
+        "\\FL43",
+        "\\FL44",
+        "\\FL45"
+      ]
+    },
+    "loop_voltage": {
+      "type": "list",
+      "sensors": [
+        "\\LV01",
+        "\\LV12",
+        "\\LV23",
+        "\\LV34",
+        "\\LV45"
+      ]
+    },
+    "poloidal_field_probes": {
+      "type": "list",
+      "sensors": [
+        "\\MP4P01Z",
+        "\\MP4P02Z",
+        "\\MP4P03Z",
+        "\\MP4P04Z",
+        "\\MP4P05Z",
+        "\\MP4P06Z",
+        "\\MP4P07Z",
+        "\\MP4P08Z",
+        "\\MP4P09Z",
+        "\\MP4P10Z",
+        "\\MP4P11Z",
+        "\\MP4P12Z",
+        "\\MP4P13Z",
+        "\\MP4P14Z",
+        "\\MP4P15Z",
+        "\\MP4P16Z",
+        "\\MP4P17Z",
+        "\\MP4P18Z",
+        "\\MP4P19Z",
+        "\\MP4P20Z",
+        "\\MP4P21Z",
+        "\\MP4P22Z",
+        "\\MP4P23Z",
+        "\\MP4P24Z",
+        "\\MP4P25Z",
+        "\\MP4P26Z",
+        "\\MP4P27Z",
+        "\\MP4P28Z",
+        "\\MP4P29Z",
+        "\\MP4P30Z",
+        "\\MP4P31Z",
+        "\\MP4P32Z",
+        "\\MP4P33Z",
+        "\\MP4P34Z",
+        "\\MP4P35Z",
+        "\\MP4P36Z",
+        "\\MP4P37Z",
+        "\\MP4P38Z",
+        "\\MP4P39Z",
+        "\\MP4P40Z",
+        "\\MP4P41Z",
+        "\\MP4P42Z",
+        "\\MP4P01R",
+        "\\MP4P02R",
+        "\\MP4P03R",
+        "\\MP4P04R",
+        "\\MP4P05R",
+        "\\MP4P06R",
+        "\\MP4P07R",
+        "\\MP4P08R",
+        "\\MP4P09R",
+        "\\MP4P10R",
+        "\\MP4P11R",
+        "\\MP4P12R",
+        "\\MP4P13R",
+        "\\MP4P14R",
+        "\\MP4P15R",
+        "\\MP4P16R",
+        "\\MP4P17R",
+        "\\MP4P18R",
+        "\\MP4P19R",
+        "\\MP4P20R",
+        "\\MP4P21R",
+        "\\MP4P22R",
+        "\\MP4P23R",
+        "\\MP4P24R",
+        "\\MP4P25R",
+        "\\MP4P26R",
+        "\\MP4P27R",
+        "\\MP4P28R",
+        "\\MP4P29R",
+        "\\MP4P30R",
+        "\\MP4P31R",
+        "\\MP4P32R",
+        "\\MP4P33R",
+        "\\MP4P34R",
+        "\\MP4P35R",
+        "\\MP4P36R",
+        "\\MP4P37R",
+        "\\MP4P38R",
+        "\\MP4P39R",
+        "\\MP4P40R",
+        "\\MP4P41R",
+        "\\MP4P42R",
+        "\\MP1P01Z",
+        "\\MP1P02Z",
+        "\\MP1P03Z",
+        "\\MP1P04Z",
+        "\\MP1P05Z",
+        "\\MP1P06Z",
+        "\\MP1P07Z",
+        "\\MP1P08Z",
+        "\\MP1P09Z",
+        "\\MP1P10Z",
+        "\\MP1P11Z",
+        "\\MP1P12Z",
+        "\\MP1P13Z",
+        "\\MP1P14Z",
+        "\\MP1P15Z",
+        "\\MP1P16Z",
+        "\\MP1P17Z",
+        "\\MP1P18Z",
+        "\\MP1P19Z",
+        "\\MP1P20Z",
+        "\\MP1P21Z",
+        "\\MP1P22Z",
+        "\\MP1P23Z",
+        "\\MP1P24Z",
+        "\\MP1P25Z",
+        "\\MP1P26Z",
+        "\\MP1P27Z",
+        "\\MP1P28Z",
+        "\\MP1P29Z",
+        "\\MP1P30Z",
+        "\\MP1P31Z",
+        "\\MP1P32Z",
+        "\\MP1P33Z",
+        "\\MP1P34Z",
+        "\\MP1P35Z",
+        "\\MP1P36Z",
+        "\\MP1P37Z",
+        "\\MP1P38Z",
+        "\\MP1P39Z",
+        "\\MP1P40Z",
+        "\\MP1P41Z",
+        "\\MP1P42Z",
+        "\\MP1P01R",
+        "\\MP1P02R",
+        "\\MP1P03R",
+        "\\MP1P04R",
+        "\\MP1P05R",
+        "\\MP1P06R",
+        "\\MP1P07R",
+        "\\MP1P08R",
+        "\\MP1P09R",
+        "\\MP1P10R",
+        "\\MP1P11R",
+        "\\MP1P12R",
+        "\\MP1P13R",
+        "\\MP1P14R",
+        "\\MP1P15R",
+        "\\MP1P16R",
+        "\\MP1P17R",
+        "\\MP1P18R",
+        "\\MP1P19R",
+        "\\MP1P20R",
+        "\\MP1P21R",
+        "\\MP1P22R",
+        "\\MP1P23R",
+        "\\MP1P24R",
+        "\\MP1P25R",
+        "\\MP1P26R",
+        "\\MP1P27R",
+        "\\MP1P28R",
+        "\\MP1P29R",
+        "\\MP1P30R",
+        "\\MP1P31R",
+        "\\MP1P32R",
+        "\\MP1P33R",
+        "\\MP1P34R",
+        "\\MP1P35R",
+        "\\MP1P36R",
+        "\\MP1P37R",
+        "\\MP1P38R",
+        "\\MP1P39R",
+        "\\MP1P40R",
+        "\\MP1P41R",
+        "\\MP1P42R",
+        "\\MP4P43Z",
+        "\\MP4P44Z",
+        "\\MP4P45Z",
+        "\\MP4P50Z",
+        "\\MP4P51Z",
+        "\\MP4P52Z",
+        "\\PLMP01Z",
+        "\\PLMP02Z",
+        "\\PLMP03Z",
+        "\\PLMP04Z",
+        "\\MP5P01Z",
+        "\\MP5P02Z",
+        "\\MP5P03Z",
+        "\\MP5P04Z",
+        "\\MP5P05Z",
+        "\\MP5P06Z",
+        "\\MP5P07Z",
+        "\\MP5P08Z",
+        "\\MP5P09Z",
+        "\\MP5P10Z",
+        "\\MP5P11Z",
+        "\\MP5P12Z",
+        "\\MP5P13Z",
+        "\\MP5P14Z",
+        "\\MP5P15Z",
+        "\\MP5P16Z",
+        "\\MP5P17Z",
+        "\\MP5P18Z",
+        "\\MP5P19Z",
+        "\\MP5P20Z",
+        "\\MP5P21Z",
+        "\\MP5P22Z",
+        "\\MP5P23Z",
+        "\\MP5P24Z",
+        "\\MP5P25Z",
+        "\\MP5P26Z",
+        "\\MP5P27Z",
+        "\\MP5P28Z",
+        "\\MP5P29Z",
+        "\\MP5P30Z",
+        "\\MP5P31Z",
+        "\\MP5P32Z",
+        "\\MP5P33Z",
+        "\\MP5P34Z",
+        "\\MP5P35Z",
+        "\\MP5P36Z",
+        "\\MP5P37Z",
+        "\\MP5P38Z",
+        "\\MP5P39Z",
+        "\\MP5P40Z",
+        "\\MP5P41Z",
+        "\\MP5P42Z",
+        "\\MP5P06R",
+        "\\MP5P07R",
+        "\\MP5P08R",
+        "\\MP5P09R",
+        "\\MP5P10R",
+        "\\MP5P11R",
+        "\\MP5P12R",
+        "\\MP5P13R",
+        "\\MP5P14R",
+        "\\MP5P15R",
+        "\\MP5P16R",
+        "\\MP5P27R",
+        "\\MP5P28R",
+        "\\MP5P29R",
+        "\\MP5P30R",
+        "\\MP5P31R",
+        "\\MP5P32R",
+        "\\MP5P33R",
+        "\\MP5P34R",
+        "\\MP5P35R",
+        "\\MP5P36R",
+        "\\MP5P37R",
+        "\\MPZ028U03",
+        "\\MPZ028U04",
+        "\\MPZ028L20",
+        "\\MPZ049U04",
+        "\\MPZ049L20",
+        "\\MPZ118U03",
+        "\\MPZ118U04",
+        "\\MPZ118L20",
+        "\\MPZ142U04",
+        "\\MPZ142L20",
+        "\\MPZ208U03",
+        "\\MPZ208U04",
+        "\\MPZ208L20",
+        "\\MPZ229U04",
+        "\\MPZ229L20",
+        "\\MPZ298U03",
+        "\\MPZ298U04",
+        "\\MPZ298L20",
+        "\\MPZ322U04",
+        "\\MPZ322L20"
+      ]
+    },
+    "plasma_current": {
+      "type": "list",
+      "sensors": [
+        "\\RC01",
+        "\\RC02",
+        "\\RC03"
+      ]
+    },
+    "total_current": {
+      "type": "list",
+      "sensors": [
+        "\\VCM01",
+        "\\VCM02",
+        "\\VCM03"
+      ]
+    },
+    "rotating": {
+      "type": "composite",
+      "sets": [
+        "mirnov_toroidal",
+        "mirnov_poloidal"
+      ]
+    },
+    "quasi_stationary": {
+      "type": "composite",
+      "sets": [
+        "locked_mode",
+        "saddle_loops",
+        "poloidal_field_probes"
+      ]
+    }
+  },
+  "geometry_note": "MC1T toroidal: phi + polarity (gain) per shot era, from the config. MP/SL/PCMCTL/RC: per-array toroidal phi from the manual. MC1P/MC2P, FL, LM: node-only unless populated via SENSOR_GEOM in the builder (theta and/or r/z). Wall/vessel/coils emitted from FIRST_WALL / VACUUM_VESSEL / COILS when supplied."
+}

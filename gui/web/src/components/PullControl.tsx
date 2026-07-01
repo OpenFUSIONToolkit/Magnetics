@@ -7,12 +7,17 @@
 // refresh the shot list and select the new shot. Set a window (tmin/tmax) +
 // decimation to make a pull seconds instead of minutes.
 import { useEffect, useRef, useState } from "react";
-import { apiBase, fetchDevices, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
+import { apiBase, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
 import { useStore } from "../store";
 
 export default function PullControl() {
   const init = useStore((s) => s.init);
   const setMachine = useStore((s) => s.setMachine);
+  // Device is owned by the store (single source of truth) — shared with the left
+  // rail's Device picker. This form just reads/sets it.
+  const devices = useStore((s) => s.devices);
+  const device = useStore((s) => s.device);
+  const setDevice = useStore((s) => s.setDevice);
   const [shot, setShot] = useState("184927");
   const [analysis, setAnalysis] = useState("rotating");
   // Default to the fast cluster path. `mdsthin` (laptop tunnel) streams raw float
@@ -21,8 +26,9 @@ export default function PullControl() {
   const [backend, setBackend] = useState("remote");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  // Duo two-factor: a push (sends "1") or a typed passcode. A dropdown makes the
-  // choice explicit; the passcode box only appears when "passcode" is selected.
+  // Duo two-factor for the flux gateway (DIII-D / NSTX): either a push (sends "1")
+  // or a typed passcode — offered as a dropdown. A KSTAR/KFE VPN pull has no push, so
+  // its 2FA is always a typed passcode (the dropdown is hidden for that device).
   const [duoMode, setDuoMode] = useState<"push" | "passcode">("push");
   const [duoPasscode, setDuoPasscode] = useState("");
   // Prefill a sensible DIII-D flat-top window (ms): transfer time is linear in the
@@ -34,9 +40,11 @@ export default function PullControl() {
   const [decimate, setDecimate] = useState("");
   // Optional sensor-set override: "" = pull the analysis groups (default); a named
   // set (from the device's sensor_sets) overrides analysis and pulls that array.
-  const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState("");
   const [sensorSet, setSensorSet] = useState("");
+  // SSH login for devices that gateway over ssh (e.g. KSTAR). Sent to the local
+  // backend only; not stored.
+  const [sshUser, setSshUser] = useState("");
+  const [sshPassword, setSshPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [frac, setFrac] = useState(0);
   const [msg, setMsg] = useState<string | null>(null);
@@ -45,40 +53,32 @@ export default function PullControl() {
   // fire setState on an unmounted component.
   const esRef = useRef<EventSource | null>(null);
 
-  // Snap backend / sensor-set / window / shot to sensible per-device defaults. A
-  // tree device (NSTX) has no cluster and no analysis→signal map, so it must use
-  // mdsthin + a sensor set, over a NARROW window (its raw signals are ~15 MHz and
-  // seconds long — a wide window is gigabytes). Called from event handlers (device
-  // change, initial load) — NOT a synchronous effect (react-hooks/set-state-in-effect).
-  function snapDeviceDefaults(dev: DeviceInfo) {
-    const tree = dev.access === "mdsplus_tree";
-    setBackend(dev.remote_capable ? "remote" : "mdsthin");
-    setSensorSet(tree ? (dev.sensor_sets[0] ?? "") : "");
+  // Snap backend / sensor-set / window / shot to sensible per-device defaults on a
+  // device change. A tree device (NSTX/KSTAR) has no cluster and no analysis→signal
+  // map, so it uses mdsthin over a NARROW window (its raw signals are ~15 MHz and
+  // seconds long — a wide window is gigabytes). An NSTX-style tree device requires a
+  // named sensor set; KSTAR's transport defaults to its declared arrays when none is
+  // chosen. Called from the device onChange handler — NOT a synchronous effect
+  // (react-hooks/set-state-in-effect).
+  function snapDeviceDefaults(d: DeviceInfo) {
+    const tree = d.access === "mdsplus_tree";
+    setBackend(d.remote_capable ? "remote" : "mdsthin");
+    setSensorSet(tree && !d.needs_ssh_creds ? (d.sensor_sets[0] ?? "") : "");
     setTmin(tree ? "250" : "1000");
     setTmax(tree ? "350" : "5000");
-    if (dev.default_shot != null) setShot(String(dev.default_shot));
+    if (d.default_shot != null) setShot(String(d.default_shot));
   }
-
-  // load supported devices; default the picker to the first one + its defaults (the
-  // setState calls run in an async .then callback, not synchronously in the effect)
-  useEffect(() => {
-    void fetchDevices().then((ds) => {
-      setDevices(ds);
-      if (ds[0] && !deviceId) {
-        setDeviceId(ds[0].id);
-        snapDeviceDefaults(ds[0]);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // close any open pull stream when the component unmounts
   useEffect(() => () => esRef.current?.close(), []);
-  const device = devices.find((d) => d.id === deviceId);
-  // A tree device (NSTX/NSTX-U) pulls ONLY via mdsthin + a named sensor set; only a
-  // device with a cluster block can use the fast `remote` backend (DIII-D).
-  const isTree = device?.access === "mdsplus_tree";
-  const remoteCapable = device?.remote_capable ?? false;
+  // Device is owned by the store; derive its capabilities. A tree device (NSTX/KSTAR)
+  // pulls via mdsthin/its own transport; only a device with a network.cluster block
+  // can use the fast `remote` backend (DIII-D); a `connection` block means a
+  // device-specific VPN+SSH transport (KSTAR).
+  const dev = devices.find((d) => d.id === device);
+  const isTree = dev?.access === "mdsplus_tree";
+  const remoteCapable = dev?.remote_capable ?? false;
+  const needsSshCreds = dev?.needs_ssh_creds ?? false;
 
   if (!usingLiveBackend()) return null;
   const needsCreds = backend === "remote" || backend === "mdsthin";
@@ -95,14 +95,17 @@ export default function PullControl() {
         backend,
         username: username || undefined,
         password: password || undefined,
-        duo: duoMode === "push" ? "1" : duoPasscode || undefined,
+        // KSTAR: always a typed passcode. Flux (DIII-D/NSTX): push → "1", else passcode.
+        duo: !needsSshCreds && duoMode === "push" ? "1" : duoPasscode || undefined,
         tmin: num(tmin),
         tmax: num(tmax),
         decimate: num(decimate),
         // device drives the gateway/server + which sensor_sets exist; a chosen
         // sensor-set overrides the analysis groups (backend semantics).
-        device: deviceId || undefined,
+        device: device || undefined,
         sensor_set: sensorSet || undefined,
+        ssh_user: sshUser || undefined,
+        ssh_password: sshPassword || undefined,
       });
       esRef.current?.close();  // close a prior stream if one is somehow still open
       const es = new EventSource(`${apiBase()}/api/fetch/${job_id}/stream`);
@@ -139,10 +142,10 @@ export default function PullControl() {
     <div className="rail-section">
       <h3>Pull a shot (live)</h3>
       {devices.length > 0 && (
-        <select className="pull-input" value={deviceId} aria-label="device"
+        <select className="pull-input" value={device} aria-label="device"
           onChange={(e) => {
             const d = devices.find((x) => x.id === e.target.value);
-            setDeviceId(e.target.value);
+            setDevice(e.target.value);
             if (d) snapDeviceDefaults(d);
           }}>
           {devices.map((d) => (
@@ -158,14 +161,16 @@ export default function PullControl() {
         <option value="quasi-stationary">quasi-stationary</option>
         <option value="both">both</option>
       </select>
-      {device && device.sensor_sets.length > 0 && (
+      {dev && dev.sensor_sets.length > 0 && (
         <>
           <select className="pull-input" value={sensorSet}
             onChange={(e) => setSensorSet(e.target.value)}>
-            {/* a tree device (NSTX) has no analysis groups — a sensor set is required */}
-            {!isTree && <option value="">— by analysis (above) —</option>}
-            <optgroup label={`${device.name} sensor sets`}>
-              {device.sensor_sets.map((s) => (
+            {/* NSTX-style tree devices have no analysis→signal map, so a sensor set
+                is required; other devices (incl. KSTAR, which defaults to its declared
+                arrays) can pull "by analysis". */}
+            {!(isTree && !needsSshCreds) && <option value="">— by analysis (above) —</option>}
+            <optgroup label={`${dev.name} sensor sets`}>
+              {dev.sensor_sets.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </optgroup>
@@ -178,14 +183,21 @@ export default function PullControl() {
           )}
         </>
       )}
-      <select className="pull-input" value={backend}
-        onChange={(e) => setBackend(e.target.value)}>
-        {remoteCapable && <option value="remote">remote (cluster · fast)</option>}
-        <option value="mdsthin">
-          mdsthin ({isTree ? "MDSplus tree · direct" : "laptop · slow, no cluster"})
-        </option>
-        {remoteCapable && <option value="auto">auto</option>}
-      </select>
+      {/* Transport devices (KSTAR) reach MDS over their own VPN tunnel, so the
+          cluster/mdsthin backend choice doesn't apply — hide it. Otherwise offer the
+          backends the device supports: remote/auto only when it has a cluster block. */}
+      {needsSshCreds ? (
+        <div className="note pull-hint">via the {dev?.name} VPN tunnel</div>
+      ) : (
+        <select className="pull-input" value={backend}
+          onChange={(e) => setBackend(e.target.value)}>
+          {remoteCapable && <option value="remote">remote (cluster · fast)</option>}
+          <option value="mdsthin">
+            mdsthin ({isTree ? "MDSplus tree · direct" : "laptop · slow, no cluster"})
+          </option>
+          {remoteCapable && <option value="auto">auto</option>}
+        </select>
+      )}
 
       {/* speed knobs — a window + decimation make a pull seconds instead of minutes */}
       <div className="pull-row">
@@ -205,28 +217,53 @@ export default function PullControl() {
       {needsCreds && (
         <>
           <div className="note pull-hint">
-            the data host + gateway are built in — enter your{" "}
-            {device ? device.name : "site"} username; leave password blank if key/Duo
-            auth is set up (else password + Duo)
+            {needsSshCreds
+              ? "KFE VPN login — username, password, and a 2FA passcode (never push)"
+              : `the data host + gateway are built in — enter your ${dev ? dev.name : "site"} username; leave password blank if key/Duo auth is set up (else password + Duo)`}
           </div>
           <input className="pull-input" value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="username" autoComplete="username" />
+            placeholder={needsSshCreds ? "KFE VPN username" : "username"}
+            autoComplete="username" />
           <input className="pull-input" type="password" value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="password (blank if key/Duo auth)"
+            placeholder={needsSshCreds ? "KFE VPN password" : "password (blank if key/Duo auth)"}
             autoComplete="current-password" />
-          <div className="note pull-hint">Duo two-factor</div>
-          <select className="pull-input" value={duoMode} aria-label="Duo authentication"
-            onChange={(e) => setDuoMode(e.target.value as "push" | "passcode")}>
-            <option value="push">Push notification</option>
-            <option value="passcode">Enter passcode…</option>
-          </select>
-          {duoMode === "passcode" && (
+          {needsSshCreds ? (
+            // KFE VPN: no push — the 2FA is always a typed passcode.
             <input className="pull-input" value={duoPasscode}
               onChange={(e) => setDuoPasscode(e.target.value)}
-              placeholder="Duo passcode" inputMode="numeric" autoComplete="one-time-code" />
+              placeholder="2FA passcode" inputMode="numeric" autoComplete="one-time-code" />
+          ) : (
+            <>
+              <div className="note pull-hint">Duo two-factor</div>
+              <select className="pull-input" value={duoMode} aria-label="Duo authentication"
+                onChange={(e) => setDuoMode(e.target.value as "push" | "passcode")}>
+                <option value="push">Push notification</option>
+                <option value="passcode">Enter passcode…</option>
+              </select>
+              {duoMode === "passcode" && (
+                <input className="pull-input" value={duoPasscode}
+                  onChange={(e) => setDuoPasscode(e.target.value)}
+                  placeholder="Duo passcode" inputMode="numeric" autoComplete="one-time-code" />
+              )}
+            </>
           )}
+        </>
+      )}
+
+      {dev?.needs_ssh_creds && (
+        <>
+          <div className="note pull-hint">{dev.name} SSH login</div>
+          {dev.connect_note && (
+            <div className="note pull-hint">{dev.connect_note}</div>
+          )}
+          <input className="pull-input" value={sshUser}
+            onChange={(e) => setSshUser(e.target.value)}
+            placeholder={`${dev.name} SSH user`} autoComplete="username" />
+          <input className="pull-input" type="password" value={sshPassword}
+            onChange={(e) => setSshPassword(e.target.value)}
+            placeholder={`${dev.name} SSH password`} autoComplete="current-password" />
         </>
       )}
       <button className="pull-btn" disabled={busy} onClick={pull}>
