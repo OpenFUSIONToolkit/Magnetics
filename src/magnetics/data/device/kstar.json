@@ -489,7 +489,8 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 5.0
         }
       ]
     },
@@ -497,7 +498,8 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 20.0
         }
       ]
     },
@@ -513,14 +515,16 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 50.0
         }
       ]
     },
     "\\MC1P05": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 68.0
         }
       ]
     },
@@ -528,14 +532,16 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 82.0
         }
       ]
     },
     "\\MC1P08": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 112.0
         }
       ]
     },
@@ -543,7 +549,8 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 158.0
         }
       ]
     },
@@ -551,21 +558,24 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 180.0
         }
       ]
     },
     "\\MC1P12": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 202.0
         }
       ]
     },
     "\\MC1P13": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 220.0
         }
       ]
     },
@@ -573,14 +583,16 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 250.0
         }
       ]
     },
     "\\MC1P16": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 265.0
         }
       ]
     },
@@ -588,28 +600,32 @@
       "segments": [
         {
           "since_shot": 0,
-          "gain": -1.0
+          "gain": -1.0,
+          "theta": 278.0
         }
       ]
     },
     "\\MC1P20": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 320.0
         }
       ]
     },
     "\\MC1P21": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 338.0
         }
       ]
     },
     "\\MC1P22": {
       "segments": [
         {
-          "since_shot": 0
+          "since_shot": 0,
+          "theta": 352.0
         }
       ]
     },

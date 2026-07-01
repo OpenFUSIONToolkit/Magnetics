@@ -107,3 +107,20 @@ def test_kstar_mode_number_recovers_ground_truth(kstar_shot):
     finite = z[np.isfinite(z)]
     assert finite.size > 0
     assert np.all(np.abs(finite) <= 10)  # sane toroidal mode numbers
+
+
+# ── poloidal array (MC1P θ from the KSTAR manual) ────────────────────────────
+def test_kstar_poloidal_array_resolves(kstar_shot):
+    """The manual-derived MC1P θ populates the poloidal array, so _poloidal_arr
+    resolves ≥4 probes with distinct, sorted θ — previously it raised."""
+    arr = nodes._poloidal_arr(kstar_shot)
+    assert len(arr) >= 4
+    thetas = [th for _, th in arr]
+    assert thetas == sorted(thetas)
+    assert max(thetas) - min(thetas) > 90.0  # spans a real poloidal range
+
+
+def test_kstar_poloidal_shape_node(kstar_shot):
+    n = nodes.build_node(kstar_shot, "poloidal_shape")
+    assert n["kind"] == "line"
+    assert {s["name"] for s in n["series"]} >= {"Re", "Im"}

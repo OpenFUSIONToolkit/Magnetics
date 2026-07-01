@@ -116,18 +116,19 @@ def _channels(shot: int, *, include_qs: bool) -> list[Channel]:
 
 
 def _kstar_channels(shot: int, dev: dict) -> list["Channel"]:
-    """Fabricated dBz/dt for KSTAR's MC1T toroidal array, using the committed
-    shot-aware geometry (φ + polarity gain) from the device table. Channel names
-    are the exact ``mirnov_toroidal`` sensor-set keys so ``_set_channels`` matches."""
+    """Fabricated dBz/dt for KSTAR's MC1T toroidal + MC1P poloidal arrays, using the
+    committed shot-aware geometry (φ + polarity gain for MC1T, θ for MC1P) from the
+    device table. Channel names are the exact sensor-set keys so ``_set_channels``
+    matches. The poloidal array carries the m-component so ``_poloidal_arr`` resolves."""
     from magnetics.data import devices
 
     n = int(_FS * _DURATION)
     t_ms = np.linspace(0.0, _DURATION * 1e3, n, endpoint=False)
     t_s = t_ms * 1e-3
 
-    tor = dev["sensor_sets"]["mirnov_toroidal"]["sensors"]
     chans: list[Channel] = []
-    for nm in tor:
+    # Toroidal array — φ + polarity, θ=0 (midplane).
+    for nm in dev["sensor_sets"]["mirnov_toroidal"]["sensors"]:
         if devices.pointname_at(dev, nm, shot) == "NotAvailable":
             continue
         g = devices.geometry_at(dev, nm, shot) or {}
@@ -135,6 +136,18 @@ def _kstar_channels(shot: int, dev: dict) -> list["Channel"]:
             continue  # no toroidal angle at this shot → fetcher would skip it
         gain = float(g.get("gain", 1.0))
         sig = gain * _sensor_signal(t_s, float(g["phi"]), 0.0)
+        chans.append(Channel(nm, t_ms.copy(), sig.astype(np.float32), ok=True))
+
+    # Poloidal array — θ spread (one toroidal location; φ constant), so the m-fit
+    # nodes (poloidal_phase_fit / poloidal_shape / mode_pattern) have real geometry.
+    for nm in dev["sensor_sets"]["mirnov_poloidal"]["sensors"]:
+        if devices.pointname_at(dev, nm, shot) == "NotAvailable":
+            continue
+        g = devices.geometry_at(dev, nm, shot) or {}
+        if g.get("theta") is None:
+            continue  # no poloidal angle populated yet → skip (as _set_channels would)
+        gain = float(g.get("gain", 1.0))
+        sig = gain * _sensor_signal(t_s, 0.0, float(g["theta"]))
         chans.append(Channel(nm, t_ms.copy(), sig.astype(np.float32), ok=True))
 
     # A κ trace so the plasma-context path has something to read (fabricated).

@@ -37,8 +37,35 @@ GROUPMETA: dict = {}
 #   (r, z[, tilt, length, delta_phi]) for the QS groups (LM/SL/MP) so the
 #   SLCONTOUR fit and R-Z map light up.
 SENSOR_GEOM: dict[str, dict] = {
-    # "MC1P01": {"theta": 10.0},                  # poloidal angle only
-    # "MC1P02": {"r": 2.34, "z": 0.19},           # r/z -> theta derived downstream
+    # ── MC poloidal Mirnov array: θ (deg) read from the R-Z channel-layout figure
+    # in the KSTAR Diagnostics Data User Guide v.20241211, p.31-32 ("Magnetic
+    # Diagnostics - MC", poloidal cross-section). θ is measured CCW about the
+    # magnetic axis from the outboard midplane (matching nodes/_slcontour), figure
+    # position N → MC1P<NN>. APPROXIMATE (±~10°): the manual shows the array only
+    # schematically — no numeric R/Z/θ table exists. Good enough for the poloidal
+    # mode-number (m) fit, which depends on angular ordering/spacing; refine from
+    # the EFIT/CAD sensor file if exact values are needed.
+    # (MC1P03 is omitted: the manual notes \MC1P03 carries the renamed *toroidal*
+    #  \MC1T10 signal, so it is not a poloidal coil — see build note on p.33.)
+    "MC1P01": {"theta": 5.0},
+    "MC1P02": {"theta": 20.0},
+    "MC1P04": {"theta": 50.0},
+    "MC1P05": {"theta": 68.0},
+    "MC1P06": {"theta": 82.0},
+    "MC1P08": {"theta": 112.0},
+    "MC1P10": {"theta": 158.0},
+    "MC1P11": {"theta": 180.0},
+    "MC1P12": {"theta": 202.0},
+    "MC1P13": {"theta": 220.0},
+    "MC1P15": {"theta": 250.0},
+    "MC1P16": {"theta": 265.0},
+    "MC1P17": {"theta": 278.0},
+    "MC1P20": {"theta": 320.0},
+    "MC1P21": {"theta": 338.0},
+    "MC1P22": {"theta": 352.0},
+    # QS groups (LM/SL/MP) need r/z for the SLCONTOUR fit; the manual gives only
+    # toroidal angles + a schematic poloidal layout (LM at midplane; SL in 4 banks),
+    # NOT numeric R/Z — so they stay unpopulated pending the EFIT/CAD source, e.g.:
     # "\\MAGNETIC::TOP.LOCKED_MODE:LM01": {"r": 2.30, "z": 0.0, "phi": 0.0},
 }
 # First-wall / vessel / coil contours (metres). Emitted only when non-empty, so
