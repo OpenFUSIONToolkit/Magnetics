@@ -146,7 +146,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [colormapChoice, setColormapChoice] = useState<"rdbu" | "cividis" | "viridis">("rdbu");
 
   // ── Advanced fit-tuning settings ───────────────────────────────────
-  const [uncertainty, setUncertainty]   = useState("0.00002");
+  const [uncertainty, setUncertainty]   = useState("2e-5");
   const [energyFraction, setEnergyFraction] = useState("0.98");
   const [fitBasis, setFitBasis]         = useState("sinusoidal-integral");
   const [fitCond, setFitCond]           = useState("10.0");
