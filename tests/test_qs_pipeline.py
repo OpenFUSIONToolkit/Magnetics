@@ -55,3 +55,43 @@ def test_fit_quality_reports_a_real_fit_not_the_fallback(synthetic_shot):
     node = nodes.build_node(synthetic_shot, "fit_quality")
     labels = {f["label"] for f in node["fields"]}
     assert any("χ²" in lab or "chi" in lab.lower() for lab in labels), labels
+
+
+def test_qs_fit_recovers_injected_mode_amplitudes(synthetic_shot):
+    """Correctness, not just finiteness: the synthetic shot injects two rotating
+    modes whose *midplane* footprint is a (near-)pure n=1 pattern (amplitude 1.0)
+    plus a pure n=2 pattern (0.6). Two facts make the fit a clean toroidal
+    decomposition: (a) the generator places the ``Bp_LFS_midplane`` sensors at
+    θ≈0 (``diiid.real_theta_of``), so MODE1's poloidal m=1 term contributes
+    negligibly to the injected signal; (b) the default fit basis is ms=(0,), whose
+    ``exp(-i·nφ)`` harmonics are θ-independent — so the sensors' SLCONTOUR mounting
+    θ (``theta_end1``≈5.7°) never enters the projection. The SVD spatial fit must
+    recover that: power lands on n=1 and n=2 in the injected ratio, and the
+    unforced n=3 basis mode stays spurious (the ~6% ratio error comes from the
+    non-orthogonal discrete φ sampling + the seeded noise floor). This inverts a
+    genuinely different operation (least-squares over the sensor geometry) than the
+    forward model that generated the signals, so agreement is a real check on the
+    fit — not a tautology.
+
+    Guards the gap the finiteness tests above leave open: a *wrong-but-finite* fit
+    (mode power on the wrong n, or n=3 leakage) passes those and fails this. Note
+    the ratio cancels any uniform mis-scaling, so a global-amplitude regression is
+    out of scope here."""
+    from synthetic_shot import _MODE1, _MODE2
+
+    node = nodes.build_node(synthetic_shot, "amplitude")
+    # Time-mean amplitude per fitted mode (|coeff| oscillates as the mode rotates;
+    # the mean is the stable envelope). Default fit basis is ns=(1,2,3), ms=(0,).
+    amp = {s["name"]: float(np.mean(s["y"])) for s in node["series"]}
+    assert set(amp) == {"n=1", "n=2", "n=3"}, amp
+
+    # n=1 and n=2 carry essentially all the power; the unforced n=3 is negligible.
+    assert amp["n=3"] < 0.1 * amp["n=2"], f"n=3 not spurious: {amp}"
+
+    # The recovered amplitude ratio tracks the injected ratio (1.0 / 0.6). The
+    # noise is seeded, so this is deterministic; the tolerance covers SVD/BLAS drift.
+    injected_ratio = _MODE1.amp / _MODE2.amp
+    recovered_ratio = amp["n=1"] / amp["n=2"]
+    assert recovered_ratio == pytest.approx(injected_ratio, rel=0.2), (
+        f"recovered n=1/n=2 ratio {recovered_ratio:.3f} != injected {injected_ratio:.3f}"
+    )

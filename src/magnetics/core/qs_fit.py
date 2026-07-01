@@ -33,8 +33,6 @@ import re
 import numpy as np
 import xarray as xr
 
-from .qs_device import is_device
-
 logger = logging.getLogger(__name__)
 
 
@@ -286,11 +284,6 @@ def fit(
         nms_arr = np.array(nms)
         _ncycle = _mcycle = 0
         _nepsilon = _mepsilon = np.inf
-
-        if is_device(ds.attrs.get("device", ""), "DIII-D"):
-            if any(re.match(k, c) for k in ("C.*", "IL.*", "IU.*") for c in channels):
-                if fit_basis != "sinusoidal-point":
-                    logger.warning("sinusoidal-point basis is used by DIII-D 3D coil operators")
 
     elif is_gaussian:
         # Derive RBF centres from sensor extent (mirrors OMFIT gaussian setup block)

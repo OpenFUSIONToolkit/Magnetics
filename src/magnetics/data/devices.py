@@ -41,6 +41,35 @@ def load_device(device: str) -> dict:
         return json.load(f)
 
 
+@lru_cache(maxsize=1)
+def _name_to_id() -> dict[str, str]:
+    """Map each device file's display ``name`` -> its config id (the file stem)."""
+    out: dict[str, str] = {}
+    for p in DEVICE_DIR.glob("*.json"):
+        try:
+            with open(p) as f:
+                name = json.load(f).get("name")
+        except Exception:
+            continue
+        if name:
+            out[name] = p.stem
+    return out
+
+
+def resolve_device_id(name_or_id: str | None) -> str | None:
+    """Resolve a device display name (``"NSTX/NSTX-U"``) OR config id (``"nstx"``) to
+    the config id (the device file stem). This is the bridge for shot files that store
+    the human ``device`` name but where ``load_device`` keys on the id. Returns None
+    if nothing matches.
+    """
+    if not name_or_id:
+        return None
+    key = str(name_or_id)
+    if (DEVICE_DIR / f"{key.lower()}.json").exists():
+        return key.lower()  # already an id
+    return _name_to_id().get(key)
+
+
 def _segments(item: dict | None) -> list[dict]:
     """The segment list of a hardware item, tolerating a legacy flat record
     (treated as one open-ended segment) so callers work pre/post migration."""
