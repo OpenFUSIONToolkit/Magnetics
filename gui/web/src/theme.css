@@ -99,12 +99,22 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .rail-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .rail-section h3 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); font-weight: 600; }
 
+/* shot-list header: title + clear-all */
+.rail-head { display: flex; align-items: baseline; justify-content: space-between; }
+.rail-clear { margin: 0 0 8px; background: none; border: none; cursor: pointer; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; color: var(--text-dim); padding: 0; }
+.rail-clear:hover { color: var(--danger, #e5484d); }
+
 /* shot selector */
-.machine-item { padding: 7px 9px; border-radius: 4px; cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; }
+.machine-item { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-radius: 4px; cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; }
 .machine-item:hover { background: var(--panel-2); }
 .machine-item.active { background: var(--panel-2); border-color: var(--accent); }
+.machine-main { flex: 1; min-width: 0; }
 .machine-item .id { font-family: "IBM Plex Mono", monospace; font-weight: 600; }
 .machine-item .note { color: var(--text-dim); font-size: 11px; }
+/* per-shot delete (×): dim until the row is hovered, red on hover */
+.machine-del { flex: none; background: none; border: none; cursor: pointer; color: var(--text-dim); font-size: 16px; line-height: 1; padding: 0 2px; opacity: 0; transition: opacity 0.1s; }
+.machine-item:hover .machine-del { opacity: 0.7; }
+.machine-del:hover { opacity: 1 !important; color: var(--danger, #e5484d); }
 
 /* tabs */
 .tabbar { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }

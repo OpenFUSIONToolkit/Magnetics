@@ -9,8 +9,8 @@ does the whole round trip over a single authenticated SSH connection:
   2. rsync the fetcher (toksearch_fetch.py + magnetics_signals.py) up;
   3. run the fetcher there with the cluster env's interpreter directly -- PTDATA is
      local and `toksearch_d3d` reads it natively (benchmarked ~5-7x faster than
-     mdsip), then writes a compact (lzf) .h5;
-  4. rsync that .h5 back into the local data/datafile/ dir.
+     mdsip), then writes a compact (lzf) .h5 to node-local /tmp (off the home quota);
+  4. rsync that .h5 back into the local data/datafile/ dir, then delete the /tmp copy.
 
 Why this beats the laptop mdsthin pull: only the *compressed* .h5 crosses the tunnel
 (~80 MB) instead of ~370 MB of raw float over mdsip. Measured end-to-end ~21-24s
@@ -58,7 +58,14 @@ LOCAL_OUT = h5source.data_dir() / "datafile"  # where pulled .h5 land locally
 # fallback when the device omits a field. Explicit args / CLI flags override both.
 DEFAULT_HOST = "omega.gat.com"  # real cluster host (no ~/.ssh/config alias needed)
 DEFAULT_JUMP = "cybele.gat.com:2039"  # gateway ProxyJump to reach the cluster
-DEFAULT_DIR = "~/magnetics_fetch"
+DEFAULT_DIR = "~/magnetics_fetch"  # code sync dir (small: just the package)
+# Where the transient .h5 is staged on the cluster before it is copied back. The
+# file is written, rsync'd home, and deleted -- it never needs to persist -- so we
+# stage it in node-local /tmp instead of the home dir, whose quota an ~80 MB pull
+# (accumulating across runs) otherwise blows ([Errno 122] Disk quota exceeded).
+# A per-user suffix (`_<username>`) is appended at run time so pulls from different
+# users on the shared login node don't collide -- see run_remote.
+DEFAULT_OUT_STAGE = "/tmp/magnetics_out"
 # Invoke the cluster env's interpreter DIRECTLY -- no `module load` / `conda activate`
 # (its activate.d scripts set nothing PTDATA needs; direct is ~4-5s faster per pull).
 DEFAULT_PYTHON = "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
@@ -79,6 +86,7 @@ def run_remote(
     password=None,
     duo=None,
     remote_dir=DEFAULT_DIR,
+    out_stage=None,
     python=None,
     tmin=None,
     tmax=None,
@@ -99,6 +107,7 @@ def run_remote(
     empty string to force none (e.g. an ssh-config alias that carries its own
     ProxyJump)."""
     login = cluster_login(device)
+    out_stage_base = (out_stage or DEFAULT_OUT_STAGE).rstrip("/")
     host = host or login["host"] or DEFAULT_HOST
     port = login["port"]  # cluster SSH port (22 unless the device overrides it)
     python = python or login["python"] or DEFAULT_PYTHON
@@ -138,9 +147,23 @@ def run_remote(
                 "username / password / Duo)."
             )
 
-        # 2) ensure the remote dir exists, then rsync the fetcher up.
-        out_remote = f"{remote_dir}/out"
-        run([*reuse, target, f"mkdir -p {remote_dir} {out_remote}"], check=True)
+        # Make the /tmp stage per-user so concurrent pulls on the SHARED login node
+        # don't collide: the username goes in the top-level dir name (created
+        # directly in sticky-bit /tmp, so each user owns their own entry) rather
+        # than a subdir under one shared parent (whose owner others can't write to).
+        # Prefer the known GA username; else ask the cluster -- `id -un` reads the
+        # name from the UID, so it works even when $USER/$LOGNAME are unset in this
+        # non-login ssh command shell (the reason `echo $USER` comes back empty).
+        stage_user = username
+        if not stage_user:
+            who = run([*reuse, target, "id -un"], capture_output=True, text=True)
+            stage_user = who.stdout.strip() if who.returncode == 0 else ""
+        out_stage = f"{out_stage_base}_{stage_user}" if stage_user else out_stage_base
+
+        # 2) ensure the code sync dir + the /tmp output stage exist, then rsync the
+        #    fetcher up. The .h5 is staged in out_stage (node-local /tmp), off the
+        #    home quota; only the small package lives under remote_dir.
+        run([*reuse, target, f"mkdir -p {remote_dir} {out_stage}"], check=True)
         _log(f"Syncing {PKG_NAME} package → {target}:{remote_dir}/ ...")
         rsh = f"ssh -o ControlPath={sock}"  # rsync reuses the master connection
         run(
@@ -157,8 +180,10 @@ def run_remote(
             check=True,
         )
 
-        # 3) run the pull on the cluster via the env interpreter directly.
-        remote_out = f"out/shot_{shot}.h5"
+        # 3) run the pull on the cluster via the env interpreter directly. --out is
+        #    an ABSOLUTE path in the /tmp stage, so it lands there regardless of the
+        #    `cd {remote_dir}` the inner command does for the package imports.
+        remote_out = f"{out_stage}/shot_{shot}.h5"
         fetch = [
             python,
             "-m",
@@ -193,14 +218,21 @@ def run_remote(
         if run([*reuse, target, inner]).returncode != 0:
             sys.exit("remote fetch failed.")
 
-        # 4) copy the result back.
+        # 4) copy the result back (remote_out is already an absolute /tmp path).
         out_dir = Path(local_out_dir) if local_out_dir else LOCAL_OUT
         out_dir.mkdir(parents=True, exist_ok=True)
         local_path = out_dir / f"shot_{shot}.h5"
         _log(f"Copying result → {local_path} ...")
         run(
-            ["rsync", "-az", "-e", rsh, f"{target}:{remote_dir}/{remote_out}", str(local_path)],
+            ["rsync", "-az", "-e", rsh, f"{target}:{remote_out}", str(local_path)],
             check=True,
+        )
+        # Remove the staged copy now that it's home -- /tmp is roomy but shared, so
+        # don't leave ~80 MB per pull lying around for the next user/run.
+        run(
+            [*reuse, target, f"rm -f {shlex.quote(remote_out)}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         if progress:
             progress(1.0, f"done: {local_path.name}")

@@ -3,7 +3,12 @@
 // rotating views (VISION §6.4). Views read what they need and render nodes from
 // the API; heavy data stays in the nodes, not here.
 import { create } from "zustand";
-import { fetchMachines, type MachineInfo } from "./lib/api";
+import {
+  deleteAllMachines,
+  deleteMachine,
+  fetchMachines,
+  type MachineInfo,
+} from "./lib/api";
 
 export type TabId = "sensors" | "qs" | "rotating";
 export type Theme = "dark" | "light";
@@ -34,6 +39,8 @@ interface State {
   theme: Theme;
 
   init: () => Promise<void>;
+  removeMachine: (id: string) => Promise<void>;
+  clearMachines: () => Promise<void>;
   setMachine: (id: string) => void;
   setTab: (t: TabId) => void;
   setCursorMs: (t: number) => void;
@@ -55,6 +62,23 @@ export const useStore = create<State>((set) => ({
       loadingMachines: false,
       machine: s.machine ?? machines[0]?.id ?? null,
     }));
+  },
+  // Delete one shot's data, then re-list. If the removed shot was selected, fall
+  // back to the first remaining machine (or none).
+  async removeMachine(id) {
+    await deleteMachine(id);
+    const machines = await fetchMachines();
+    set((s) => ({
+      machines,
+      machine: s.machine === id ? (machines[0]?.id ?? null) : s.machine,
+    }));
+  },
+  // Delete every fetched shot, then re-list and reselect (the backend falls back
+  // to demo machines when no real data remains).
+  async clearMachines() {
+    await deleteAllMachines();
+    const machines = await fetchMachines();
+    set({ machines, machine: machines[0]?.id ?? null });
   },
   setMachine: (id) => set({ machine: id }),
   setTab: (t) => set({ tab: t }),

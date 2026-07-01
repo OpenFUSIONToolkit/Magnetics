@@ -19,6 +19,7 @@ export interface MachineInfo {
   device: string; // "DIII-D" | "NSTX-U" | "synthetic"
   note?: string;
   synthetic?: boolean;
+  mock?: boolean; // true = built-in demo machine (no data on disk, not deletable)
 }
 
 /** List available machines/shots. */
@@ -125,6 +126,21 @@ export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
   });
   if (!res.ok) throw new Error(`pull failed (${res.status}): ${await res.text()}`);
   return res.json();
+}
+
+/** Delete one shot's underlying data files from the backend. Requires a live
+ * backend (there is nothing to delete against the static mock). */
+export async function deleteMachine(shot: string): Promise<void> {
+  if (!API_BASE) throw new Error("set VITE_API_BASE to manage live data");
+  const res = await fetch(`${API_BASE}/api/machines/${shot}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete failed (${res.status}): ${await res.text()}`);
+}
+
+/** Delete ALL fetched shot data (the "clear all"). Requires a live backend. */
+export async function deleteAllMachines(): Promise<void> {
+  if (!API_BASE) throw new Error("set VITE_API_BASE to manage live data");
+  const res = await fetch(`${API_BASE}/api/machines`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`clear failed (${res.status}): ${await res.text()}`);
 }
 
 // ── helpers ──
