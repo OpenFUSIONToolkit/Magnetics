@@ -1,4 +1,4 @@
-"""Shot loader — reads the per-shot HDF5 file and the device JSON.
+"""A port of the OMFIT magnetics *fetch* + *init* scripts — the QS pipeline's load step.
 
 Replaces the old "fetch" step (and the netCDF ``RAW``/``PLASMA_PARAMS``/
 ``COUPLING`` loader).  Inputs now come from the project-canonical locations:

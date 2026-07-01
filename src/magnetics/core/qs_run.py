@@ -1,4 +1,4 @@
-"""Port of ``SCRIPTS/run_magnetics.py`` — the load -> prep -> fit orchestrator.
+"""A port of the OMFIT magnetics *run* script — the QS pipeline's orchestration step (drives load -> prep -> fit).
 
 OMFIT's ``run_steps`` loops over channel filters, running fetch/prep/fit for
 each and (optionally) plotting the mode dynamics.  Locally "fetch" is just the

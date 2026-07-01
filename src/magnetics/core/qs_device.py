@@ -15,6 +15,11 @@ needs and that have no home in ``data/``:
 Replaces the old ``_slcontour/omfit_compat.py`` OMFIT shim (deleted). This module does
 not read the device JSON itself — it routes through ``data.devices`` so the QS pipeline
 and the fetcher can never disagree about a shot's geometry.
+
+Kept as a standalone leaf (not folded into ``qs_io_data``) because it is *shared* device
+metadata: ``qs_prep``, ``qs_fit``, ``qs_plots`` and ``service.nodes`` all import from it,
+not just the shot loader — so a separate module keeps those consumers from depending on
+``qs_io_data`` (the HDF5 loader) just to reach ``is_device`` / ``load_wall``.
 """
 
 from __future__ import annotations

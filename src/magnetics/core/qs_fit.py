@@ -1,4 +1,4 @@
-"""Port of ``SCRIPTS/fit_magnetics.py`` — the SLCONTOUR-style spatial fit.
+"""A port of the OMFIT magnetics *fit* script — the QS pipeline's fit step.
 
 This is the heart of the quasi-stationary analysis (VISION.md S4.1).  At each
 time slice it fits the spatial field pattern with either a cylindrical-Fourier

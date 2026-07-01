@@ -1,4 +1,4 @@
-"""Standalone matplotlib plots for the quasi-stationary (SLCONTOUR) pipeline.
+"""A port of the OMFIT magnetics *plot* scripts — the QS pipeline's visualization step.
 
 These are **not** wired into the GUI/service. The FastAPI service serves JSON
 ``kind``-nodes built by :mod:`magnetics.core.qs_bridge`, which only *ports* these

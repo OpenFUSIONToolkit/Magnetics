@@ -1,7 +1,7 @@
-"""Adapt fit.py's xarray Dataset output → GUI kind-node dicts.
+"""Adapt the ``qs_fit`` xarray Dataset output → GUI kind-node dicts.
 
 Pure output-side bridge — no data loading, no fit logic. Takes the Dataset
-produced by ``magnetics-code/fit.fit()`` (or any equivalent) and converts it
+produced by ``qs_fit.fit()`` (or any equivalent) and converts it
 to the JSON contract consumed by the GUI's NodeView / Plot components.
 
 Input contract (fit Dataset variables):

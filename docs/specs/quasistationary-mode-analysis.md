@@ -1,4 +1,4 @@
-# Quasi-stationary mode analysis (SLCONTOUR) — pipeline details
+# Quasi-stationary mode analysis (SLCONTOUR-style) — pipeline details
 
 The **quasi-stationary** path analyses locked and slowly-rotating MHD modes by fitting the *spatial*
 pattern of the perturbed field measured by a sensor **array** (VISION.md §4.1). At each time slice it

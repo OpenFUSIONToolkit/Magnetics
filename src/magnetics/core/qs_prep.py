@@ -1,4 +1,4 @@
-"""Port of ``SCRIPTS/prep_magnetics.py`` — signal conditioning before the fit.
+"""A port of the OMFIT magnetics *prep* script — the QS pipeline's prep step (signal conditioning before the fit).
 
 Steps (matching the OMFIT original):
   1. trim channels (by regex) and time to the window of interest;
