@@ -474,13 +474,15 @@ def smooth_spectrogram(
     which spans a neighborhood of cells — survives later gating even where individual cells
     dip below threshold, while isolated noise cells and thin transients average down.
 
-    Blurs ``power`` in **linear space** (an arithmetic mean of neighbouring energy) and
-    ``coherence`` linearly (already in [0,1]); leaves the discrete ``mode_number`` untouched and
-    recomputes ``rms_by_mode`` from the smoothed power. Linear (arithmetic) averaging is pulled
-    toward the *bright* cells, so a coherent ridge bleeds into and fills its dim/dropout
-    neighbours — reinforcing it above a later gate. (A log/geometric mean is instead dominated by
-    the *smallest* cell, so a punched-out gap stays dark and never survives — the whole point of
-    pre-smoothing is defeated.) Meant to run *before* ``denoise_spectrogram`` so both the gate and
+    Blurs ``power`` in **log space** (the spectrogram is viewed and gated in log10 power / dB)
+    and ``coherence`` linearly (already in [0,1]); leaves the discrete ``mode_number`` untouched
+    and recomputes ``rms_by_mode`` from the smoothed power. Smoothing *linear* power instead just
+    halos the bright ridges and, viewed on a log heatmap, actually *raises* the visible spread
+    (var goes up, not down) — so the blur is invisible. Log-space smoothing gives a uniform,
+    visible blur across the dynamic range that matches what the display and the log-power gate
+    both act on. Ridge preservation is carried mainly by the (linearly) smoothed coherence field
+    and by ridges simply being bright; log smoothing still lifts realistic (non-zero) dropouts
+    toward their bright neighbours. Meant to run *before* ``denoise_spectrogram`` so the gate and
     the display see the same field. σ=0 in an axis is a no-op along it; σ=0 in both returns an
     unchanged copy. Never mutates the input (it typically comes from a shared cache).
 
@@ -497,11 +499,10 @@ def smooth_spectrogram(
         return replace(result)
 
     sigma = (st, sf)  # arrays are (n_times, n_freqs): axis 0 = time, axis 1 = frequency
-    # Smooth LINEAR power (arithmetic mean): the average is dominated by the bright cells, so a
-    # coherent ridge spreads into and fills its dim/dropout neighbours — the behaviour that lets
-    # it survive a later gate. (Smoothing log power is a geometric mean, dominated by the darkest
-    # cell, so gaps stay dark and never fill.)
-    power = gaussian_filter(np.asarray(result.power, dtype=float), sigma=sigma, mode="reflect")
+    # Smooth log10 power (a geometric mean of linear power), then map back — the blur is then
+    # uniform across the dynamic range and visibly matches the log heatmap the user sees.
+    logp = np.log10(np.maximum(np.asarray(result.power, dtype=float), 1e-30))
+    power = 10.0 ** gaussian_filter(logp, sigma=sigma, mode="reflect")
     # A convex average of [0,1] coherence stays in [0,1]; reflect avoids edge darkening.
     coherence = gaussian_filter(
         np.asarray(result.coherence, dtype=float), sigma=sigma, mode="reflect"

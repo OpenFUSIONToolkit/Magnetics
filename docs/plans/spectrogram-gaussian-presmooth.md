@@ -38,6 +38,20 @@ to the original design and is superseded by this note.
   byte-identical to the default, and the n-map responds. Not brought up in-browser (other
   session holds port 5173; served data dir has no shot) — covered by the node tests.
 
+### Follow-up: log-space power smoothing (visibility fix), continued on `feature/spectrogram-elm-filter`
+
+The committed version (commit `7ba1241`) shipped **cell-based σ** (`smooth_t_cells`/`smooth_f_cells`,
+not the ms/kHz noted above) and smoothed **linear** power. That made the blur ~invisible: on the
+log heatmap, linear-space smoothing halos the bright ridges and *raises* the visible log-variance
+(measured 1.18 → 1.19) instead of lowering it. Switched `smooth_spectrogram` to smooth **log10
+power** then map back (`10**gaussian_filter(log10 power)`); coherence stays linear. Now the
+log-variance drops monotonically with σ (1.18 → 1.01 → 0.91 → 0.88 on a real shot) — a genuinely
+visible blur that matches the display and the log-power gate. Trade-off vs linear: log/geometric
+smoothing lifts ridge *dropouts* less strongly, but ridge preservation is carried mainly by the
+(still linear) coherence-gate smoothing and by ridges being bright, so the cost is small. Tests
+updated (`test_ridge_dropout_is_lifted_toward_ridge`, `test_smoothing_makes_log_display_smoother`);
+full suite 240 passed / 2 skipped, frontend `tsc` + 26 vitest green.
+
 ## Motivation
 
 At aggressive gate settings the gates start dropping **real coherent structures** (and, at

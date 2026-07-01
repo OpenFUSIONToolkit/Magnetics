@@ -348,15 +348,14 @@ class TestSmoothSpectrogram:
         smooth_spectrogram(spec, sigma_time_bins=3.0, sigma_freq_bins=2.0)
         np.testing.assert_array_equal(spec.power, before)
 
-    def test_ridge_gap_is_reinforced(self):
-        # A coherent ridge (one frequency row, all times) with a punched-out gap cell: after
-        # blurring along time the gap fills toward the ridge, so it can survive a gate that
-        # the raw gap would fail — the behaviour the feature is meant to buy.
+    def _ridge(self):
+        # A bright coherent ridge (one frequency row across all times) with a realistic
+        # dropout (dips to background, not to zero) and a quiet background elsewhere.
         n_t, n_f = 40, 8
         power = np.full((n_t, n_f), 0.01)
         power[:, 3] = 1.0  # bright ridge at freq bin 3
-        power[20, 3] = 0.0  # a dropout in the ridge
-        spec = SpectrogramResult(
+        power[20, 3] = 0.01  # a dropout in the ridge (to background level)
+        return SpectrogramResult(
             kind="spectrogram",
             time=np.arange(n_t, dtype=float),
             frequency=np.arange(n_f, dtype=float),
@@ -366,10 +365,24 @@ class TestSmoothSpectrogram:
             rms_by_mode=np.zeros((n_t, 1)),
             mode_indices=np.array([0], dtype=np.intp),
         )
+
+    def test_ridge_dropout_is_lifted_toward_ridge(self):
+        # Log-space smoothing along time lifts a dropout in a bright ridge toward its bright
+        # neighbours (partial fill), while a cell in the quiet background stays dark.
+        spec = self._ridge()
         sm = smooth_spectrogram(spec, sigma_time_bins=2.0, sigma_freq_bins=0.0)
-        # the gap recovers most of the ridge power; an isolated background cell does not
-        assert sm.power[20, 3] > 0.5
-        assert sm.power[20, 0] < 0.1
+        assert sm.power[20, 3] > 5 * spec.power[20, 3]  # dropout pulled well up toward the ridge
+        assert sm.power[20, 3] < 1.0  # but not all the way (still below the ridge)
+        assert sm.power[20, 0] < 0.05  # an isolated background cell stays dark
+
+    def test_smoothing_makes_log_display_smoother(self):
+        # The point of the feature is a *visible* blur: on the log heatmap the user sees,
+        # smoothing must REDUCE the log-power variance (linear-space smoothing raises it).
+        spec = self._ridge()
+        raw = np.log10(np.maximum(spec.power, 1e-30))
+        sm = smooth_spectrogram(spec, sigma_time_bins=2.0, sigma_freq_bins=2.0)
+        blurred = np.log10(np.maximum(sm.power, 1e-30))
+        assert np.var(blurred) < np.var(raw)
 
 
 # -----------------------------------------------------------------------
