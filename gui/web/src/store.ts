@@ -8,6 +8,18 @@ import { fetchMachines, type MachineInfo } from "./lib/api";
 export type TabId = "sensors" | "qs" | "rotating";
 export type Theme = "dark" | "light";
 
+// Backend + DIII-D credentials for a live pull. Lifted out of PullControl so the
+// QS tab's custom-signal panel can reuse the same creds — the user enters them
+// once. Sent to the LOCAL backend (localhost) only, never persisted.
+export interface FetchCreds {
+  backend: string;
+  username: string;
+  password: string;
+  duoMode: "push" | "passcode";
+  duoPasscode: string;
+  deviceId: string;
+}
+
 // Theme is a single global switch: it drives the `data-theme` attribute on
 // <html> (so theme.css restyles the chrome) and is read by the plot layer and
 // Meg's useDarkMode() hook, so one toggle re-skins everything at once.
@@ -32,12 +44,14 @@ interface State {
   cursorMs: number; // shared time cursor across views
   loadingMachines: boolean;
   theme: Theme;
+  fetchCreds: FetchCreds; // shared by PullControl + the QS custom-signal panel
 
   init: () => Promise<void>;
   setMachine: (id: string) => void;
   setTab: (t: TabId) => void;
   setCursorMs: (t: number) => void;
   toggleTheme: () => void;
+  setFetchCreds: (patch: Partial<FetchCreds>) => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -47,6 +61,15 @@ export const useStore = create<State>((set) => ({
   cursorMs: 0,
   loadingMachines: true,
   theme: loadTheme(),
+  // Default to the fast cluster path (remote); PullControl's device snap adjusts it.
+  fetchCreds: {
+    backend: "remote",
+    username: "",
+    password: "",
+    duoMode: "push",
+    duoPasscode: "",
+    deviceId: "",
+  },
 
   async init() {
     const machines = await fetchMachines();
@@ -59,6 +82,7 @@ export const useStore = create<State>((set) => ({
   setMachine: (id) => set({ machine: id }),
   setTab: (t) => set({ tab: t }),
   setCursorMs: (t) => set({ cursorMs: t }),
+  setFetchCreds: (patch) => set((s) => ({ fetchCreds: { ...s.fetchCreds, ...patch } })),
   toggleTheme: () =>
     set((s) => {
       const theme: Theme = s.theme === "dark" ? "light" : "dark";
