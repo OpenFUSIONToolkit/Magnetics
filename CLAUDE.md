@@ -20,12 +20,13 @@ starting. If you're unsure whose lane something is, ask.
 ## Current status (Day 2, 2026-06-30)
 The full **fetch → process → service → GUI** path is live end-to-end for the **rotating-mode
 (MODESPEC)** analysis against real DIII-D shots:
-- **Fetch:** `data/toksearch_fetch.py` (mdsthin via the `cybele` ssh-config alias) writes one HDF5
-  per shot to `data/datafile/` (gitignored); read back via `analysis/.../data/h5source.py`. The GUI
-  can trigger a pull from the left rail (`PullControl` → `POST /api/fetch`).
+- **Fetch:** `magnetics.data.fetch.toksearch` (mdsthin via the `cybele` ssh-config alias, or a
+  cluster-side `python -m` run orchestrated by `fetch/remote.py`) writes one HDF5 per shot to
+  `data/datafile/` (gitignored); read back via `magnetics.data.h5source`. The GUI can trigger a
+  pull from the left rail (`PullControl` → `POST /api/fetch`).
 - **Process:** `core/spectral.py` (MODESPEC) is real and pure. The **SLCONTOUR quasi-stationary
-  fit is NOT yet in the package** — it lives in `analysis/magnetics-code/` (xarray/OMFIT, reference
-  only); `core/quasistationary` is still to be ported.
+  fit** runs via the reference pipeline in `magnetics._slcontour/` (xarray, self-contained OMFIT
+  shim) adapted by `core/qs_bridge`; the pure `core/quasistationary` port is still pending (#40).
 - **Service:** `service/app.py` — `GET /api/node/{shot}/{node_id}` serves `kind`-nodes from
   `service/nodes.py`; `/api/machines` lists fetched shots (mock fallback when none). The `qs_fit`
   SSE stream is still mock.
@@ -47,20 +48,24 @@ rather than fabricating data in the GUI. Keep `contracts.py` and `contract.ts` i
   cursor, denoise + coherence gate, smoothing) as `useNode` params; hide decorative knobs with no
   backend (btype, PEST λ, btCompMode, shieldingCutoff); add a mode-number range slider + serve more
   modes (the 2-point n-spectrum only resolves n∈[-1,0,1]); surface Daniel's richer views
-  (`magnetics-code/plots.py`); add FFT-overlap → STFT hop to the core; polish (the "Mock Files"
+  (`magnetics/_slcontour/plots.py`); add FFT-overlap → STFT hop to the core; polish (the "Mock Files"
   label → live via `usingLiveBackend()`; build the Sensors geometry view).
 - **Slow Rollers + Meg (quasi-stationary):** port `fit()` → pure `core/quasistationary.py`
   (`form_basis_function` is already pure numpy; replace the `omfit_compat` shim with
   logging/ValueError), then wire a real `qs_fit` node (real K / χ² / modes) and the QS GUI tab.
   Needs σ + sensor φ/θ extents + helicity from the data layer.
 - **Data Streamers:** give `h5source` σ + sensor extents + helicity (gates the QS live path); one
-  real geometry table (replace the cosmetic θ in `data/diiid.py`, unifying `diiid_sensors.txt` +
-  `_real_geometry.py`); move the `data/` fetch scripts into the package + a `DataSource`
-  abstraction with an array cache.
-- **Shared cleanup (claim it first via Slack/PR):** delete dead `data/pull_shot_h5.py` + the
-  orphaned top-level `contract.py`; archive `magnetics-code/` (extract `diiid_sensors.txt` first);
-  consolidate `data/test_*.py` into `analysis/tests/`; de-magic the `parents[4]` paths; make
-  `test_contour_node` skip on rotating-only shots. **Ask Claude what's safe to clean up first.**
+  real geometry table (replace the cosmetic θ in `magnetics/data/diiid.py`, unifying it with the
+  device table); the fetch scripts now live in `magnetics.data.fetch`, but still need a
+  `DataSource` abstraction with an array cache.
+- **Structural cleanup (LANDED — PR #41, Day-2 night):** the project was hoisted to the repo root
+  (`analysis/` removed), the loose `data/` scripts folded into `magnetics.data` (+ `fetch/`),
+  `magnetics-code/` relocated to `magnetics._slcontour/`, `data/test_*.py` consolidated into
+  `tests/`, every `sys.path`/`parents[4]` hack removed, the GUI build bundled for the wheel, and a
+  `ty` typecheck CI gate added (green). `data/pull_shot_h5.py` + the orphaned `contract.py` were
+  already gone. **Still open:** the `diiid_geometry` shot-aware fix, `test_contour_node` skip on
+  rotating-only shots, trimming the legacy `/api/{machine}/{result}` mock routes, and the docs
+  sweep for any remaining `analysis/`-era references.
 
 ## Reference documents — read these for context
 - **`docs/VISION.md`** — start here. Goals, the physics, the two core analyses (SLCONTOUR-style
@@ -80,12 +85,19 @@ rather than fabricating data in the GUI. Keep `contracts.py` and `contract.ts` i
 
 
 ## Layout
-- `analysis/` — Python (uv project; `src/magnetics/`): `core/` (device-agnostic math — geometry,
-  basis, design metrics, `quasistationary`, `spectral`), `data/` (sources), `service/` (FastAPI).
-- `gui/web/` — React + Vite + TypeScript frontend.
+The Python project **is the repo root** (a uv project, served as a webapp). `src/magnetics/`:
+- `core/` — device-agnostic math (geometry, basis, design metrics, `quasistationary`, `spectral`).
+- `data/` — sources + `fetch/` (toksearch/mdsthin pulls, cluster orchestration); device configs
+  in `data/device/*.json`.
+- `service/` — FastAPI; the built GUI is bundled at `service/webapp/` and served here.
+- `_slcontour/` — the reference SLCONTOUR translation (self-contained OMFIT shim), pending port
+  into `core/quasistationary` (issue #40); **excluded from lint/typecheck** until then.
+
+Tests in `tests/`, maintainer scripts in `scripts/`. `gui/web/` — React + Vite + TypeScript
+frontend (its `dist/` is staged into `service/webapp/` for the wheel).
 
 ## Conventions
-- Physics lives in `analysis/.../core` (pure, device-agnostic, testable); **no physics in the
+- Physics lives in `src/magnetics/core` (pure, device-agnostic, testable); **no physics in the
   service routes**.
 - Analysis results use a self-describing `kind` contract so the GUI renders them generically.
 - Python via **`uv`** (pinned to 3.14, standard GIL build); commit `uv.lock`, never `.venv/`. Always use uv venv to run python.
@@ -148,7 +160,7 @@ Keep commits clean and reviewable:
   (e.g. `PullControl: default to the fast remote backend`, `mode_number: cap array STFT columns`).
 - Add a body (blank line after the subject) only when the *why* isn't obvious from the diff.
 - **Always format Python before committing.** Any time you commit changes that touch Python,
-  first run the ruff formatter through uv — `uv run ruff format .` (from `analysis/`) — and stage
+  first run the ruff formatter through uv — `uv run ruff format .` (from the repo root) — and stage
   the result. CI enforces this with `ruff format --check`, so an unformatted commit fails the build.
 
 ## Other Priorities
