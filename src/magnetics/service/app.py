@@ -373,10 +373,18 @@ if _DIST is not None:
 
 
 def main() -> None:
-    """Console entry point: `uv run --extra service magnetics-service`."""
+    """Console entry point: `uv run --extra service magnetics-service`.
+
+    Honors ``HOST``/``PORT`` env vars (default 127.0.0.1:8000) so several checkouts
+    can run at once — ``run.sh`` auto-picks a free ``PORT`` and wires the GUI to it.
+    """
+    import os
+
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
