@@ -60,7 +60,7 @@ def _shot_index() -> dict[str, Path]:
 def refresh() -> None:
     """Forget the cached file index (call after a new fetch writes a file)."""
     _shot_index.cache_clear()
-
+    helicity.cache.clear()
 
 def shot_file(shot: str | int) -> Path:
     path = _shot_index().get(str(shot))
@@ -104,6 +104,7 @@ def meta(shot: str | int) -> dict:
             "device": _attr_str(h5.attrs.get("device"), "DIII-D"),
             "analysis": _attr_str(h5.attrs.get("analysis"), "both"),
             "backend": _attr_str(h5.attrs.get("backend"), "?"),
+            "helicity": helicity(shot),
             "n_channels": len([k for k in h5.keys() if k != "_timebases"]),
             "channels": [c.decode() if isinstance(c, bytes) else str(c)
                          for c in (fetched if fetched is not None else [])],
@@ -135,3 +136,22 @@ def load_data(shot: str | int, name: str):
         if name not in h5:
             raise KeyError(f"channel {name!r} not in shot {shot}")
         return np.asarray(h5[name]["data"][:])
+    
+# helicity: plasma twist sign, from the fetched ip/bt context channels
+@lru_cache(maxsize=32)
+def helicity(shot: str | int) -> str:
+    """Field/current helicity sign (+1 or -1) for the SLCONTOUR poloidal-mode sign.
+
+    Derived from sign(⟨ip⟩·⟨bt⟩) — the plasma-current and toroidal-field context
+    channels the fetcher always pulls (magnetics_signals.AUX). Falls back to the
+    DIII-D reference default (-1) if either channel is missing or flat.
+    """
+    names = {n.lower(): n for n in channel_names(shot)}
+    ip_key, bt_key = names.get("ip"), names.get("bt")
+    if ip_key is None or bt_key is None:
+        return -1
+    ip = np.nanmean(load_data(shot, ip_key))
+    bt = np.nanmean(load_data(shot, bt_key))
+    if not (np.isfinite(ip) and np.isfinite(bt)) or ip == 0 or bt == 0:
+        return -1
+    return int(np.sign(ip * bt))
