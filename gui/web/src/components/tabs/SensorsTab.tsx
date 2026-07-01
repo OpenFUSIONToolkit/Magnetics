@@ -97,6 +97,8 @@ export default function SensorsTab({ machine }: { machine: string }) {
   // scene instead of crashing the whole app on meta.sensors / meta.wall.
   const rawMeta = node?.meta as unknown as GeoMeta | undefined;
   const meta = rawMeta?.sensors && rawMeta?.wall ? rawMeta : null;
+  // No-data guard: a 404 means the shot's HDF5 file hasn't been pulled yet.
+  const noData = error?.includes("fetch failed (404)") === true;
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
   const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
   const vvInk = dark ? "rgba(255,255,255,0.16)" : "rgba(20,34,46,0.18)";
@@ -354,7 +356,16 @@ export default function SensorsTab({ machine }: { machine: string }) {
       </p>
 
       {loading && <div className="placeholder">loading geometry…</div>}
-      {error && <div className="placeholder">geometry unavailable: {error}</div>}
+      {noData ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <strong>Sensor visualization unavailable.</strong><br />
+          The HDF5 file for this shot has not been fetched yet.<br />
+          Use the <strong>pull panel</strong> in the left sidebar to fetch the data.
+        </div>
+      ) : error ? (
+        <div className="placeholder">geometry unavailable: {error}</div>
+      ) : null}
 
       {meta && (
         <>
