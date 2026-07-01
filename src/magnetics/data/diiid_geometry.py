@@ -145,7 +145,7 @@ def device_geometry(shot: int, name: str = "diiid") -> dict:
     fw = devices.feature_at(dev, "first_wall", shot) or {}
     vv = (devices.feature_at(dev, "vacuum_vessel", shot) or {}).get("plates", [])
     coils = [
-        {k: c.get(k) for k in ("name", "count", "turns", "rz")}
+        {k: c.get(k) for k in ("name", "count", "turns", "rz", "loops")}
         for c in (devices.feature_at(dev, "coils", shot) or {}).get("sets", [])
     ]
     return {

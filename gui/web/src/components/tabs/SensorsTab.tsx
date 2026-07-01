@@ -26,10 +26,17 @@ interface Sensor {
 }
 interface Wall { r: number[]; z: number[]; label: string }
 interface SensorSet { name: string; kind: Kind; count: number; sensors: string[] }
+interface VVPlate { r: number[]; z: number[] }
+interface CoilSet {
+  name: string; count: number; turns: number;
+  rz: { r: number[]; z: number[] }; // one representative coil's R-Z footprint
+  loops: number[][][]; // every coil's 3D [x,y,z] loop
+}
 interface GeoMeta {
   n_sensors: number; device: string; sensors: Sensor[]; wall: Wall;
   arrays: { family: string; kind: Kind; shape: string; count: number }[];
   sensor_sets: SensorSet[];
+  vv?: VVPlate[]; coils?: CoilSet[];
 }
 
 const COLOR: Record<Kind, string> = { Bp: "#4aa3ff", Br: "#ff5cad", coil: "#ffb454" };
@@ -82,12 +89,15 @@ export default function SensorsTab({ machine }: { machine: string }) {
   const meta = rawMeta?.sensors && rawMeta?.wall ? rawMeta : null;
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
   const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
+  const vvInk = dark ? "rgba(255,255,255,0.16)" : "rgba(20,34,46,0.18)";
   // 3D vessel shell — brighter/whiter than the 2D outline so it reads in the
   // dark scene; lighter mode bumped up slightly too.
   const wallSurface = dark ? "rgb(225,232,245)" : "rgb(70,90,110)";
   const wallSurfaceOpacity = dark ? 0.22 : 0.16;
 
   const [showEq, setShowEq] = useState(true);
+  const [showVV, setShowVV] = useState(true);
+  const [showCoils, setShowCoils] = useState(true);
 
   // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
   // is shown if it belongs to ANY checked set. Default: the broadest Bp + Br set.
@@ -170,6 +180,32 @@ export default function SensorsTab({ machine }: { machine: string }) {
       line: { color: wallInk, width: 1.5 },
     } as Partial<Plotly.PlotData>);
 
+    // Vacuum-vessel plates — one combined, null-separated outline under everything.
+    const vv = meta.vv ?? [];
+    if (showVV && vv.length) {
+      const vx: (number | null)[] = [], vy: (number | null)[] = [];
+      for (const plate of vv) {
+        plate.r.forEach((r, i) => { vx.push(r); vy.push(plate.z[i]); });
+        vx.push(null); vy.push(null);
+      }
+      t.push({
+        type: "scatter", mode: "lines", name: "vacuum vessel", x: vx, y: vy,
+        hoverinfo: "skip", showlegend: false, line: { color: vvInk, width: 1 },
+      } as Partial<Plotly.PlotData>);
+    }
+
+    // Perturbation coils — one representative coil's R-Z footprint per set.
+    const coils2d = meta.coils ?? [];
+    if (showCoils) {
+      for (const c of coils2d) {
+        t.push({
+          type: "scatter", mode: "lines", legendgroup: "coils",
+          name: `${c.name}-coils (×${c.count}, ${c.turns > 0 ? "+" : ""}${c.turns}T)`,
+          x: c.rz.r, y: c.rz.z, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
+        } as Partial<Plotly.PlotData>);
+      }
+    }
+
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
       if (!group.length) continue;
@@ -206,7 +242,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, wallInk, visibleSensors, equilibrium, fluxInk]);
+  }, [meta, Rc, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -232,6 +268,21 @@ export default function SensorsTab({ machine }: { machine: string }) {
       y: ru.map((R) => phis.map((p) => R * Math.sin(p))),
       z: ru.map((_, i) => phis.map(() => zu[i])),
     } as unknown as Partial<Plotly.PlotData>);
+
+    // Perturbation coils — every coil's real 3D loop.
+    if (showCoils) {
+      for (const c of meta.coils ?? []) {
+        const cx: (number | null)[] = [], cy: (number | null)[] = [], cz: (number | null)[] = [];
+        for (const loop of c.loops) {
+          for (const p of loop) { cx.push(p[0]); cy.push(p[1]); cz.push(p[2]); }
+          cx.push(null); cy.push(null); cz.push(null);
+        }
+        t.push({
+          type: "scatter3d", mode: "lines", name: `${c.name}-coils`, legendgroup: "coils",
+          x: cx, y: cy, z: cz, hoverinfo: "name", line: { color: COLOR.coil, width: 2 },
+        } as unknown as Partial<Plotly.PlotData>);
+      }
+    }
 
     for (const kind of KINDS) {
       const group = visibleSensors.filter((s) => s.kind === kind);
@@ -280,7 +331,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity]);
+  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
 
   return (
     <div className="card">
@@ -323,6 +374,16 @@ export default function SensorsTab({ machine }: { machine: string }) {
                 <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
                 equilibrium {!live && <em style={{ opacity: 0.6 }}>(synthetic)</em>}
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: vvInk, display: "inline-block" }} />
+                vacuum vessel
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={showCoils} onChange={() => setShowCoils((v) => !v)} />
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: COLOR.coil, display: "inline-block" }} />
+                coils
               </label>
             </div>
           </div>
