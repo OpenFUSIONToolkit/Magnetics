@@ -26,7 +26,9 @@ def test_qs_fit_returns_a_finite_contour(synthetic_shot):
     assert _all_finite_grid(node), "qs_fit contour has non-finite cells (NaN geometry?)"
 
 
-@pytest.mark.parametrize("node_id", ["phi_t", "chi_sq_t", "amplitude", "phase_t"])
+@pytest.mark.parametrize(
+    "node_id", ["phi_t", "chi_sq_t", "amplitude", "phase_t", "svd_energy", "svd_condition"]
+)
 def test_qs_timeseries_are_finite(synthetic_shot, node_id):
     node = nodes.build_node(synthetic_shot, node_id)
     assert node["kind"] in ("contour", "line")
@@ -55,6 +57,18 @@ def test_fit_quality_reports_a_real_fit_not_the_fallback(synthetic_shot):
     node = nodes.build_node(synthetic_shot, "fit_quality")
     labels = {f["label"] for f in node["fields"]}
     assert any("χ²" in lab or "chi" in lab.lower() for lab in labels), labels
+
+
+def test_bandpass_cutoff_changes_the_prepared_signal(synthetic_shot):
+    """cutoff_lo/cutoff_hi are already wired end to end (nodes.py -> qs_prep.prepare's
+    cutoff_hz); a narrower band should visibly change the filtered signal, not just be
+    accepted and ignored."""
+    wide = nodes._prep_qs_ds(synthetic_shot, {"cutoff_lo": "5.0", "cutoff_hi": "250.0"})
+    narrow = nodes._prep_qs_ds(synthetic_shot, {"cutoff_lo": "5.0", "cutoff_hi": "20.0"})
+    wide_signal = wide.prepared["signal"].values
+    narrow_signal = narrow.prepared["signal"].values
+    assert wide_signal.shape == narrow_signal.shape
+    assert not np.allclose(wide_signal, narrow_signal)
 
 
 def test_qs_fit_recovers_injected_mode_amplitudes(synthetic_shot):

@@ -1311,6 +1311,16 @@ def _chi_sq_t(shot, params=None) -> dict:
     return qs_bridge.fit_to_chi_sq_node(_prep_qs_ds(shot, params).fit)
 
 
+def _svd_energy(shot, params=None) -> dict:
+    """Data-matrix SVD cumulative energy fraction vs index → LineNode."""
+    return qs_bridge.fit_to_svd_energy_node(_prep_qs_ds(shot, params).fit)
+
+
+def _svd_design_condition(shot, params=None) -> dict:
+    """Design-matrix per-singular-value condition number vs index → LineNode."""
+    return qs_bridge.fit_to_svd_condition_node(_prep_qs_ds(shot, params).fit)
+
+
 def _fit_signals(shot, params=None) -> dict:
     """Fitted signal per channel vs time → LineNode (Section 6 middle panel)."""
     return qs_bridge.fit_to_fit_signals_node(_prep_qs_ds(shot, params).fit)
@@ -1339,6 +1349,8 @@ _BUILDERS = {
     "sensor_map_cylindrical": _sensor_map_cylindrical,
     "signal_conditioning": _signal_conditioning,
     "chi_sq_t": _chi_sq_t,
+    "svd_energy": _svd_energy,
+    "svd_condition": _svd_design_condition,
     "fit_signals": _fit_signals,
     "fit_residuals": _fit_residuals,
     # rotating eigspec (develop): GP mode shapes + patterns + tracks
