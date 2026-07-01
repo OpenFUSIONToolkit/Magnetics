@@ -8,7 +8,7 @@ import { useEffect } from "react";
 import "./theme.css";
 import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
-import ThemeToggle from "./components/ThemeToggle";
+import SettingsMenu from "./components/SettingsMenu";
 import PullControl from "./components/PullControl";
 import ErrorBoundary from "./components/ErrorBoundary";
 import SensorsTab from "./components/tabs/SensorsTab";
@@ -47,7 +47,7 @@ export default function App() {
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
         <span className="badge">{usingLiveBackend() ? "● live backend" : "○ offline / demo"}</span>
-        <ThemeToggle />
+        <SettingsMenu />
       </header>
 
       <aside className="rail-left">

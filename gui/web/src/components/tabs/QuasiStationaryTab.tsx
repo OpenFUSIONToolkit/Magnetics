@@ -120,7 +120,7 @@ function CollapseHeader({
       }}
       className="metrics-title"
     >
-      <span style={{ fontSize: 9 }}>{open ? "▼" : "▶"}</span>
+      <span style={{ fontSize: "calc(9px * var(--font-scale))" }}>{open ? "▼" : "▶"}</span>
       {children}
     </div>
   );
@@ -569,28 +569,28 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       </div>
 
       {/* ── Settings bar ──────────────────────────────────────────────── */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           Array
           <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
-            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
             {CHANNEL_FILTERS.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           n modes
           <input value={ns} onChange={e => setNs(e.target.value)}
-            style={{ width: 60, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 60, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           m modes
           <input value={ms} onChange={e => setMs(e.target.value)}
-            style={{ width: 40, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 40, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           Detrend
           <select value={detrendType} onChange={e => setDetrendType(e.target.value)}
-            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
             <option value="baseline">baseline</option>
             <option value="none">none</option>
             <option value="linear">linear</option>
@@ -601,28 +601,28 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
             band (ms)
             <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
-              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+              style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
             –
             <input placeholder="auto" value={detrendHi} onChange={e => setDetrendHi(e.target.value)}
-              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+              style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           </label>
         )}
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
           t trim (ms)
           <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           –
           <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {paramsDirty && (
-            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
+            <span style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>settings changed</span>
           )}
           <button
             onClick={() => setCommittedParams(qsParams)}
             style={{
-              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px", borderRadius: 3, cursor: "pointer",
               background: paramsDirty ? "var(--accent)" : "var(--panel)",
               color: paramsDirty ? "#fff" : "var(--text-dim)",
               border: "1px solid var(--border)",
@@ -637,14 +637,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       {/* ── Plot content — show immediately; message only if data unavailable ── */}
       {noData ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
-                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>No data for shot {machine}.</strong><br />
           The HDF5 file for this shot has not been fetched yet.<br />
           Use the <strong>pull panel</strong> in the left sidebar to fetch the data, then click Plot.
         </div>
       ) : fitUnavailable ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
-                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>No quasi-stationary fit for shot {machine}.</strong><br />
           The SLCONTOUR fit needs the Bp LFS midplane array; this shot was most likely
           fetched for rotating-mode analysis only. Re-fetch it with the quasi-stationary
@@ -663,7 +663,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               {(["rdbu", "cividis", "viridis"] as const).map(cm => (
                 <button key={cm} onClick={() => setColormapChoice(cm)}
                   style={{
-                    fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
+                    fontSize: "calc(10px * var(--font-scale))", padding: "1px 6px", borderRadius: 3, cursor: "pointer",
                     background: colormapChoice === cm ? "var(--accent)" : "var(--panel)",
                     color: colormapChoice === cm ? "#fff" : "var(--text-dim)",
                     border: "1px solid var(--border)",
@@ -725,7 +725,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               {signalPairs && (
                 <div style={{
                   display: "flex", flexDirection: "column", gap: 3,
-                  fontSize: 10, color: "var(--text-dim)",
+                  fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)",
                   overflowY: "auto", maxHeight: 220,
                   paddingBottom: 4, borderBottom: "1px solid var(--border)",
                 }}>
@@ -756,14 +756,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         {sensorMapOpen && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
-              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
+              <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
               {sensorRzNode
                 ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} exportName={xn("sensor_map_rz")} download={dl("sensor_map_rz")} />
                 : <div className="placeholder">loading…</div>
               }
             </div>
             <div>
-              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
+              <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
               {sensorCylNode
                 ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
                 : <div className="placeholder">loading…</div>
