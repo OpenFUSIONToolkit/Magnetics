@@ -1,6 +1,6 @@
 """Quasi-stationary pipeline end-to-end, against the synthetic shot.
 
-Spans io_data → omfit_compat.sensor_geometry → prep → fit → qs_bridge → contracts
+Spans qs_io_data → qs_device.sensor_geometry → qs_prep → qs_fit → qs_bridge → contracts
 — the full SLCONTOUR path. This is the coverage that was missing when the
 segmented-schema geometry bug shipped: the geometry resolved to all-NaN, the fit's
 SVD never converged, but the only test touching the pipeline (`_fit_quality`)
@@ -41,7 +41,7 @@ def test_sensor_geometry_extents_finite_for_synthetic_shot(synthetic_shot):
     """The direct regression guard: the QS geometry must not be NaN. Reverting
     omfit_compat.sensor_geometry to the flat `sensors[c]["r"]` read makes every
     extent NaN and this fails (as the fit's SVD then does)."""
-    from magnetics._slcontour import omfit_compat as oc
+    from magnetics.core import qs_device as oc
 
     geo = oc.sensor_geometry("DIII-D", shot=int(synthetic_shot))
     for coord in ("r_end1", "z_end1", "phi_end1", "theta_end1"):
