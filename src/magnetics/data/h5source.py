@@ -52,7 +52,7 @@ def _shot_index() -> dict[str, Path]:
 def refresh() -> None:
     """Forget the cached file index (call after a new fetch writes a file)."""
     _shot_index.cache_clear()
-    helicity.cache.clear()
+    helicity.cache_clear()
 
 def shot_file(shot: str | int) -> Path:
     path = _shot_index().get(str(shot))
