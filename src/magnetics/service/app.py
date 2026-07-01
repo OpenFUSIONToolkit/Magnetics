@@ -15,6 +15,7 @@ Endpoints (see docs/CONTRACT.md):
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import threading
@@ -30,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..data import h5source
-from . import mock, nodes
+from . import export, mock, nodes
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,27 @@ def node(shot: str, node_id: str, request: Request):
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/api/node/{shot}/{node_id}/download")
+def node_download(shot: str, node_id: str, request: Request):
+    """The same kind-node as /api/node/... but serialized to an HDF5 file — the
+    per-plot "Download data" button. Query params are forwarded (and recorded in the
+    file) so the download matches exactly what's on screen. 404/422 like node()."""
+    params = dict(request.query_params)
+    try:
+        n = nodes.build_node(shot, node_id, params)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    payload = export.node_to_hdf5(shot, node_id, n, params)
+    filename = f"shot_{shot}_{node_id}.h5"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/x-hdf5",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/channels/{shot}")

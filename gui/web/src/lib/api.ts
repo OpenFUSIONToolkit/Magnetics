@@ -45,6 +45,18 @@ export async function fetchNode(
 
 export const usingLiveBackend = (): boolean => !!API_BASE;
 
+/** URL for the per-node HDF5 data export (GET /api/node/.../download), or null
+ *  without a live backend (the static mock fixtures have no serializer). The same
+ *  `params` the plot was fetched with are forwarded so the file matches the view. */
+export function nodeDownloadUrl(
+  machine: string,
+  nodeId: string,
+  params?: Record<string, string | number>,
+): string | null {
+  if (!API_BASE) return null;
+  return `${API_BASE}/api/node/${machine}/${nodeId}/download${qs(params)}`;
+}
+
 /** Per-shot channel diagnostic: which fetched pointnames the analysis uses vs. idle. */
 export interface ChannelUsage {
   shot: string;
