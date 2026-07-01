@@ -26,8 +26,10 @@ export default function PullControl() {
   const [backend, setBackend] = useState("remote");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  // Two-factor is always a typed passcode (never push — KSTAR/KFE and GA Duo both
-  // accept a one-time code; push is intentionally not offered).
+  // Duo two-factor for the flux gateway (DIII-D / NSTX): either a push (sends "1")
+  // or a typed passcode — offered as a dropdown. A KSTAR/KFE VPN pull has no push, so
+  // its 2FA is always a typed passcode (the dropdown is hidden for that device).
+  const [duoMode, setDuoMode] = useState<"push" | "passcode">("push");
   const [duoPasscode, setDuoPasscode] = useState("");
   // Prefill a sensible DIII-D flat-top window (ms): transfer time is linear in the
   // samples pulled, so cropping the default ~5 s shot to its active window roughly
@@ -93,7 +95,8 @@ export default function PullControl() {
         backend,
         username: username || undefined,
         password: password || undefined,
-        duo: duoPasscode || undefined,
+        // KSTAR: always a typed passcode. Flux (DIII-D/NSTX): push → "1", else passcode.
+        duo: !needsSshCreds && duoMode === "push" ? "1" : duoPasscode || undefined,
         tmin: num(tmin),
         tmax: num(tmax),
         decimate: num(decimate),
@@ -226,10 +229,26 @@ export default function PullControl() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder={needsSshCreds ? "KFE VPN password" : "password (blank if key/Duo auth)"}
             autoComplete="current-password" />
-          <input className="pull-input" value={duoPasscode}
-            onChange={(e) => setDuoPasscode(e.target.value)}
-            placeholder={dev?.needs_ssh_creds ? "2FA passcode" : "Duo passcode"}
-            inputMode="numeric" autoComplete="one-time-code" />
+          {needsSshCreds ? (
+            // KFE VPN: no push — the 2FA is always a typed passcode.
+            <input className="pull-input" value={duoPasscode}
+              onChange={(e) => setDuoPasscode(e.target.value)}
+              placeholder="2FA passcode" inputMode="numeric" autoComplete="one-time-code" />
+          ) : (
+            <>
+              <div className="note pull-hint">Duo two-factor</div>
+              <select className="pull-input" value={duoMode} aria-label="Duo authentication"
+                onChange={(e) => setDuoMode(e.target.value as "push" | "passcode")}>
+                <option value="push">Push notification</option>
+                <option value="passcode">Enter passcode…</option>
+              </select>
+              {duoMode === "passcode" && (
+                <input className="pull-input" value={duoPasscode}
+                  onChange={(e) => setDuoPasscode(e.target.value)}
+                  placeholder="Duo passcode" inputMode="numeric" autoComplete="one-time-code" />
+              )}
+            </>
+          )}
         </>
       )}
 
