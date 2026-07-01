@@ -126,6 +126,8 @@ export default function SensorsTab({ machine }: { machine: string }) {
         widest[set.kind] = set;
     }
     Object.values(widest).forEach((s) => { if (s) init[s.name] = true; });
+    // Also show the full 3D coil set by default.
+    if ("All 3D Coils" in init) init["All 3D Coils"] = true;
     return init;
   }, [sets, userSets]);
   const toggleSet = (name: string) =>
@@ -370,7 +372,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
               );
             })}
             <div style={{ minWidth: 150 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>overlays</div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Overlays</div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
