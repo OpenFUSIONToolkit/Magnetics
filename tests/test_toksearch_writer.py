@@ -11,8 +11,12 @@ Run:  uv run python -m pytest tests/test_toksearch_writer.py -q
 
 from __future__ import annotations
 
+import sys
+import types
+
 import numpy as np
 
+from magnetics.data.fetch import toksearch
 from magnetics.data.fetch.toksearch import Channel, _write_h5
 
 
@@ -136,3 +140,45 @@ def test_legacy_pointname_written_under_canonical_id(tmp_path):
     with h5py.File(out, "r") as h5:
         assert "MPID66M067" in h5 and "MPID067U" not in h5  # keyed by canonical id
         assert h5["MPID66M067"].attrs["pointname"] == "MPID067U"
+
+
+def test_toksearch_records_tree_signal_missing_when_tree_server_unavailable(monkeypatch):
+    class FakePipeline:
+        def __init__(self, shots):
+            self.shots = shots
+            self.fetches = []
+
+        def fetch(self, key, signal):
+            self.fetches.append((key, signal))
+
+        def compute_serial(self):
+            return [
+                {
+                    "errors": {},
+                    "PT": {
+                        "data": np.array([1.0, 2.0], dtype=float),
+                        "times": np.array([0.0, 1.0], dtype=float),
+                    },
+                }
+            ]
+
+    fake_toksearch = types.ModuleType("toksearch")
+    fake_toksearch.Pipeline = FakePipeline
+    fake_toksearch.PtDataSignal = lambda name: ("pt", name)
+    monkeypatch.setitem(sys.modules, "toksearch", fake_toksearch)
+    monkeypatch.delitem(sys.modules, "toksearch_d3d", raising=False)
+
+    channels = toksearch._fetch_toksearch(
+        123,
+        ["PT"],
+        tmin=None,
+        tmax=None,
+        stride=1,
+        progress=lambda *_: None,
+        tree_signals={"kappa": [("efit01", "\\kappa")]},
+    )
+
+    by_name = {ch.name: ch for ch in channels}
+    assert by_name["PT"].ok is True
+    assert by_name["kappa"].ok is False
+    assert by_name["kappa"].error == "no tree server configured"

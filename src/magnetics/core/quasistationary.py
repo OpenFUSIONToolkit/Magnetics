@@ -65,7 +65,7 @@ def form_basis_function(
         return (
             (np.exp(1j * m * np.deg2rad(y2)) - np.exp(1j * m * np.deg2rad(y1)))
             * (np.exp(1j * n * np.deg2rad(x2)) - np.exp(1j * n * np.deg2rad(x1)))
-        ) / (np.deg2rad(dx * dy) * n * m)
+        ) / (np.deg2rad(dx) * np.deg2rad(dy) * (1j * n) * (1j * m))
 
     raise ValueError(
         f"fit_basis must be 'sinusoidal-point' or 'sinusoidal-integral', got {fit_basis!r}"
@@ -170,7 +170,7 @@ def fit(
 
     # Per-coeff uncertainty from SVD pseudo-inverse
     w_inv = np.where(valid, 1.0 / np.where(w_a != 0, w_a, 1.0), 0.0)
-    fit_sigmas = np.sqrt(np.sum((Vh_a.T * w_inv) ** 2, axis=0))  # [n_cols]
+    fit_sigmas = np.sqrt(np.sum((Vh_a.T * w_inv) ** 2, axis=1))  # [n_cols]
 
     # ── reform complex coefficients (one complex number per mode) ─────────────
     coeffs_c: list[np.ndarray] = []
@@ -250,7 +250,6 @@ def reconstruct_grid(
     z = np.zeros((len(theta_grid), len(phi_grid)))
     for i, (n, m) in enumerate(zip(result.ns, result.ms)):
         c = result.coeffs[i, t_idx]
-        # outer product: [n_theta, n_phi]
         basis = np.exp(1j * m * theta_rad)[:, None] * np.exp(1j * n * phi_rad)[None, :]
-        z += (c * basis).real
+        z += (np.conj(c) * basis).real
     return z

@@ -5,6 +5,7 @@ files are present (e.g. CI without data).
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from magnetics.core import contracts
@@ -145,6 +146,24 @@ def test_fit_quality_node_has_finite_k():
     n = nodes.build_node(shot, "fit_quality")
     assert n["kind"] == "metrics"
     assert n["fields"]
+
+
+def test_sensor_map_rz_threads_shot_to_wall_loader(synthetic_shot, monkeypatch):
+    from magnetics._slcontour import omfit_compat
+
+    seen = {}
+
+    def fake_load_wall(device, shot=None):
+        seen["device"] = device
+        seen["shot"] = shot
+        return np.array([1.0, 2.0]), np.array([0.0, 0.1])
+
+    monkeypatch.setattr(omfit_compat, "load_wall", fake_load_wall)
+    n = nodes._sensor_map_rz(synthetic_shot, {})
+
+    assert seen["device"] == "DIII-D"
+    assert seen["shot"] == int(synthetic_shot)
+    assert n["meta"]["wall"] == {"x": [1.0, 2.0], "y": [0.0, 0.1]}
 
 
 def test_real_theta_has_full_poloidal_coverage():

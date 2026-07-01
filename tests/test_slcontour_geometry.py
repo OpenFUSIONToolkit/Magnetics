@@ -62,6 +62,16 @@ def test_sensor_geometry_shot_none_falls_back_to_earliest():
     assert np.isfinite(float(sel["r_end1"].values))
 
 
+@pytest.mark.parametrize("shot", [124400, 151593, 184928])
+def test_load_wall_returns_detailed_wall_across_supported_eras(shot):
+    r_wall, z_wall = oc.load_wall("DIII-D", shot)
+
+    assert r_wall is not None and z_wall is not None
+    assert len(r_wall) == len(z_wall) == 257
+    assert np.all(np.isfinite(r_wall))
+    assert np.all(np.isfinite(z_wall))
+
+
 @pytest.mark.parametrize("shot", [124400, 151593, 156014, 184928, 990000])
 def test_two_resolvers_agree_across_eras(shot):
     """The device JSON is read by TWO independent segment resolvers — data/devices

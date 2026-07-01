@@ -436,6 +436,25 @@ class TestModeUncertaintyPropagation:
         assert 0.0 < fit.n_confidence <= 1.0
         assert fit.n_confidence > 0.9  # clean synthetic mode → confident
 
+    def test_phase_sigma_uses_returned_fit_weights(self):
+        mode = ModeAtFrequencyResult(
+            kind="mode_at_frequency",
+            frequency=3000.0,
+            phase=np.array([0.0, 240.0]),
+            amplitude=np.array([1.0, 9.0]),
+            coherence=np.ones(2),
+            toroidal_angle=np.array([0.0, 60.0]),
+            phase_error=np.array([1.0, 3.0]),
+        )
+
+        fit = fit_toroidal_mode(mode)
+        expected = float(
+            np.sqrt(np.sum((mode.amplitude * mode.phase_error) ** 2)) / mode.amplitude.sum()
+        )
+        inverse_variance = float(np.sqrt(1.0 / np.sum(1.0 / mode.phase_error**2)))
+        assert fit.phase_sigma == pytest.approx(expected)
+        assert fit.phase_sigma != pytest.approx(inverse_variance)
+
     def test_confidence_drops_for_noisy_underdetermined(self):
         # a noisy 2-probe pair → less confident than a clean full array
         clean_mode, _ = self._modes(seed=3)

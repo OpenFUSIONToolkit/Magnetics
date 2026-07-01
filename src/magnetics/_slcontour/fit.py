@@ -88,7 +88,7 @@ def form_basis_function(
         return (
             (np.exp(1j * m * np.deg2rad(y2)) - np.exp(1j * m * np.deg2rad(y1)))
             * (np.exp(1j * n * np.deg2rad(x2)) - np.exp(1j * n * np.deg2rad(x1)))
-        ) / (np.deg2rad(dx * dy) * n * m)
+        ) / (np.deg2rad(dx) * np.deg2rad(dy) * (1j * n) * (1j * m))
 
     # ── gaussian-point ────────────────────────────────────────────────────────
     if fit_basis == "gaussian-point":
@@ -352,7 +352,7 @@ def fit(
     w_inv = 1.0 / w_a
     w_inv[~valid] = 0.0
     w_inv = np.hstack((w_inv, [0.0] * max(Vh_a.shape[0] - w_a.shape[0], 0)))
-    fit_sigma2 = np.sum((Vh_a.T * w_inv) ** 2, axis=0)
+    fit_sigma2 = np.sum((Vh_a.T * w_inv) ** 2, axis=1)
     fit_sigmas = np.sqrt(fit_sigma2)  # (n_columns,)
 
     # ── reform per-mode complex (sinusoidal) or real (Gaussian) coefficients ──
