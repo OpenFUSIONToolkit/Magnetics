@@ -485,13 +485,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     const traces: Partial<Plotly.PlotData>[] = [{
       type: "scatter" as const, mode: "lines+markers" as const,
       name: "energy fraction", x: s.x, y: s.y,
-      line: { color: LINE_PALETTE[0], width: 1.5 }, marker: { size: 4 },
+      line: { color: LINE_PALETTE[0], width: 1.5 }, marker: { size: 8 },
     } as Partial<Plotly.PlotData>];
     if (s.markers) {
       traces.push({
         type: "scatter" as const, mode: "markers" as const,
         name: "removed", x: s.markers.x, y: s.markers.y,
-        marker: { symbol: "x", size: 7, color: LINE_PALETTE[3] },
+        marker: { symbol: "x", size: 12, color: LINE_PALETTE[3] },
       } as Partial<Plotly.PlotData>);
     }
     return traces;
@@ -520,13 +520,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     const traces: Partial<Plotly.PlotData>[] = [{
       type: "scatter" as const, mode: "lines+markers" as const,
       name: "condition number", x: s.x, y: s.y,
-      line: { color: LINE_PALETTE[1], width: 1.5 }, marker: { size: 4 },
+      line: { color: LINE_PALETTE[1], width: 1.5 }, marker: { size: 8 },
     } as Partial<Plotly.PlotData>];
     if (s.markers) {
       traces.push({
         type: "scatter" as const, mode: "markers" as const,
         name: "removed", x: s.markers.x, y: s.markers.y,
-        marker: { symbol: "x", size: 7, color: LINE_PALETTE[3] },
+        marker: { symbol: "x", size: 12, color: LINE_PALETTE[3] },
       } as Partial<Plotly.PlotData>);
     }
     return traces;
