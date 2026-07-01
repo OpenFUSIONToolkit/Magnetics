@@ -5,16 +5,13 @@ hard-linked `time`, attrs `analysis`/`backend`) and the older pull_shot_h5 outpu
 (per-channel `time`, no analysis attr). A channel is read the same way in both:
 `/{name}/data` + `/{name}/time`.
 
-The repo-root `data/` directory (with `magnetics_signals.py` and
-`toksearch_fetch.py`) is put on sys.path so the backend reuses the signal catalog
-and the live-pull entry point. Location is `$MAGNETICS_DATA_DIR` or the repo's
-`data/` dir relative to this file.
+The HDF5 output directory is `$MAGNETICS_DATA_DIR` or the repo's `data/` dir
+relative to this file (where the fetcher writes `datafile/`).
 """
 
 from __future__ import annotations
 
 import os
-import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,12 +25,6 @@ def data_dir() -> Path:
         return Path(env).expanduser().resolve()
     # analysis/src/magnetics/data/h5source.py -> repo root is parents[4]
     return Path(__file__).resolve().parents[4] / "data"
-
-
-def _ensure_catalog_on_path() -> None:
-    d = str(data_dir())
-    if d not in sys.path:
-        sys.path.insert(0, d)
 
 
 @lru_cache(maxsize=1)

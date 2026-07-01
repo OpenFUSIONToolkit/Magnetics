@@ -16,11 +16,8 @@ from __future__ import annotations
 import math
 import re
 
-from . import h5source
-
-h5source._ensure_catalog_on_path()
-import magnetics_signals as ms  # noqa: E402  (repo-root data/ catalog)
-import devices  # noqa: E402   (repo-root data/ shared device resolver)
+from . import devices
+from . import signals as ms
 
 _DEVICE = "diiid"
 _Z0 = 0.0  # DIII-D magnetic-axis height — origin for the poloidal angle

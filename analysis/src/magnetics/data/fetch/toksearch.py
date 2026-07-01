@@ -38,12 +38,12 @@ Usage:
         --backend mdsthin --shot 184927 --analysis quasi-stationary \
         --tmin 2000 --tmax 3000 --decimate 4
 """
+
 from __future__ import annotations
 
 import argparse
 import contextlib
 import hashlib
-import json
 import socket
 import subprocess
 import sys
@@ -54,15 +54,18 @@ from typing import Callable
 
 import numpy as np
 
-import magnetics_signals as ms
+from .. import h5source
+from .. import signals as ms
+
 # Shared device config + shot-aware geometry resolution (one impl for fetch +
 # analysis). `load_device` is the single source of truth for a machine's mdsip
 # addresses/geometry; `pointname_at` maps a canonical sensor id → the pointname
 # valid at a shot (None = out of range / decommissioned).
-from devices import load_device, pointname_at
+from ..devices import load_device, pointname_at
 
-# All fetched shot files land here: data/datafile/ (next to this script).
-DATA_DIR = Path(__file__).resolve().parent / "datafile"
+# All fetched shot files land in the runtime data dir (data/datafile/) — the same
+# place h5source reads back from ($MAGNETICS_DATA_DIR or the repo's data/ dir).
+DATA_DIR = h5source.data_dir() / "datafile"
 
 
 def _resolve_pointnames(dev, pointnames, shot):
@@ -83,12 +86,12 @@ def _resolve_pointnames(dev, pointnames, shot):
     canonical_of: dict[str, str] = {}
     skipped: list[str] = []
     for cid in pointnames:
-        if cid not in sensors_cfg:       # unmodeled (plasma params, etc.)
+        if cid not in sensors_cfg:  # unmodeled (plasma params, etc.)
             query.append(cid)
             canonical_of[cid] = cid
             continue
         pt = pointname_at(dev, cid, shot_i)
-        if pt is None:                   # out of range / NotAvailable
+        if pt is None:  # out of range / NotAvailable
             skipped.append(cid)
             continue
         query.append(pt)
@@ -141,8 +144,7 @@ def resolve_sensor_set(dev: dict, name: str, _seen=None) -> list[str]:
     sets = dev.get("sensor_sets", {})
     if name not in sets:
         avail = ", ".join(sets) or "none"
-        raise ValueError(f"unknown sensor set {name!r}; "
-                         f"available: {avail}")
+        raise ValueError(f"unknown sensor set {name!r}; available: {avail}")
     _seen = set() if _seen is None else _seen
     if name in _seen:
         raise ValueError(f"circular sensor-set reference at {name!r}")
@@ -160,6 +162,7 @@ def resolve_sensor_set(dev: dict, name: str, _seen=None) -> list[str]:
         raise ValueError(f"sensor set {name!r} has unknown type {kind!r}")
     return _dedup(out)
 
+
 # A progress callback: (fraction_done in [0,1], human message) -> None.
 Progress = Callable[[float, str], None]
 
@@ -169,7 +172,7 @@ def _default_progress(frac: float, msg: str) -> None:
     width = 28
     filled = int(width * frac)
     bar = "#" * filled + "-" * (width - filled)
-    sys.stderr.write(f"\r[{bar}] {frac*100:5.1f}%  {msg:<32.32s}")
+    sys.stderr.write(f"\r[{bar}] {frac * 100:5.1f}%  {msg:<32.32s}")
     sys.stderr.flush()
     if frac >= 1.0:
         sys.stderr.write("\n")
@@ -231,23 +234,27 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     # path (the --tcp on-network path bypasses this function). Measured ~-26% wall
     # time on a 374 MB rotating pull (80.8s -> 59.8s); zlib CPU is well worth it on
     # a few-MB/s link. Harmless: it only narrows the win if the link is ever fast.
-    cmd = ["ssh", "-C", "-o", "ExitOnForwardFailure=yes", "-o",
-           "ServerAliveInterval=30", "-N"]
+    cmd = ["ssh", "-C", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-N"]
     if gw_port:
         cmd += ["-p", gw_port]
     cmd += ["-L", f"{lport}:{mds_host}:{mds_port}", target]
-    prompt = ("(using supplied credentials; approve Duo if pushed)" if env
-              else "(your terminal will prompt for password + Duo once)")
+    prompt = (
+        "(using supplied credentials; approve Duo if pushed)"
+        if env
+        else "(your terminal will prompt for password + Duo once)"
+    )
     sys.stderr.write(
         f"Opening one SSH tunnel via {gateway} -> {mds_host}:{mds_port} "
-        f"(local :{lport}).\n{prompt}\n")
+        f"(local :{lport}).\n{prompt}\n"
+    )
     proc = subprocess.Popen(cmd, env=env)  # env may carry SSH_ASKPASS
     try:
         ready = False
         for _ in range(1200):  # up to ~120s to complete Duo + open the forward
             if proc.poll() is not None:
-                raise SystemExit("SSH tunnel exited before it was ready "
-                                 "(auth failed or forward refused).")
+                raise SystemExit(
+                    "SSH tunnel exited before it was ready (auth failed or forward refused)."
+                )
             with socket.socket() as probe:
                 probe.settimeout(0.5)
                 if probe.connect_ex(("127.0.0.1", lport)) == 0:
@@ -292,8 +299,12 @@ def _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress):
                 t = np.atleast_1d(conn.get(f"dim_of({node})").data())
                 if y.size >= 1 and t.size == y.size and np.all(np.isfinite(t)):
                     t, y = _reduce(t, y, tmin, tmax, 1)
-                    ch = Channel(name, t.astype(np.float64, copy=False),
-                                 y.astype(np.float32, copy=False), ok=True)
+                    ch = Channel(
+                        name,
+                        t.astype(np.float64, copy=False),
+                        y.astype(np.float32, copy=False),
+                        ok=True,
+                    )
                     break
                 ch.error = f"{tree}{node}: degenerate (n={y.size}, t={t.size})"
             except Exception as exc:
@@ -303,9 +314,23 @@ def _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress):
     return out
 
 
-def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
-                   tmin, tmax, stride, workers, batch_size, progress,
-                   tree_signals=None, ssh_env=None):
+def _fetch_mdsthin(
+    shot,
+    pointnames,
+    *,
+    username,
+    gateway,
+    server,
+    tcp,
+    tmin,
+    tmax,
+    stride,
+    workers,
+    batch_size,
+    progress,
+    tree_signals=None,
+    ssh_env=None,
+):
     """Pull pointnames concurrently over a pool of mdsthin connections.
 
     Each worker owns its own connection (mdsthin Connections are not thread-safe
@@ -321,8 +346,7 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     try:
         from mdsthin import Connection
     except ImportError:
-        sys.exit("Missing dependency: pip/uv install mdsthin  "
-                 "(pure-python MDSplus thin client)")
+        sys.exit("Missing dependency: pip/uv install mdsthin  (pure-python MDSplus thin client)")
 
     mds = server.split("://", 1)[-1].split("@", 1)[-1]
     mds_host, _, mds_port = mds.partition(":")
@@ -348,7 +372,7 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
         return sfx
 
     suffix = _reduce_suffix()
-    data_expr = f"(ptdata2($, $)){suffix}"          # $1=pointname, $2=shot
+    data_expr = f"(ptdata2($, $)){suffix}"  # $1=pointname, $2=shot
     time_expr = f"dim_of((ptdata2($, $)){suffix})"
 
     def _arr(x):
@@ -364,11 +388,11 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
     # Split channels into batches; spread batches across a small pool of
     # connections (each connection runs its batches serially, one round trip each).
     batch_size = max(1, batch_size)
-    batches = [pointnames[i:i + batch_size]
-               for i in range(0, n, batch_size)]
+    batches = [pointnames[i : i + batch_size] for i in range(0, n, batch_size)]
     workers = max(1, min(workers, len(batches)))
 
     import threading
+
     lock = threading.Lock()
     state = {"done": 0}
 
@@ -406,23 +430,20 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
                             out.append(Channel(pt, ok=False, error="no data"))
                             continue
                         t = _arr(gm.get(f"t{i}"))
-                        out.append(Channel(
-                            pt, t, y.astype(np.float32, copy=False), ok=True))
+                        out.append(Channel(pt, t, y.astype(np.float32, copy=False), ok=True))
                     except Exception as exc:  # per-channel error in the batch
                         out.append(Channel(pt, ok=False, error=str(exc)))
                 tick(batch[-1], k=len(batch))
                 return out, True
             except Exception as exc:  # whole-batch failure -> fall back
-                sys.stderr.write(
-                    f"\ngetMany unavailable ({exc}); using per-channel fetch.\n")
+                sys.stderr.write(f"\ngetMany unavailable ({exc}); using per-channel fetch.\n")
                 use_many = False
         # per-channel fallback
         for pt in batch:
             try:
                 t, y, ok = fetch_one(conn, pt)
                 if ok:
-                    out.append(Channel(pt, t, y.astype(np.float32, copy=False),
-                                       ok=True))
+                    out.append(Channel(pt, t, y.astype(np.float32, copy=False), ok=True))
                 else:
                     out.append(Channel(pt, ok=False, error="no data"))
             except Exception as exc:
@@ -447,8 +468,7 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
             assigned[i % workers].append(b)
         results: list[Channel] = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(run_worker, connect, a)
-                       for a in assigned if a]
+            futures = [ex.submit(run_worker, connect, a) for a in assigned if a]
             for fut in as_completed(futures):
                 results.extend(fut.result())
         order = {pt: i for i, pt in enumerate(pointnames)}  # deterministic output
@@ -459,25 +479,25 @@ def _fetch_mdsthin(shot, pointnames, *, username, gateway, server, tcp,
 
     if tcp:
         # On-network: each worker dials mdsip directly (no gateway, no auth race).
-        connect = lambda: Connection(f"{username}@{mds_host}:{mds_port}")
-        results = run_all(
-            connect, f"{len(batches)} batches x{batch_size} ({workers} conns)")
-        results += _mdsthin_tree_channels(
-            connect, shot, tree_signals, tmin, tmax, progress)
+        def connect():
+            return Connection(f"{username}@{mds_host}:{mds_port}")
+
+        results = run_all(connect, f"{len(batches)} batches x{batch_size} ({workers} conns)")
+        results += _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress)
         return results
     # Off-network: one SSH tunnel, then a few TCP mdsip conns through it.
     with _ssh_tunnel(username, gateway, mds_host, mds_port, env=ssh_env) as lport:
-        connect = lambda: Connection(f"{username}@127.0.0.1:{lport}")
-        results = run_all(
-            connect, f"{len(batches)} batches x{batch_size} via tunnel")
-        results += _mdsthin_tree_channels(
-            connect, shot, tree_signals, tmin, tmax, progress)
+
+        def connect():
+            return Connection(f"{username}@127.0.0.1:{lport}")
+
+        results = run_all(connect, f"{len(batches)} batches x{batch_size} via tunnel")
+        results += _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress)
         return results
 
 
 # --- toksearch backend (cluster, native local PTDATA) -------------------------
-def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress,
-                     tree_signals=None):
+def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_signals=None):
     """Pull pointnames for a shot via a toksearch Pipeline.
 
     This is the on-cluster fast path: `toksearch_d3d.PtDataSignal` reads PTDATA
@@ -495,20 +515,24 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress,
     plugin, not core toksearch -- core is device-agnostic and omits PTDATA).
     """
     try:
-        from toksearch import Pipeline
+        from toksearch import Pipeline  # ty: ignore[unresolved-import]
     except ImportError:
-        sys.exit("Missing dependency: toksearch is not installed in this "
-                 "environment. Run on the GA cluster's toksearch env, or use "
-                 "--backend mdsthin.")
+        sys.exit(
+            "Missing dependency: toksearch is not installed in this "
+            "environment. Run on the GA cluster's toksearch env, or use "
+            "--backend mdsthin."
+        )
     try:
-        from toksearch_d3d import PtDataSignal
+        from toksearch_d3d import PtDataSignal  # ty: ignore[unresolved-import]
     except ImportError:
         try:  # older/newer layouts re-export it from core toksearch
             from toksearch import PtDataSignal  # type: ignore
         except ImportError:
-            sys.exit("Missing dependency: toksearch_d3d (the DIII-D PTDATA plugin) "
-                     "is not installed. Install toksearch_d3d, or use "
-                     "--backend mdsthin.")
+            sys.exit(
+                "Missing dependency: toksearch_d3d (the DIII-D PTDATA plugin) "
+                "is not installed. Install toksearch_d3d, or use "
+                "--backend mdsthin."
+            )
 
     tree_signals = tree_signals or {}
     # EFIT-tree signals (e.g. elongation) come from MdsSignal(node, tree), not
@@ -566,8 +590,11 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress,
         if sig is None or "data" not in sig:
             err = "no data"
             if pt in errors:
-                err = str(errors[pt].get("type", "no data")) if hasattr(
-                    errors[pt], "get") else "no data"
+                err = (
+                    str(errors[pt].get("type", "no data"))
+                    if hasattr(errors[pt], "get")
+                    else "no data"
+                )
             results.append(Channel(pt, ok=False, error=err))
         else:
             y = np.atleast_1d(np.asarray(sig["data"]))
@@ -576,8 +603,14 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress,
                 results.append(Channel(pt, ok=False, error="no data"))
             else:
                 t, y = _reduce(t, y, tmin, tmax, stride)
-                results.append(Channel(pt, t.astype(np.float64, copy=False),
-                                       y.astype(np.float32, copy=False), ok=True))
+                results.append(
+                    Channel(
+                        pt,
+                        t.astype(np.float64, copy=False),
+                        y.astype(np.float32, copy=False),
+                        ok=True,
+                    )
+                )
         progress(i / n, pt)
 
     # Resolve EFIT-tree signals: first candidate key with usable data wins. No
@@ -592,8 +625,12 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress,
             t = np.atleast_1d(np.asarray(sig["times"]))
             if y.size >= 1 and t.size == y.size:
                 t, y = _reduce(t, y, tmin, tmax, 1)
-                ch = Channel(name, t.astype(np.float64, copy=False),
-                             y.astype(np.float32, copy=False), ok=True)
+                ch = Channel(
+                    name,
+                    t.astype(np.float64, copy=False),
+                    y.astype(np.float32, copy=False),
+                    ok=True,
+                )
                 break
         results.append(ch)
         progress(1.0, f"tree:{name} ({'ok' if ch.ok else 'missing'})")
@@ -609,9 +646,21 @@ def _attr_names(h5, attr):
     return {x.decode() if isinstance(x, bytes) else str(x) for x in arr}
 
 
-def _write_h5(path, shot, analysis, backend, channels, *, compression,
-              tmin, tmax, stride, device="DIII-D", query_names=None,
-              merge=False):
+def _write_h5(
+    path,
+    shot,
+    analysis,
+    backend,
+    channels,
+    *,
+    compression,
+    tmin,
+    tmax,
+    stride,
+    device="DIII-D",
+    query_names=None,
+    merge=False,
+):
     import h5py
 
     query_names = query_names or {}
@@ -626,9 +675,12 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
     got = []
     for c in (ch for ch in channels if ch.ok):
         t = None if c.time is None else np.asarray(c.time)
-        if (t is None or t.size == 0
-                or not np.issubdtype(t.dtype, np.number)
-                or not np.all(np.isfinite(t))):
+        if (
+            t is None
+            or t.size == 0
+            or not np.issubdtype(t.dtype, np.number)
+            or not np.all(np.isfinite(t))
+        ):
             c.ok = False
             c.error = "no usable time axis"
             missing.append(c)
@@ -671,33 +723,34 @@ def _write_h5(path, shot, analysis, backend, channels, *, compression,
             # but two distinct vectors that happen to share (shape, endpoints, N)
             # must NOT collide — a metadata-only key silently hard-links them and
             # corrupts the second channel's timestamps.
-            key = (c.time.dtype.str, c.time.shape,
-                   hashlib.sha1(np.ascontiguousarray(c.time)).digest())
+            key = (
+                c.time.dtype.str,
+                c.time.shape,
+                hashlib.sha1(np.ascontiguousarray(c.time)).digest(),
+            )
             tb_name = tb_cache.get(key)
             if tb_name is None:
                 tb_name = f"tb{tb_n}"
                 tb_n += 1
                 tb_grp.create_dataset(
-                    tb_name, data=c.time, compression=comp,
-                    chunks=True if comp else None)
+                    tb_name, data=c.time, compression=comp, chunks=True if comp else None
+                )
                 tb_grp[tb_name].attrs["time_units"] = "ms"
                 tb_cache[key] = tb_name
 
-            if c.name in h5:        # re-fetched (e.g. --force on a merge): replace
+            if c.name in h5:  # re-fetched (e.g. --force on a merge): replace
                 del h5[c.name]
             g = h5.create_group(c.name)
-            g.create_dataset("data", data=c.data, compression=comp,
-                             chunks=True if comp else None)
+            g.create_dataset("data", data=c.data, compression=comp, chunks=True if comp else None)
             g["time"] = tb_grp[tb_name]  # hard link -> shared time base
             g.attrs["time_units"] = "ms"
-            if c.name in query_names:    # fetched under a legacy pointname
+            if c.name in query_names:  # fetched under a legacy pointname
                 g.attrs["pointname"] = query_names[c.name]
 
         # Union new channels with whatever the file already recorded; a name that
         # is now fetched is removed from the missing list.
         fetched = _attr_names(h5, "channels_fetched") | {c.name for c in got}
-        missing_names = ((_attr_names(h5, "channels_missing")
-                          | {c.name for c in missing}) - fetched)
+        missing_names = (_attr_names(h5, "channels_missing") | {c.name for c in missing}) - fetched
         h5.attrs["channels_fetched"] = np.array(sorted(fetched), dtype="S")
         h5.attrs["channels_missing"] = np.array(sorted(missing_names), dtype="S")
     return got, missing
@@ -713,6 +766,7 @@ def _existing_channels(path, tmin, tmax, stride):
     overwrites instead of merging).
     """
     import h5py
+
     want_tmin = "*" if tmin is None else float(tmin)
     want_tmax = "*" if tmax is None else float(tmax)
 
@@ -725,28 +779,45 @@ def _existing_channels(path, tmin, tmax, stride):
 
     try:
         with h5py.File(path, "r") as h5:
-            if not (_eq(h5.attrs.get("tmin"), want_tmin)
-                    and _eq(h5.attrs.get("tmax"), want_tmax)
-                    and int(h5.attrs.get("decimate", 1)) == int(stride)):
+            if not (
+                _eq(h5.attrs.get("tmin"), want_tmin)
+                and _eq(h5.attrs.get("tmax"), want_tmax)
+                and int(h5.attrs.get("decimate", 1)) == int(stride)
+            ):
                 return None
-            return _attr_names(h5, "channels_fetched") | \
-                _attr_names(h5, "channels_missing")
+            return _attr_names(h5, "channels_fetched") | _attr_names(h5, "channels_missing")
     except Exception:
         return None
 
 
 # --- public API ---------------------------------------------------------------
-def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
-               device: str = "diiid", sensor_set: str | None = None,
-               username: str | None = None, password: str | None = None,
-               duo: str | None = None, gateway: str | None = None,
-               server: str | None = None, tcp: bool = False,
-               tmin: float | None = None, tmax: float | None = None,
-               decimate: int = 1, workers: int = 4, batch_size: int = 40,
-               out: str | None = None, compression: str = "lzf", force: bool = False,
-               remote_host: str = "omega", ssh_jump: str | None = None,
-               remote_dir: str = "~/magnetics_fetch", remote_python: str | None = None,
-               progress: Progress | None = None) -> str:
+def fetch_shot(
+    shot: int,
+    analysis: str = "both",
+    *,
+    backend: str = "mdsthin",
+    device: str = "diiid",
+    sensor_set: str | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    duo: str | None = None,
+    gateway: str | None = None,
+    server: str | None = None,
+    tcp: bool = False,
+    tmin: float | None = None,
+    tmax: float | None = None,
+    decimate: int = 1,
+    workers: int = 4,
+    batch_size: int = 40,
+    out: str | None = None,
+    compression: str = "lzf",
+    force: bool = False,
+    remote_host: str = "omega",
+    ssh_jump: str | None = None,
+    remote_dir: str = "~/magnetics_fetch",
+    remote_python: str | None = None,
+    progress: Progress | None = None,
+) -> str:
     """Fetch one shot's magnetics signals for `analysis` and write HDF5.
 
     Returns the output path. `backend` defaults to "mdsthin" (laptop → DIII-D, the
@@ -771,21 +842,33 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
     CLI prompt/stderr bar.
     """
     if analysis not in ms.ANALYSES:
-        raise ValueError(f"unknown analysis {analysis!r}; "
-                         f"choose from {', '.join(ms.ANALYSES)}")
+        raise ValueError(f"unknown analysis {analysis!r}; choose from {', '.join(ms.ANALYSES)}")
     progress = progress or _default_progress
 
     if backend == "remote":
         # Orchestrate a pull on the cluster from here; remote side runs this same
         # script with --backend toksearch and writes the file we copy back.
-        import remote_run
+        from . import remote as remote_run
+
         kw = {} if remote_python is None else {"python": remote_python}
         return remote_run.run_remote(
-            shot, analysis, host=remote_host, jump=ssh_jump, username=username,
-            password=password, duo=duo, remote_dir=remote_dir, tmin=tmin,
-            tmax=tmax, decimate=decimate, device=device, sensor_set=sensor_set,
+            shot,
+            analysis,
+            host=remote_host,
+            jump=ssh_jump,
+            username=username,
+            password=password,
+            duo=duo,
+            remote_dir=remote_dir,
+            tmin=tmin,
+            tmax=tmax,
+            decimate=decimate,
+            device=device,
+            sensor_set=sensor_set,
             local_out_dir=(str(Path(out).parent) if out else None),
-            progress=progress, **kw)
+            progress=progress,
+            **kw,
+        )
 
     # Device config is the source of truth for mdsip addresses; an explicit
     # gateway/server (CLI or caller) overrides the device file.
@@ -797,8 +880,10 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         if not server:
             raise ValueError(f"device {device!r} has no 'server'; pass --server")
         if not tcp and not gateway:
-            raise ValueError(f"device {device!r} has no 'gateway'; pass --gateway "
-                             "or use --tcp for a direct connection")
+            raise ValueError(
+                f"device {device!r} has no 'gateway'; pass --gateway "
+                "or use --tcp for a direct connection"
+            )
 
     # Signal selection. A device sensor set (preferred) overrides the analysis
     # sensor groups: pull the set's signals plus the device's plasma params.
@@ -841,7 +926,8 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
 
     if backend == "auto":
         try:
-            import toksearch  # noqa: F401
+            import toksearch  # noqa: F401  # ty: ignore[unresolved-import]
+
             backend = "toksearch"
         except ImportError:
             backend = "mdsthin"
@@ -860,26 +946,30 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         if existing is None:
             sys.stderr.write(
                 f"{out} exists but with a different window/decimation; "
-                "overwriting (pass a separate --out to keep the old file).\n")
+                "overwriting (pass a separate --out to keep the old file).\n"
+            )
         else:
             merge = True
             before = len(pointnames) + len(tree_signals)
             pointnames = [p for p in pointnames if p not in existing]
-            tree_signals = {k: v for k, v in tree_signals.items()
-                            if k not in existing}
+            tree_signals = {k: v for k, v in tree_signals.items() if k not in existing}
             n_skipped = before - (len(pointnames) + len(tree_signals))
 
     if merge and not pointnames and not tree_signals:
-        sys.stderr.write(
-            f"All {n_skipped} requested signals already in {out}; nothing to "
-            "fetch.\n")
+        sys.stderr.write(f"All {n_skipped} requested signals already in {out}; nothing to fetch.\n")
         return out
 
     t0 = time.perf_counter()
     if backend == "toksearch":
-        channels = _fetch_toksearch(shot, pointnames, tmin=tmin, tmax=tmax,
-                                    stride=stride, progress=progress,
-                                    tree_signals=tree_signals)
+        channels = _fetch_toksearch(
+            shot,
+            pointnames,
+            tmin=tmin,
+            tmax=tmax,
+            stride=stride,
+            progress=progress,
+            tree_signals=tree_signals,
+        )
     elif backend == "mdsthin":
         # username is optional: with an ssh-config Host alias as the gateway (the
         # default), User/port/key come from ~/.ssh/config. --username overrides it.
@@ -887,14 +977,26 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
         # terminal prompt); without it ssh prompts on the tty as before.
         ssh_env, _ssh_cleanup = (None, lambda: None)
         if password and not tcp:
-            import sshauth
+            from .. import sshauth
+
             ssh_env, _ssh_cleanup = sshauth.askpass_env(password, duo)
         try:
             channels = _fetch_mdsthin(
-                shot, pointnames, username=username, gateway=gateway,
-                server=server, tcp=tcp, tmin=tmin, tmax=tmax, stride=stride,
-                workers=workers, batch_size=batch_size, progress=progress,
-                tree_signals=tree_signals, ssh_env=ssh_env)
+                shot,
+                pointnames,
+                username=username,
+                gateway=gateway,
+                server=server,
+                tcp=tcp,
+                tmin=tmin,
+                tmax=tmax,
+                stride=stride,
+                workers=workers,
+                batch_size=batch_size,
+                progress=progress,
+                tree_signals=tree_signals,
+                ssh_env=ssh_env,
+            )
         finally:
             _ssh_cleanup()
     else:
@@ -914,14 +1016,25 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
 
     # out_path was resolved before the (possibly incremental) fetch above.
     n_fetch = len(pointnames) + len(tree_signals)
-    got, missing = _write_h5(out, shot, label, backend, channels,
-                             compression=compression, tmin=tmin, tmax=tmax,
-                             stride=stride, device=device_name,
-                             query_names=query_names, merge=merge)
+    got, missing = _write_h5(
+        out,
+        shot,
+        label,
+        backend,
+        channels,
+        compression=compression,
+        tmin=tmin,
+        tmax=tmax,
+        stride=stride,
+        device=device_name,
+        query_names=query_names,
+        merge=merge,
+    )
     skipped_note = f", {n_skipped} cached" if n_skipped else ""
     sys.stderr.write(
         f"Saved {len(got)}/{n_fetch} channels to {out} "
-        f"({len(missing)} missing{skipped_note}, {backend}, {elapsed:.1f}s)\n")
+        f"({len(missing)} missing{skipped_note}, {backend}, {elapsed:.1f}s)\n"
+    )
     if missing:
         # group missing channels by reason so a re-run is self-diagnosing
         by_reason: dict[str, list[str]] = {}
@@ -932,81 +1045,139 @@ def fetch_shot(shot: int, analysis: str = "both", *, backend: str = "mdsthin",
             sys.stderr.write(f"  missing [{reason}] x{len(names)}: {shown}\n")
     if skipped:
         shown = ", ".join(skipped[:12]) + (" ..." if len(skipped) > 12 else "")
-        sys.stderr.write(f"  skipped [not valid at shot {shot_i}] "
-                         f"x{len(skipped)}: {shown}\n")
+        sys.stderr.write(f"  skipped [not valid at shot {shot_i}] x{len(skipped)}: {shown}\n")
     return out
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Fetch DIII-D magnetics signals (analysis-downselected) "
-                    "to HDF5, fast.")
+        description="Fetch DIII-D magnetics signals (analysis-downselected) to HDF5, fast."
+    )
     ap.add_argument("--shot", type=int, default=184927)
-    ap.add_argument("--analysis", choices=ms.ANALYSES, default="both",
-                    help="downselect signals by analysis type")
-    ap.add_argument("--backend",
-                    choices=("mdsthin", "toksearch", "remote", "auto"),
-                    default="mdsthin",
-                    help="default mdsthin (laptop → DIII-D). 'toksearch' (cluster) "
-                         "and 'remote' (auto-sync + run on the cluster) are WIP. "
-                         "'auto' = toksearch if importable, else mdsthin")
-    ap.add_argument("--tmin", type=float, default=None,
-                    help="window start (ms); reduces data moved")
+    ap.add_argument(
+        "--analysis",
+        choices=ms.ANALYSES,
+        default="both",
+        help="downselect signals by analysis type",
+    )
+    ap.add_argument(
+        "--backend",
+        choices=("mdsthin", "toksearch", "remote", "auto"),
+        default="mdsthin",
+        help="default mdsthin (laptop → DIII-D). 'toksearch' (cluster) "
+        "and 'remote' (auto-sync + run on the cluster) are WIP. "
+        "'auto' = toksearch if importable, else mdsthin",
+    )
+    ap.add_argument(
+        "--tmin", type=float, default=None, help="window start (ms); reduces data moved"
+    )
     ap.add_argument("--tmax", type=float, default=None, help="window end (ms)")
-    ap.add_argument("--decimate", type=int, default=1,
-                    help="keep every Nth sample (quasi-stationary only)")
-    ap.add_argument("--workers", type=int, default=4,
-                    help="mdsthin: parallel connections (each runs whole batches)")
-    ap.add_argument("--batch-size", type=int, default=40,
-                    help="mdsthin: channels per getMany round trip (bigger=fewer "
-                         "round trips; smaller=finer progress/less memory)")
-    ap.add_argument("--compression", choices=("none", "lzf", "gzip"),
-                    default="lzf")
-    ap.add_argument("--device", default="diiid",
-                    help="device config in data/device/<device>.json; supplies the "
-                         "mdsip gateway/server (default 'diiid')")
-    ap.add_argument("--sensor-set", default=None,
-                    help="name of a set under the device file's 'sensor_sets'; when "
-                         "given, pulls that set's signals + plasma current/field/"
-                         "elongation instead of the --analysis groups")
-    ap.add_argument("--gateway", default=None,
-                    help="mdsthin SSH gateway as host[:port], or an ~/.ssh/config "
-                         "Host alias; overrides the device file's gateway")
-    ap.add_argument("--server", default=None,
-                    help="mdsip host:port reached from the gateway; overrides the "
-                         "device file's server")
-    ap.add_argument("--tcp", action="store_true",
-                    help="mdsthin: direct TCP mdsip instead of SSH gateway")
-    ap.add_argument("--username", default=None,
-                    help="GA username (mdsthin/remote); optional when the gateway "
-                         "ssh-config alias already sets User")
+    ap.add_argument(
+        "--decimate", type=int, default=1, help="keep every Nth sample (quasi-stationary only)"
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="mdsthin: parallel connections (each runs whole batches)",
+    )
+    ap.add_argument(
+        "--batch-size",
+        type=int,
+        default=40,
+        help="mdsthin: channels per getMany round trip (bigger=fewer "
+        "round trips; smaller=finer progress/less memory)",
+    )
+    ap.add_argument("--compression", choices=("none", "lzf", "gzip"), default="lzf")
+    ap.add_argument(
+        "--device",
+        default="diiid",
+        help="device config in data/device/<device>.json; supplies the "
+        "mdsip gateway/server (default 'diiid')",
+    )
+    ap.add_argument(
+        "--sensor-set",
+        default=None,
+        help="name of a set under the device file's 'sensor_sets'; when "
+        "given, pulls that set's signals + plasma current/field/"
+        "elongation instead of the --analysis groups",
+    )
+    ap.add_argument(
+        "--gateway",
+        default=None,
+        help="mdsthin SSH gateway as host[:port], or an ~/.ssh/config "
+        "Host alias; overrides the device file's gateway",
+    )
+    ap.add_argument(
+        "--server",
+        default=None,
+        help="mdsip host:port reached from the gateway; overrides the device file's server",
+    )
+    ap.add_argument(
+        "--tcp", action="store_true", help="mdsthin: direct TCP mdsip instead of SSH gateway"
+    )
+    ap.add_argument(
+        "--username",
+        default=None,
+        help="GA username (mdsthin/remote); optional when the gateway "
+        "ssh-config alias already sets User",
+    )
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
-    ap.add_argument("--force", action="store_true",
-                    help="re-pull every signal even if an existing shot file "
-                         "already has it (default: skip cached signals + merge)")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="re-pull every signal even if an existing shot file "
+        "already has it (default: skip cached signals + merge)",
+    )
     # remote backend (run the pull on the GA cluster, auto-syncing the code)
-    ap.add_argument("--remote-host", default="omega",
-                    help="remote: cluster host — normally an ssh-config alias whose "
-                         "ProxyJump handles the gateway (default 'omega')")
-    ap.add_argument("--ssh-jump", default=None,
-                    help="remote: explicit SSH jump host[:port] for a RAW host; leave "
-                         "unset when --remote-host is an alias (its ProxyJump applies)")
-    ap.add_argument("--remote-dir", default="~/magnetics_fetch",
-                    help="remote: dir on the cluster to sync the fetcher into")
-    ap.add_argument("--remote-python", default=None,
-                    help="remote: cluster env interpreter to run directly (default: "
-                         "toksearch_env's python; no module load / conda activate)")
+    ap.add_argument(
+        "--remote-host",
+        default="omega",
+        help="remote: cluster host — normally an ssh-config alias whose "
+        "ProxyJump handles the gateway (default 'omega')",
+    )
+    ap.add_argument(
+        "--ssh-jump",
+        default=None,
+        help="remote: explicit SSH jump host[:port] for a RAW host; leave "
+        "unset when --remote-host is an alias (its ProxyJump applies)",
+    )
+    ap.add_argument(
+        "--remote-dir",
+        default="~/magnetics_fetch",
+        help="remote: dir on the cluster to sync the fetcher into",
+    )
+    ap.add_argument(
+        "--remote-python",
+        default=None,
+        help="remote: cluster env interpreter to run directly (default: "
+        "toksearch_env's python; no module load / conda activate)",
+    )
     args = ap.parse_args(argv)
 
-    fetch_shot(args.shot, args.analysis, backend=args.backend,
-               device=args.device, sensor_set=args.sensor_set,
-               username=args.username, gateway=args.gateway, server=args.server,
-               tcp=args.tcp, tmin=args.tmin, tmax=args.tmax,
-               decimate=args.decimate, workers=args.workers,
-               batch_size=args.batch_size, out=args.out, force=args.force,
-               compression=args.compression, remote_host=args.remote_host,
-               ssh_jump=args.ssh_jump, remote_dir=args.remote_dir,
-               remote_python=args.remote_python)
+    fetch_shot(
+        args.shot,
+        args.analysis,
+        backend=args.backend,
+        device=args.device,
+        sensor_set=args.sensor_set,
+        username=args.username,
+        gateway=args.gateway,
+        server=args.server,
+        tcp=args.tcp,
+        tmin=args.tmin,
+        tmax=args.tmax,
+        decimate=args.decimate,
+        workers=args.workers,
+        batch_size=args.batch_size,
+        out=args.out,
+        force=args.force,
+        compression=args.compression,
+        remote_host=args.remote_host,
+        ssh_jump=args.ssh_jump,
+        remote_dir=args.remote_dir,
+        remote_python=args.remote_python,
+    )
     return 0
 
 

@@ -31,6 +31,7 @@ SSH_ASKPASS helper so no terminal prompt is needed (`duo` answers the Duo prompt
 default "1" = Duo Push). With a key-based ssh-config alias (the default), no
 password is needed at all. Secrets are passed once to ssh and never stored.
 """
+
 from __future__ import annotations
 
 import shlex
@@ -38,21 +39,23 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sshauth import askpass_env
+from .. import h5source
+from ..sshauth import askpass_env
 
-HERE = Path(__file__).resolve().parent          # repo data/ dir (the fetcher lives here)
-LOCAL_OUT = HERE / "datafile"                    # where pulled .h5 land locally
-SYNC_FILES = ["toksearch_fetch.py", "magnetics_signals.py", "devices.py",
-              "inspect_h5.py", "sshauth.py", "device"]   # "device" dir carries the per-device JSON
+# The importable package root (…/src/magnetics). We rsync it to the cluster so the
+# fetcher runs there as `python -m magnetics.data.fetch.toksearch` (relative imports
+# intact) instead of as a loose script — one code path for laptop and cluster.
+PKG_ROOT = Path(__file__).resolve().parents[2]  # …/src/magnetics
+PKG_NAME = PKG_ROOT.name  # "magnetics"
+LOCAL_OUT = h5source.data_dir() / "datafile"  # where pulled .h5 land locally
 
 # Cluster defaults (override via args / CLI flags).
-DEFAULT_HOST = "omega"          # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
-DEFAULT_JUMP = None             # alias carries the gateway hop; set only for a raw host
+DEFAULT_HOST = "omega"  # an ~/.ssh/config alias (User/port/key/ProxyJump baked in)
+DEFAULT_JUMP = None  # alias carries the gateway hop; set only for a raw host
 DEFAULT_DIR = "~/magnetics_fetch"
 # Invoke the cluster env's interpreter DIRECTLY -- no `module load` / `conda activate`
 # (its activate.d scripts set nothing PTDATA needs; direct is ~4-5s faster per pull).
-DEFAULT_PYTHON = (
-    "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python")
+DEFAULT_PYTHON = "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
 
 
 def _log(msg: str) -> None:
@@ -60,22 +63,35 @@ def _log(msg: str) -> None:
     sys.stderr.flush()
 
 
-def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
-               username=None, password=None, duo=None, remote_dir=DEFAULT_DIR,
-               python=DEFAULT_PYTHON, tmin=None, tmax=None, decimate=1,
-               device="diiid", sensor_set=None,
-               local_out_dir=None, progress=None) -> str:
+def run_remote(
+    shot,
+    analysis="both",
+    *,
+    host=DEFAULT_HOST,
+    jump=DEFAULT_JUMP,
+    username=None,
+    password=None,
+    duo=None,
+    remote_dir=DEFAULT_DIR,
+    python=DEFAULT_PYTHON,
+    tmin=None,
+    tmax=None,
+    decimate=1,
+    device="diiid",
+    sensor_set=None,
+    local_out_dir=None,
+    progress=None,
+) -> str:
     """Sync code → run the pull on the cluster → copy the .h5 back. Returns the
     local path of the fetched file."""
-    env, cleanup = (askpass_env(password, duo) if password else (None, lambda: None))
+    env, cleanup = askpass_env(password, duo) if password else (None, lambda: None)
 
     # host/jump may be ~/.ssh/config aliases (User/port/key/ProxyJump from config) or
     # raw hosts; only prepend user@ when an explicit username overrides the alias.
     target = f"{username}@{host}" if username else host
     tag = (f"{username}-" if username else "") + host.replace("/", "_")
-    sock = f"/tmp/ms-{tag}.sock"               # short ControlPath (macOS length limit)
-    ctl = ["-o", "ControlMaster=auto", "-o", f"ControlPath={sock}",
-           "-o", "ControlPersist=300"]
+    sock = f"/tmp/ms-{tag}.sock"  # short ControlPath (macOS length limit)
+    ctl = ["-o", "ControlMaster=auto", "-o", f"ControlPath={sock}", "-o", "ControlPersist=300"]
     reuse = ["ssh", "-o", f"ControlPath={sock}"]  # subsequent hops reuse the master
 
     def run(cmd, **kw):
@@ -87,25 +103,51 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
         if jump:
             master += ["-J", f"{username}@{jump}" if username else jump]
         master += [target, "true"]
-        _log(f"Connecting to {target}" + (f" via {jump}" if jump else "")
-             + (" (using supplied credentials; approve Duo if pushed)"
-                if password else " ..."))
+        _log(
+            f"Connecting to {target}"
+            + (f" via {jump}" if jump else "")
+            + (" (using supplied credentials; approve Duo if pushed)" if password else " ...")
+        )
         if run(master).returncode != 0:
-            sys.exit("SSH to the cluster failed (check the ssh-config alias / "
-                     "username / password / Duo).")
+            sys.exit(
+                "SSH to the cluster failed (check the ssh-config alias / "
+                "username / password / Duo)."
+            )
 
         # 2) ensure the remote dir exists, then rsync the fetcher up.
         out_remote = f"{remote_dir}/out"
         run([*reuse, target, f"mkdir -p {remote_dir} {out_remote}"], check=True)
-        _log(f"Syncing fetcher → {target}:{remote_dir}/ ...")
+        _log(f"Syncing {PKG_NAME} package → {target}:{remote_dir}/ ...")
         rsh = f"ssh -o ControlPath={sock}"  # rsync reuses the master connection
-        run(["rsync", "-az", "-e", rsh, *[str(HERE / f) for f in SYNC_FILES],
-             f"{target}:{remote_dir}/"], check=True)
+        run(
+            [
+                "rsync",
+                "-az",
+                "-e",
+                rsh,
+                "--exclude",
+                "__pycache__",
+                str(PKG_ROOT),
+                f"{target}:{remote_dir}/",
+            ],
+            check=True,
+        )
 
         # 3) run the pull on the cluster via the env interpreter directly.
         remote_out = f"out/shot_{shot}.h5"
-        fetch = [python, "toksearch_fetch.py", "--backend", "toksearch",
-                 "--shot", str(shot), "--device", device, "--out", remote_out]
+        fetch = [
+            python,
+            "-m",
+            "magnetics.data.fetch.toksearch",
+            "--backend",
+            "toksearch",
+            "--shot",
+            str(shot),
+            "--device",
+            device,
+            "--out",
+            remote_out,
+        ]
         if sensor_set:
             fetch += ["--sensor-set", sensor_set]
         else:
@@ -118,8 +160,9 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
             fetch += ["--decimate", str(decimate)]
         # TOKSEARCH_INDEX_DIR only matters for SQL/index shot *discovery*; we pass an
         # explicit shotlist, so point it at the workdir to silence ~1 warning/signal.
-        inner = (f'cd {remote_dir} && TOKSEARCH_INDEX_DIR="$PWD" '
-                 f"{shlex.join(fetch)}")
+        inner = (
+            f'cd {remote_dir} && PYTHONPATH="$PWD" TOKSEARCH_INDEX_DIR="$PWD" {shlex.join(fetch)}'
+        )
         _log(f"Running on {host}: {shlex.join(fetch)}")
         if progress:
             progress(0.5, f"pulling shot {shot} on {host}")
@@ -131,13 +174,14 @@ def run_remote(shot, analysis="both", *, host=DEFAULT_HOST, jump=DEFAULT_JUMP,
         out_dir.mkdir(parents=True, exist_ok=True)
         local_path = out_dir / f"shot_{shot}.h5"
         _log(f"Copying result → {local_path} ...")
-        run(["rsync", "-az", "-e", rsh,
-             f"{target}:{remote_dir}/{remote_out}", str(local_path)], check=True)
+        run(
+            ["rsync", "-az", "-e", rsh, f"{target}:{remote_dir}/{remote_out}", str(local_path)],
+            check=True,
+        )
         if progress:
             progress(1.0, f"done: {local_path.name}")
         _log(f"Saved {local_path}")
         return str(local_path)
     finally:
-        run([*reuse, "-O", "exit", target],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run([*reuse, "-O", "exit", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cleanup()

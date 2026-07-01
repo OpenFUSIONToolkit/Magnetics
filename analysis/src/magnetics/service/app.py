@@ -77,13 +77,10 @@ def devices():
     """List device configs (data/device/*.json) + their sensor-set names, so the GUI
     can offer device + sensor-set selection for a pull. `id` is the --device value;
     `sensor_sets` are the names selectable as --sensor-set (composites included)."""
-    h5source._ensure_catalog_on_path()
-    try:
-        import toksearch_fetch  # repo-root data/ module (also exposes DEVICE_DIR)
-    except Exception:  # noqa: BLE001
-        return []
+    from ..data import devices as devcfg
+
     out = []
-    for path in sorted(Path(toksearch_fetch.DEVICE_DIR).glob("*.json")):
+    for path in sorted(devcfg.DEVICE_DIR.glob("*.json")):
         try:
             d = json.loads(path.read_text())
         except Exception:  # noqa: BLE001 — skip an unparseable device file
@@ -166,9 +163,8 @@ def post_fetch(req: FetchRequest) -> dict:
     at GET /api/fetch/{job_id}/stream. Works where the fetcher works (laptop with
     creds/Duo or a key-based ssh-config gateway, or the cluster); offline the job
     reports a clear error and cached shots keep serving."""
-    h5source._ensure_catalog_on_path()
     try:
-        import toksearch_fetch  # repo-root data/ module
+        from ..data.fetch import toksearch
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"fetcher unavailable: {exc}") from exc
     # only pass overrides that are set, so the fetcher's own defaults apply
@@ -201,7 +197,7 @@ def post_fetch(req: FetchRequest) -> dict:
 
     def work():
         try:
-            out = toksearch_fetch.fetch_shot(
+            out = toksearch.fetch_shot(
                 req.shot,
                 req.analysis,
                 backend=req.backend,
@@ -212,7 +208,7 @@ def post_fetch(req: FetchRequest) -> dict:
                 tmax=req.tmax,
                 decimate=req.decimate,
                 progress=on_progress,
-                **fetch_kw,
+                **fetch_kw,  # ty: ignore[invalid-argument-type]
             )
             h5source.refresh()
             nodes.refresh()

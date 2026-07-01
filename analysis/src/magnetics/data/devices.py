@@ -12,6 +12,7 @@ fetcher (``data/toksearch_fetch.py``) and the analysis package
 (``magnetics.data.diiid`` via the catalog-path shim), so fetch and analysis can
 never disagree about which pointname/position a shot maps to.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,8 +36,7 @@ def load_device(device: str) -> dict:
     path = DEVICE_DIR / f"{device.lower()}.json"
     if not path.exists():
         avail = ", ".join(sorted(p.stem for p in DEVICE_DIR.glob("*.json"))) or "none"
-        raise ValueError(f"unknown device {device!r}; "
-                         f"available in {DEVICE_DIR}: {avail}")
+        raise ValueError(f"unknown device {device!r}; available in {DEVICE_DIR}: {avail}")
     with open(path) as f:
         return json.load(f)
 

@@ -1,16 +1,13 @@
 """Shot-aware device geometry: the time-segment resolver (``devices``), the
 fetcher's pointname assembly, and ``diiid``'s shot-dependent positions.
 
-Importing ``magnetics.data.diiid`` puts the repo-root ``data/`` catalog dir on
-``sys.path`` (its module-load shim), so ``import devices`` / ``toksearch_fetch``
-resolve here without network or fetched data.
+Driven by the committed device table (``magnetics.data.devices``) — no network or
+fetched data.
 """
 
 from __future__ import annotations
 
-from magnetics.data import diiid  # noqa: F401 — also wires the catalog path
-
-import devices
+from magnetics.data import devices, diiid
 
 
 # A synthetic device: a stable sensor, a renamed-then-moved sensor, and a
@@ -76,7 +73,7 @@ def test_geometry_none_when_decommissioned_or_out_of_range():
 
 # ── fetch assembly: _resolve_pointnames (no network) ──────────────────────────
 def test_fetch_resolution_recent_shot_keeps_all():
-    import toksearch_fetch as tf
+    from magnetics.data.fetch import toksearch as tf
 
     query, canon, skipped = tf._resolve_pointnames(
         DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 185000
@@ -87,7 +84,7 @@ def test_fetch_resolution_recent_shot_keeps_all():
 
 
 def test_fetch_resolution_old_shot_uses_alt_and_skips():
-    import toksearch_fetch as tf
+    from magnetics.data.fetch import toksearch as tf
 
     query, canon, skipped = tf._resolve_pointnames(
         DEV, ["S_OK", "S_RENAMED", "S_GONE", "ip"], 150000
@@ -98,7 +95,7 @@ def test_fetch_resolution_old_shot_uses_alt_and_skips():
 
 
 def test_fetch_resolution_skips_decommissioned():
-    import toksearch_fetch as tf
+    from magnetics.data.fetch import toksearch as tf
 
     query, _canon, skipped = tf._resolve_pointnames(DEV, ["S_GONE"], 195000)
     assert query == [] and skipped == ["S_GONE"]
@@ -106,7 +103,7 @@ def test_fetch_resolution_skips_decommissioned():
 
 # ── real device file: seeded shots vs the pre-152472 era ──────────────────────
 def test_real_file_skips_modeled_sensors_before_floor():
-    import toksearch_fetch as tf
+    from magnetics.data.fetch import toksearch as tf
 
     dev = devices.load_device("diiid")
     ids = ["MPID66M020", "MPID66M067", "ISLD66M017"]
