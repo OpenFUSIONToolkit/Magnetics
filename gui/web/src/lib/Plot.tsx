@@ -103,21 +103,39 @@ export default function Plot({
   // Save the current figure as an image. Plotly.downloadImage handles the file
   // download itself; PNG is rasterized at 2× for crisp screenshots, SVG is vector
   // (opens/prints to PDF from any viewer).
-  const saveImage = (format: "png" | "svg") => {
+  const saveImage = async (format: "png" | "svg") => {
     const el = ref.current;
     if (!el) return;
     // PNG is raster: render at 2× for a crisp screenshot. SVG is vector, so native
     // size is exact (opens/prints to PDF from any viewer at any scale).
     const w = el.clientWidth || 800;
     const mul = format === "png" ? 2 : 1;
-    void Plotly.downloadImage(el, {
-      format,
-      filename: exportName || "plot",
-      width: w * mul,
-      height: height * mul,
-    }).catch(() => {
+    // The plot's paper_bgcolor is transparent so it blends with the panel on
+    // screen; but Plotly's exporter fills the margins with paper_bgcolor, so a
+    // transparent paper flattens to grey in most image viewers. Temporarily make
+    // the paper the actual GUI panel color (white in light mode, near-black in
+    // dark) for the export, then restore transparency. Because the plot already
+    // sits on that same panel color, this swap is invisible on screen.
+    const bg =
+      getComputedStyle(el).getPropertyValue("--panel").trim() ||
+      (theme === "dark" ? "#0c131c" : "#ffffff");
+    try {
+      await Plotly.relayout(el, { paper_bgcolor: bg });
+      await Plotly.downloadImage(el, {
+        format,
+        filename: exportName || "plot",
+        width: w * mul,
+        height: height * mul,
+      });
+    } catch {
       /* transient (plot not fully drawn); user can retry */
-    });
+    } finally {
+      try {
+        await Plotly.relayout(el, { paper_bgcolor: plotChrome(theme).paper_bgcolor });
+      } catch {
+        /* noop */
+      }
+    }
   };
 
   const dataUrl = download ? nodeDownloadUrl(download.machine, download.nodeId, download.params) : null;
