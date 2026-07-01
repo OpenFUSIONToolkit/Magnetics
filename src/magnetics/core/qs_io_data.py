@@ -5,7 +5,7 @@ Replaces the old "fetch" step (and the netCDF ``RAW``/``PLASMA_PARAMS``/
 
   * raw sensor signals from ``data/datafile/shot_<shot>.h5``, and
   * device/sensor geometry from ``data/device/<device>.json`` (via
-    :mod:`omfit_compat`).
+    :mod:`magnetics.core.qs_device`).
 
 ``shot_<shot>.h5`` layout (what the PTDATA fetch produces):
   * one group per fetched channel, each with ``data`` (samples) and ``time``
@@ -23,22 +23,25 @@ window all channels share — and converts that axis to **seconds**.  The global
 
 Sensor geometry (the per-channel ``r,z,phi,theta,...`` and the derived
 ``*_end1/2`` coordinates the fit needs) is attached from the device JSON; see
-:func:`omfit_compat.sensor_geometry`.
+:func:`magnetics.core.qs_device.sensor_geometry`.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
 import numpy as np
 import xarray as xr
 
-from .omfit_compat import list_sensor_subsets, printw, resolve_channel_filter, sensor_geometry
+from .qs_device import list_sensor_subsets, resolve_channel_filter, sensor_geometry
 
 #: Default location of the per-shot HDF5 files — the runtime data dir the fetcher
 #: writes and h5source reads ($MAGNETICS_DATA_DIR or the repo's data/datafile/).
 from ..data import h5source as _h5source
+
+logger = logging.getLogger(__name__)
 
 DATAFILE_ROOT = str(_h5source.data_dir() / "datafile")
 
@@ -108,7 +111,9 @@ def load_shot(shot, data_root=DATAFILE_ROOT, helicity=-1):
                 plasma_times[name] = t_ms
                 continue
             if name not in geo_channels:
-                printw(f"Channel {name!r} has no geometry in {device} device file -> skipping")
+                logger.warning(
+                    "Channel %r has no geometry in %s device file -> skipping", name, device
+                )
                 continue
             sensor_names.append(name)
             sensor_sigs[name] = data
@@ -168,7 +173,11 @@ def _build_plasma(sigs, times, helicity):
     for name, var in _PLASMA_CHANNELS.items():
         if name not in sigs:
             continue
-        y = sigs[name] if np.array_equal(times[name], t_ms) else np.interp(t_ms, times[name], sigs[name])
+        y = (
+            sigs[name]
+            if np.array_equal(times[name], t_ms)
+            else np.interp(t_ms, times[name], sigs[name])
+        )
         data_vars[var] = ("time", y)
 
     plasma = xr.Dataset(data_vars, coords={"time": t_ms})
@@ -192,7 +201,7 @@ def _shot_from_path(path):
 def available_subsets(device="DIII-D"):
     """All named sensor subsets you can pass as ``channel_filter``.
 
-    Thin convenience over :func:`omfit_compat.list_sensor_subsets` -> a
+    Thin convenience over :func:`magnetics.core.qs_device.list_sensor_subsets` -> a
     ``{name: [sensor, ...]}`` mapping (e.g. ``'Bp_LFS_midplane'``, ``'All_3D_Coils'``).
     Names work with or without underscores.
     """

@@ -1,8 +1,12 @@
-"""Ports of the relevant ``PLOTS/*`` scripts (the SLCONTOUR / locked-mode set).
+"""Standalone matplotlib plots for the quasi-stationary (SLCONTOUR) pipeline.
 
-Each function takes the Datasets produced by :mod:`prep` / :mod:`fit` and an
-optional axis, replacing the OMFIT runtime helpers (``cornernote``, ``uband``,
-``View1d`` ...) with the local shim in :mod:`omfit_compat`.
+These are **not** wired into the GUI/service. The FastAPI service serves JSON
+``kind``-nodes built by :mod:`magnetics.core.qs_bridge`, which only *ports* these
+plots' conventions (amplitude/phase extraction, the SLCONTOUR sign convention) — it
+does not import this module, and nothing in the served path calls these functions.
+They are plain matplotlib routines over the xarray Datasets produced by
+:mod:`magnetics.core.qs_prep` / :mod:`magnetics.core.qs_fit`, kept for notebooks,
+debugging and offline analysis.
 
 Covered (per VISION.md S4.1 outputs):
   * :func:`plot_sensors`   - sensor map (R-Z / unrolled phi-theta)
@@ -15,12 +19,41 @@ Covered (per VISION.md S4.1 outputs):
 
 from __future__ import annotations
 
+import logging
 import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .omfit_compat import cornernote, load_wall, printe, uband
+from .qs_device import load_wall
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Plot helpers (formerly omfit_compat.cornernote / uband)
+# --------------------------------------------------------------------------- #
+def cornernote(ax=None, device="", shot="", time="", text="", **_ignore):
+    """Annotate the bottom-right figure corner with shot/device context."""
+    if ax is None:
+        ax = plt.gca()
+    fig = ax.get_figure()
+    label = " ".join(str(s) for s in (device, shot, time, text) if str(s) != "")
+    if not label:
+        return
+    fig.text(0.99, 0.01, label, ha="right", va="bottom", fontsize=8, color="0.4")
+
+
+def uband(x, y, yerr, ax=None, label=None, color=None, **kwargs):
+    """Plot a line with a shaded +/- ``yerr`` uncertainty band; returns ``(line,)``."""
+    if ax is None:
+        ax = plt.gca()
+    x = np.asarray(x)
+    y = np.asarray(y, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
+    (line,) = ax.plot(x, y, label=label, color=color, **kwargs)
+    ax.fill_between(x, y - yerr, y + yerr, color=line.get_color(), alpha=0.3, linewidth=0)
+    return (line,)
 
 
 # --------------------------------------------------------------------------- #
@@ -53,17 +86,45 @@ def plot_sensors(raw, channel_filter=".*", geometry="rz", ax=None, device=None, 
             x = [float(s["r_end1"]), float(s["r_end2"])]
             y = [float(s["z_end1"]), float(s["z_end2"])]
         elif geometry == "flat":
-            x = [float(s["phi_end1"]), float(s["phi_end2"]), float(s["phi_end2"]), float(s["phi_end1"]), float(s["phi_end1"])]
-            y = [float(s["z_end1"]), float(s["z_end1"]), float(s["z_end2"]), float(s["z_end2"]), float(s["z_end1"])]
+            x = [
+                float(s["phi_end1"]),
+                float(s["phi_end2"]),
+                float(s["phi_end2"]),
+                float(s["phi_end1"]),
+                float(s["phi_end1"]),
+            ]
+            y = [
+                float(s["z_end1"]),
+                float(s["z_end1"]),
+                float(s["z_end2"]),
+                float(s["z_end2"]),
+                float(s["z_end1"]),
+            ]
         else:  # cylindrical
-            x = _no_wrap([float(s["phi_end1"]), float(s["phi_end2"]), float(s["phi_end2"]), float(s["phi_end1"]), float(s["phi_end1"])])
-            y = _no_wrap([float(s["theta_end1"]), float(s["theta_end1"]), float(s["theta_end2"]), float(s["theta_end2"]), float(s["theta_end1"])])
+            x = _no_wrap(
+                [
+                    float(s["phi_end1"]),
+                    float(s["phi_end2"]),
+                    float(s["phi_end2"]),
+                    float(s["phi_end1"]),
+                    float(s["phi_end1"]),
+                ]
+            )
+            y = _no_wrap(
+                [
+                    float(s["theta_end1"]),
+                    float(s["theta_end1"]),
+                    float(s["theta_end2"]),
+                    float(s["theta_end2"]),
+                    float(s["theta_end1"]),
+                ]
+            )
         if line is not None:
             plot_kwargs["color"] = line.get_color()
         (line,) = ax.plot(x, y, label=c, **plot_kwargs)
 
     if geometry == "rz":
-        r_wall, z_wall = load_wall(device)
+        r_wall, z_wall = load_wall(device, raw.attrs.get("shot"))
         if r_wall is not None:
             ax.plot(r_wall, z_wall, color="0.4", lw=1, label="wall")
         ax.set_xlabel("R (m)")
@@ -96,23 +157,29 @@ def plot_signal(raw, prepared, channel_filter=".*", ax=None, legend_maxnum=12):
         s = prepared["signal"].sel(channel=c)
         s_ptp = np.ptp(np.nan_to_num(s.values))
         if s_ptp <= 0:
-            printe(f"{c} has no signal")
+            logger.warning("%s has no signal", c)
             continue
         # the raw trace, shifted to match the prepared trace at t0 (shows filtering)
         s2 = raw["signal"].sel(channel=c, time=s["time"])
         s2 = s2 - (float(s2.values[0]) - float(s.values[0]))
         (l2,) = ax.plot(s2["time"], s2.values, alpha=0.4)
-        (l,) = ax.plot(s["time"], s.values, color=l2.get_color(), label=c)
-        lines.append(l)
+        (ln,) = ax.plot(s["time"], s.values, color=l2.get_color(), label=c)
+        lines.append(ln)
         ptps.append(s_ptp)
 
     if ptps:
         ptps, lines = zip(*sorted(zip(ptps, lines), key=lambda z: z[0]))
         nleg = min(legend_maxnum, len(lines))
-        for l in lines[:-nleg] if nleg < len(lines) else []:
-            l.set_color("grey")
-            l.set_alpha(0.4)
-        ax.legend([l for l in lines[-nleg:]], [l.get_label() for l in lines[-nleg:]], loc=2, frameon=False, fontsize=8)
+        for ln in lines[:-nleg] if nleg < len(lines) else []:
+            ln.set_color("grey")
+            ln.set_alpha(0.4)
+        ax.legend(
+            [ln for ln in lines[-nleg:]],
+            [ln.get_label() for ln in lines[-nleg:]],
+            loc=2,
+            frameon=False,
+            fontsize=8,
+        )
 
     ax.set_xlabel("time (s)")
     ax.set_ylabel("signal")
@@ -186,7 +253,12 @@ def plot_fit_modes(fit, axes=None, legend_maxnum=12):
         _, axes = plt.subplots(2, sharex=True, figsize=(8, 8))
 
     t = fit["time"].values
-    max_amp = np.max([np.percentile(np.abs(fit["fit_coeffs"]).sel(mode=m).values, 90) for m in fit["mode"].values])
+    max_amp = np.max(
+        [
+            np.percentile(np.abs(fit["fit_coeffs"]).sel(mode=m).values, 90)
+            for m in fit["mode"].values
+        ]
+    )
 
     amps = []
     for i, m in enumerate(fit["mode"].values):
@@ -196,11 +268,11 @@ def plot_fit_modes(fit, axes=None, legend_maxnum=12):
         mval = int(fit["fit_ms"].values[i])
         label = f"{mval}/{nval}"
         amp, amp_err, phase, phase_err = _amp_phase_with_errors(coeff, sigma)
-        (l,) = uband(t, amp, amp_err, ax=axes[0], label=label)
+        (ln,) = uband(t, amp, amp_err, ax=axes[0], label=label)
         amps.append(np.max(amp))
         # only draw phase for modes with appreciable amplitude (avoid clutter)
         if np.percentile(np.abs(coeff), 90) > 0.1 * max_amp:
-            uband(t, phase, phase_err, ax=axes[1], label=label, color=l.get_color())
+            uband(t, phase, phase_err, ax=axes[1], label=label, color=ln.get_color())
 
     # de-emphasise the smallest modes, then build a compact legend
     leg_title = "n" if np.all(fit["fit_ms"].values == 0) else "m/n"
@@ -230,7 +302,9 @@ def plot_fit_modes(fit, axes=None, legend_maxnum=12):
 # --------------------------------------------------------------------------- #
 # SLCONTOUR phi-vs-time contour  (<- plot_magnetics_slice.py)
 # --------------------------------------------------------------------------- #
-def plot_slice(fit, fix_coord="theta", fix_value=0.0, ngrid=120, ax=None, trace_peak=True, **plot_kwargs):
+def plot_slice(
+    fit, fix_coord="theta", fix_value=0.0, ngrid=120, ax=None, trace_peak=True, **plot_kwargs
+):
     """Reconstruct the fitted field on a (phi or theta) x time grid and contour it.
 
     This is the classic SLCONTOUR locked/slowly-rotating-mode picture: a rotating
@@ -266,10 +340,15 @@ def plot_slice(fit, fix_coord="theta", fix_value=0.0, ngrid=120, ax=None, trace_
         swept, swept_label = deg, "Toroidal Angle (deg.)"
 
     # field(swept, time) = Re Sum_modes coeff(t) exp(-i (n*xgrid + m*ygrid))
+    # SIGN CONVENTION (do not "fix"): the fit basis is exp(+i(nφ+mθ)) with a real/imag
+    # column split, so the reconstruction MUST use exp(-i(...)) to reproduce the fitted
+    # field. See qs_bridge._reconstruct_grid / fit_to_phi_t_node for the matching note.
     coeffs = fit["fit_coeffs"].values  # (mode, time)
     nvals = ns.values[:, None]
     mvals = ms.values[:, None]
-    phase = np.exp(-1j * (nvals * np.atleast_1d(xgrid)[None, :] + mvals * np.atleast_1d(ygrid)[None, :]))
+    phase = np.exp(
+        -1j * (nvals * np.atleast_1d(xgrid)[None, :] + mvals * np.atleast_1d(ygrid)[None, :])
+    )
     # (swept, time): sum over modes of coeff(mode,time) * phase(mode,swept)
     field = np.real(np.einsum("ms,mt->st", phase, coeffs))  # (swept, time)
 

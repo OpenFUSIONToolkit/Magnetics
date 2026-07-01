@@ -1,7 +1,7 @@
 """SLCONTOUR sensor geometry reads the shot-segmented device table.
 
 Regression guard: the device JSON is shot-segmented (``sensors[c]["segments"]``),
-but ``omfit_compat.sensor_geometry`` used to read the flat ``sensors[c]["r"]``,
+but ``qs_device.sensor_geometry`` used to read the flat ``sensors[c]["r"]``,
 which returns NaN under the segmented schema. All-NaN sensor extents make the QS
 fit's basis matrix NaN and the SVD never converges. These tests need only the
 committed device JSON — no fetched HDF5.
@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from magnetics._slcontour import omfit_compat as oc
+from magnetics.core import qs_device as oc
 
 # Integrated Bp LFS midplane channels the QS (SLCONTOUR) fit uses; present at a
 # modern shot.
@@ -65,7 +65,7 @@ def test_sensor_geometry_shot_none_falls_back_to_earliest():
 @pytest.mark.parametrize("shot", [124400, 151593, 156014, 184928, 990000])
 def test_two_resolvers_agree_across_eras(shot):
     """The device JSON is read by TWO independent segment resolvers — data/devices
-    (rotating path) and _slcontour/omfit_compat (QS path). They must never diverge;
+    (rotating path) and core/qs_device (QS path). They must never diverge;
     that duplication is what produced the all-NaN geometry bug."""
     from magnetics.data import devices
 

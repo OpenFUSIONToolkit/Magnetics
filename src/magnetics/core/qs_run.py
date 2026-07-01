@@ -13,9 +13,9 @@ from dataclasses import dataclass
 
 import xarray as xr
 
-from . import fit as _fit
-from . import prep as _prep
-from .io_data import ShotData, load_shot
+from . import qs_fit as _fit
+from . import qs_prep as _prep
+from .qs_io_data import ShotData, load_shot
 
 
 @dataclass

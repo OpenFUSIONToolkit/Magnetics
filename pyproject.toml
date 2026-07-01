@@ -48,13 +48,19 @@ magnetics-service = "magnetics.service.app:main"
 
 [tool.ruff]
 line-length = 100  # target version is inferred from requires-python
-# _slcontour/ is the reference SLCONTOUR translation (a self-contained OMFIT
-# port), pending rework into core/quasistationary (issue #40); excluded from
-# lint/typecheck until then.
-extend-exclude = ["src/magnetics/_slcontour"]
 
 [tool.ty.src]
-exclude = ["src/magnetics/_slcontour"]
+# The qs_* modules are the former _slcontour SLCONTOUR translation, now promoted into
+# core (shim-free). They are ruff format + lint clean; the xarray-heavy `ty` pass is a
+# documented follow-up (see docs/qs_slcontour/ and the retire-quasistationary plan).
+exclude = [
+    "src/magnetics/core/qs_fit.py",
+    "src/magnetics/core/qs_prep.py",
+    "src/magnetics/core/qs_io_data.py",
+    "src/magnetics/core/qs_run.py",
+    "src/magnetics/core/qs_plots.py",
+    "src/magnetics/core/qs_device.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
