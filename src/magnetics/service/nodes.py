@@ -438,6 +438,36 @@ def _mode_number(shot, params=None) -> dict:
     )
 
 
+def _mode_parity(shot, params=None) -> dict:
+    """Poloidal parity (even/odd m) over (t,f): inboard vs outboard toroidal arrays,
+    same-n phase difference. z ∈ {0 even, 1 odd}, gated by min-group coherence."""
+    names, phis, n_in = _parity_groups(str(shot))
+    sd = _f(params, "slice_duration", 0.002)
+    res = _array_parity_spec(str(shot), names, phis, n_in, sd)
+
+    f_khz = np.asarray(res.freq_band) / 1e3
+    mask = np.ones(f_khz.size, dtype=bool)
+    fmin, fmax = _f(params, "fmin"), _f(params, "fmax")
+    if fmin is not None: mask &= f_khz >= fmin
+    if fmax is not None: mask &= f_khz <= fmax
+    t_ms = np.asarray(res.time) * 1e3
+    ti = np.linspace(0, t_ms.size - 1, min(t_ms.size, 1500)).astype(int)
+
+    parity = np.asarray(res.parity, dtype=float)[np.ix_(ti, mask)]
+    q = np.asarray(res.quality)[np.ix_(ti, mask)]
+    gate = _f(params, "n_gate", 0.65)
+    z = np.where(q >= gate, parity, np.nan).T          # [freq, time]
+    zlist = [[None if not np.isfinite(v) else float(v) for v in row] for row in z]
+
+    return contracts.heatmap(
+        t_ms[ti].tolist(), f_khz[mask].tolist(), zlist,
+        {"x": "time (ms)", "y": "f (kHz)", "z": "parity"},
+        discrete=True, zrange=[-0.5, 1.5],             # 2-bin even/odd palette
+        meta={"shot": str(shot), "legend": {"0": "even (in phase)", "1": "odd (out)"},
+              "n_inboard": n_in, "n_outboard": len(names) - n_in,
+              "n_gate": round(float(gate), 2)})
+
+
 def _coherence(shot, params=None) -> dict:
     """Real 2-point coherence γ²(t,f) in [0,1] from the core."""
     res, mask, probes, _dphi = _prep_spec(shot, params)
@@ -737,7 +767,26 @@ def _array_mode_spec(shot, names, phis, slice_duration):
         slice_duration=slice_duration,
         max_columns=2000,
     )
-    return spectral.array_mode_spectrogram(spec, np.asarray(phis, dtype=float), n_max=5)
+    in_mask = np.arange(len(names)) < n_inboard
+    return spectral.array_mode_spectrogram(spec, np.asarray(phis, dtype=float), in_mask, ~in_mask, n_max=5)
+
+
+def _parity_groups(shot):
+    """(names, phis, n_inboard) for a combined inboard+outboard toroidal set.
+    Raises ValueError unless BOTH sides have ≥4 distinct-φ probes (each side must
+    independently resolve n)."""
+    groups = {"inboard": [], "outboard": []}
+    for name, phi in _array_channels(shot, ("MPID",)):
+        g = diiid.poloidal_group(name, shot)
+        if g:
+            groups[g].append((name, phi))
+    ok = lambda grp: len({round(p, 1) for _, p in grp}) >= 4
+    if not (ok(groups["inboard"]) and ok(groups["outboard"])):
+        raise ValueError("parity needs ≥4 distinct-φ probes inboard AND outboard")
+    inb, outb = groups["inboard"], groups["outboard"]
+    names = tuple(n for n, _ in inb + outb)
+    phis  = tuple(float(p) for _, p in inb + outb)
+    return names, phis, len(inb)
 
 
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
@@ -1360,7 +1409,34 @@ def _sensor_map_rz(shot, params=None) -> dict:
             "note": "sensor extent segments from device geometry",
         },
     )
+def _mode_parity(shot, params=None) -> dict:
+    """Poloidal parity (even/odd m) over (t,f): inboard vs outboard toroidal arrays,
+    same-n phase difference. z ∈ {0 even, 1 odd}, gated by min-group coherence."""
+    names, phis, n_in = _parity_groups(str(shot))
+    sd = _f(params, "slice_duration", 0.002)
+    res = _array_parity_spec(str(shot), names, phis, n_in, sd)
 
+    f_khz = np.asarray(res.freq_band) / 1e3
+    mask = np.ones(f_khz.size, dtype=bool)
+    fmin, fmax = _f(params, "fmin"), _f(params, "fmax")
+    if fmin is not None: mask &= f_khz >= fmin
+    if fmax is not None: mask &= f_khz <= fmax
+    t_ms = np.asarray(res.time) * 1e3
+    ti = np.linspace(0, t_ms.size - 1, min(t_ms.size, 1500)).astype(int)
+
+    parity = np.asarray(res.parity, dtype=float)[np.ix_(ti, mask)]
+    q = np.asarray(res.quality)[np.ix_(ti, mask)]
+    gate = _f(params, "n_gate", 0.65)
+    z = np.where(q >= gate, parity, np.nan).T          # [freq, time]
+    zlist = [[None if not np.isfinite(v) else float(v) for v in row] for row in z]
+
+    return contracts.heatmap(
+        t_ms[ti].tolist(), f_khz[mask].tolist(), zlist,
+        {"x": "time (ms)", "y": "f (kHz)", "z": "parity"},
+        discrete=True, zrange=[-0.5, 1.5],             # 2-bin even/odd palette
+        meta={"shot": str(shot), "legend": {"0": "even (in phase)", "1": "odd (out)"},
+              "n_inboard": n_in, "n_outboard": len(names) - n_in,
+              "n_gate": round(float(gate), 2)})
 
 def _sensor_map_cylindrical(shot, params=None) -> dict:
     """Sensor locations in unrolled φ-θ space for selected channels."""
@@ -1413,6 +1489,7 @@ _BUILDERS = {
     "geometry": _geometry,
     "spectrogram": _spectrogram,
     "mode_number": _mode_number,
+    "mode parity": _mode_parity,
     "coherence": _coherence,
     "n_spectrum": _n_spectrum,
     "contour": _contour,
