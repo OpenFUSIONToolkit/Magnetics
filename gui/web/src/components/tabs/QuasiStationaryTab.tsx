@@ -227,6 +227,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   // Highlight the Plot button when settings have drifted from the last commit.
   const paramsDirty = committedParams !== null && committedParams !== qsParams;
 
+  // Per-plot export helpers: a stable filename + the download descriptor (node id +
+  // the params that produced it) so each figure exports its own image + HDF5 data.
+  const dl = useCallback(
+    (nodeId: string) => ({ machine, nodeId, params: committedParams ?? {} }),
+    [machine, committedParams],
+  );
+  const xn = useCallback((nodeId: string) => `shot_${machine}_${nodeId}`, [machine]);
+
   // ── Node fetches — gated by fetchMachine (null until Plot is clicked) ──
   const { node: qualityRaw } = useNode(fetchMachine, "fit_quality", committedParams ?? {});
   const qualityNode = qualityRaw?.kind === "metrics" ? (qualityRaw as MetricsNode) : null;
@@ -842,18 +850,18 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                 xaxis: { ...timeXAxis, showticklabels: false },
                 yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
                 margin: { t: 4, b: 4, l: 60, r: 80 },
-              } as Partial<Plotly.Layout>)} onClick={seekTo} onRelayout={handleTimeRelayout} />
+              } as Partial<Plotly.Layout>)} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_rms")} download={dl("phi_t")} />
             )}
-            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
           </div>
         )}
 
         {/* Section 7: Mode amplitude & phase */}
         {ampNode?.kind === "line" && (
-          <Plot height={200} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+          <Plot height={200} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("amplitude")} download={dl("amplitude")} />
         )}
         {phaseTimeNode?.kind === "line" && (
-          <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+          <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phase_t")} download={dl("phase_t")} />
         )}
       </div>
 
@@ -867,17 +875,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               {/* Signal conditioning — top of stack, full width */}
               {signalNode
-                ? <Plot height={200} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+                ? <Plot height={200} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("signal_conditioning")} download={dl("signal_conditioning")} />
                 : <div className="placeholder" style={{ height: 200 }}>loading signals…</div>
               }
               {/* Residuals — middle */}
               {fitResNode
-                ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+                ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("fit_residuals")} download={dl("fit_residuals")} />
                 : <div className="placeholder" style={{ height: 150 }}>loading residuals…</div>
               }
               {/* Chi² — bottom */}
               {chiSqNode
-                ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} />
+                ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("chi_sq_t")} download={dl("chi_sq_t")} />
                 : <div className="placeholder" style={{ height: 130 }}>loading χ²…</div>
               }
             </div>
@@ -902,7 +910,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                   ))}
                 </div>
               )}
-              {qualityNode && <NodeView node={qualityNode} />}
+              {qualityNode && <NodeView node={qualityNode} download={dl("fit_quality")} />}
             </div>
           </div>
         )}
@@ -940,14 +948,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
             <div>
               <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
               {sensorRzNode
-                ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} />
+                ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} exportName={xn("sensor_map_rz")} download={dl("sensor_map_rz")} />
                 : <div className="placeholder">loading…</div>
               }
             </div>
             <div>
               <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
               {sensorCylNode
-                ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} />
+                ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
                 : <div className="placeholder">loading…</div>
               }
             </div>

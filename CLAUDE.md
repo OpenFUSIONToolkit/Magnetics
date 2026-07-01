@@ -43,6 +43,17 @@ DIII-D shots:
 - **Geometry shot-indexed (Day-3 night):** `data/device/diiid.json` sensor availability + positions
   are now segmented back to shot 124400 (legacy dense set) / 151593 (3D-upgrade). The Sensors tab
   renders wall + vacuum vessel + perturbation coils + saddle loops (2D honoring each loop's tilt).
+- **NSTX/NSTX-U live (branch `feature/nstxu-data-fetch`):** the fetch is **device-generic** — a
+  device with `access:"mdsplus_tree"` (`nstx.json`: `fastmag` tree, `flux.pppl.gov`→`skylark:8501`)
+  fetches each sensor node with a server-side value-window subscript + per-shot `gain`/`na`
+  (`raw*gain/na`), converting the native seconds time base to ms. `_ssh_tunnel` reuses a live
+  `ssh flux` ControlMaster via `-O forward` (no fresh Duo). The h5 records `device_id`; the node
+  builders resolve it and classify NSTX channels by **sensor-set membership** (not DIII-D pointname
+  families), so the rotating/MODESPEC nodes + the Sensors view render NSTX shots. Validated live on
+  **NSTX-U 204718** (All Mirnov). Follow-ups: legacy NSTX (<200000) uses a different per-era tree
+  (fetch honors a per-segment `tree`, but `nstx.json` only carries the NSTX-U value); QS/SLCONTOUR
+  for NSTX; cluster/toksearch backend for PPPL; GUI PullControl NSTX-sensible default window (raw
+  fastmag is ~20 M samples/channel, so a narrow window is required).
 
 ## The API contract is FLEXIBLE — change it, don't fake around it
 The `kind`-node contract (`core/contracts.py` ⇄ `gui/web/src/lib/contract.ts`, plus the
@@ -63,9 +74,12 @@ rather than fabricating data in the GUI. Keep `contracts.py` and `contract.ts` i
   wire it in place of the `_slcontour` reference pipeline (#40); consume real per-sensor σ +
   helicity once the data layer provides them (the fit currently uses a constant σ).
 - **Data Streamers:** the DIII-D geometry table is now **shot-indexed** (`diiid.json` segmented to
-  124400 / 151593; the cosmetic θ in `magnetics/data/diiid.py` is superseded by the real device
-  table). Remaining: give `h5source` per-sensor σ + helicity (last QS-fidelity gap); a `DataSource`
-  abstraction with an array cache; import NSTX/other-device geometry the same way.
+  124400 / 151593; the cosmetic θ in `magnetics/data/diiid.py` — now a thin shim over the
+  device-agnostic `data/device_geom.py` — is superseded by the real device table). NSTX/NSTX-U
+  fetch + node rendering landed on `feature/nstxu-data-fetch` (see the NSTX status bullet above).
+  Remaining: give `h5source` per-sensor σ + helicity (last QS-fidelity gap); a `DataSource`
+  abstraction with an array cache; populate the shot-segmented legacy-NSTX tree/wall from the
+  `config_hf/hn.mm` files; import other-device geometry the same way.
 - **Structural cleanup (LANDED — PR #41, Day-2 night):** the project was hoisted to the repo root
   (`analysis/` removed), the loose `data/` scripts folded into `magnetics.data` (+ `fetch/`),
   `magnetics-code/` relocated to `magnetics._slcontour/`, `data/test_*.py` consolidated into
@@ -122,6 +136,15 @@ frontend (its `dist/` is staged into `service/webapp/` for the wheel).
   is gitignored). Tests use **synthetic fixtures generated at test time** (`tests/synthetic_shot.py`,
   wired via `tests/conftest.py`): real channel *names* and the committed device *geometry* are fine,
   but fabricate the *signals*. This keeps the suite deterministic and the repo data-free.
+- **Verify GUI behavior changes with Playwright.** When a change affects the frontend's *behavior*
+  (control state/defaults, data flow, what renders, error handling) — not just styling — drive the
+  running app with Playwright and assert the actual DOM/behavior, rather than relying on `tsc` or
+  unit tests alone. Start the app (`./run.sh`), then script the interaction (e.g. select a device,
+  read back the control values / node responses). This is how the NSTX device-aware `PullControl`
+  and the live pull were validated.
+- **Run the CI gates locally before committing frontend/typing changes:** `uv run ty check src/magnetics`
+  (Python types) and `cd gui/web && npm run lint` (eslint) — `tsc --noEmit` alone does **not** catch
+  what CI's `ty` and `eslint` jobs do (e.g. `react-hooks/set-state-in-effect`).
 
 ## Git Workflow
 

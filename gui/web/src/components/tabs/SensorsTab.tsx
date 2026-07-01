@@ -41,7 +41,7 @@ interface GeoMeta {
 
 const COLOR: Record<Kind, string> = { Bp: "#4aa3ff", Br: "#ff5cad", coil: "#ffb454" };
 const KIND_LABEL: Record<Kind, string> = {
-  Bp: "Bp probes", Br: "Br saddle loops", coil: "coils",
+  Bp: "Bp probes", Br: "Br saddle loops", coil: "Coils",
 };
 const KINDS: Kind[] = ["Bp", "Br", "coil"];
 // Sensors time-cursor window (ms), until a real equilibrium node supplies bounds.
@@ -97,6 +97,8 @@ export default function SensorsTab({ machine }: { machine: string }) {
   // scene instead of crashing the whole app on meta.sensors / meta.wall.
   const rawMeta = node?.meta as unknown as GeoMeta | undefined;
   const meta = rawMeta?.sensors && rawMeta?.wall ? rawMeta : null;
+  // No-data guard: a 404 means the shot's HDF5 file hasn't been pulled yet.
+  const noData = error?.includes("fetch failed (404)") === true;
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
   const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
   const vvInk = dark ? "rgba(255,255,255,0.16)" : "rgba(20,34,46,0.18)";
@@ -107,6 +109,8 @@ export default function SensorsTab({ machine }: { machine: string }) {
 
   const [showEq, setShowEq] = useState(true);
   const [showVV, setShowVV] = useState(true);
+  // Perturbation-coil overlay — device-agnostic, driven entirely by meta.coils
+  // (whatever coil sets the device config supplies); on by default.
   const [showCoils, setShowCoils] = useState(true);
 
   // Sensor-set selection (driven by the device's curated `sensor_sets`). A sensor
@@ -152,13 +156,6 @@ export default function SensorsTab({ machine }: { machine: string }) {
     for (const set of sets) if (selectedSets[set.name]) set.sensors.forEach((n) => names.add(n));
     return meta.sensors.filter((s) => names.has(s.name));
   }, [meta, sets, selectedSets]);
-
-  // Vessel center (for the local poloidal-tangent direction of each loop).
-  const Rc = useMemo(() => {
-    if (!meta) return 1.7;
-    const r = meta.wall.r;
-    return (Math.max(...r) + Math.min(...r)) / 2;
-  }, [meta]);
 
   const traces2d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -268,6 +265,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
     for (let i = 0; i < meta.wall.r.length; i += step) { ru.push(meta.wall.r[i]); zu.push(meta.wall.z[i]); }
     t.push({
       type: "surface", showscale: false, opacity: wallSurfaceOpacity, hoverinfo: "skip",
+      // Surface traces don't render a legend swatch, so a legend-only line trace
+      // (below) carries the wall's label; keep this one out of the legend.
+      showlegend: false,
       colorscale: [[0, wallSurface], [1, wallSurface]],
       // Flat, even shading so the shell reads uniformly bright (no dark facets).
       lighting: { ambient: 1.0, diffuse: 0.0, specular: 0.0, fresnel: 0.0 },
@@ -279,6 +279,13 @@ export default function SensorsTab({ machine }: { machine: string }) {
       x: ru.map((R) => phis.map((p) => R * Math.cos(p))),
       y: ru.map((R) => phis.map((p) => R * Math.sin(p))),
       z: ru.map((_, i) => phis.map(() => zu[i])),
+    } as unknown as Partial<Plotly.PlotData>);
+
+    // Legend-only proxy so the (legend-less) wall surface gets a labelled entry.
+    t.push({
+      type: "scatter3d", mode: "lines", name: meta.wall.label,
+      x: [null], y: [null], z: [null], hoverinfo: "skip",
+      line: { color: wallSurface, width: 3 },
     } as unknown as Partial<Plotly.PlotData>);
 
     // Perturbation coils — every coil's real 3D loop.
@@ -321,8 +328,11 @@ export default function SensorsTab({ machine }: { machine: string }) {
         const x: (number | null)[] = [], y: (number | null)[] = [], z: (number | null)[] = [];
         const txt: (string | null)[] = [];
         for (const s of loops) {
-          const u = Math.atan2(s.z, s.r - Rc);
-          const tr = -Math.sin(u), tz = Math.cos(u), h = s.length / 2;
+          // Poloidal extent oriented by the loop's own tilt (its real R-Z angle,
+          // +R toward +Z) — same as loopSegment2d, NOT the vessel tangent, which
+          // tilts off-midplane loops (e.g. the inner saddle loops) the wrong way.
+          const a = d2r(s.tilt);
+          const tr = Math.cos(a), tz = Math.sin(a), h = s.length / 2;
           const Rp = s.r + h * tr, Zp = s.z + h * tz, Rm = s.r - h * tr, Zm = s.z - h * tz;
           const seg = Math.max(2, Math.ceil(s.delta_phi / 6));
           const arc = Array.from({ length: seg + 1 },
@@ -343,7 +353,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
+  }, [meta, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
 
   return (
     <div className="card">
@@ -354,7 +364,16 @@ export default function SensorsTab({ machine }: { machine: string }) {
       </p>
 
       {loading && <div className="placeholder">loading geometry…</div>}
-      {error && <div className="placeholder">geometry unavailable: {error}</div>}
+      {noData ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <strong>Sensor visualization unavailable.</strong><br />
+          The HDF5 file for this shot has not been fetched yet.<br />
+          Use the <strong>pull panel</strong> in the left sidebar to fetch the data.
+        </div>
+      ) : error ? (
+        <div className="placeholder">geometry unavailable: {error}</div>
+      ) : null}
 
       {meta && (
         <>
@@ -381,7 +400,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
               );
             })}
             <div style={{ minWidth: 150 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>overlays</div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Overlays</div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
@@ -404,10 +423,10 @@ export default function SensorsTab({ machine }: { machine: string }) {
               time-dependent overlay (equilibrium) is a future backend node (#43). */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} />
+              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} exportName={`shot_${machine}_sensors_2d`} />
             </div>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot height={460} data={traces3d} layout={LAYOUT_3D} />
+              <Plot height={460} data={traces3d} layout={LAYOUT_3D} exportName={`shot_${machine}_sensors_3d`} />
             </div>
           </div>
         </>
