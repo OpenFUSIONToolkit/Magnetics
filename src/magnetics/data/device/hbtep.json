@@ -1,0 +1,1656 @@
+{
+  "name": "HBT-EP",
+  "R0": 0.92,
+  "network": {
+    "domain": "columbia.edu",
+    "mdsip": {
+      "host": "maxwell.ap.columbia.edu",
+      "port": 8003,
+      "duo": false
+    }
+  },
+  "access": "mdsplus_tree",
+  "tree": "hbtep2",
+  "time_units": "s",
+  "default_shot": 120515,
+  "geometry_note": "PA1/PA2 poloidal arrays from sensor_info_PA_Nominal.txt (2011-09-14, Levesque). Cartesian (x,y,z) + unit normals converted to r=hypot(x,y), z, phi=deg(atan2(y,x)), theta=deg(atan2(z, r-R0))%360 (R0=0.92), tilt=deg(atan2(n_z, n_R)). HBT-EP uses a LEFT-HANDED coordinate system, so phi follows the source (x,y); revisit the phi sign if a downstream n-number is sign-flipped vs HBT-EP convention. Magnetic tree nodes (\\TOP.SENSORS.MAGNETIC:PA#_S##{P,R}) return calibrated Tesla, so gain=na=1. Wall is the PA1 sensor ring (approximate vessel contour). plasma pointnames (ip/bt/kappa) are not yet known and omitted until confirmed against a live tree.",
+  "first_wall": {
+    "segments": [
+      {
+        "since_shot": 0,
+        "r": [
+          1.07669,
+          1.07026,
+          1.05765,
+          1.03939,
+          1.01623,
+          0.98912,
+          0.95916,
+          0.9276,
+          0.89524,
+          0.86381,
+          0.83385,
+          0.80674,
+          0.78357,
+          0.76531,
+          0.7527,
+          0.74626,
+          0.74626,
+          0.7527,
+          0.76531,
+          0.78357,
+          0.80674,
+          0.83385,
+          0.86381,
+          0.89524,
+          0.92758,
+          0.95915,
+          0.9891,
+          1.01622,
+          1.03938,
+          1.05764,
+          1.07025,
+          1.07669,
+          1.07669
+        ],
+        "z": [
+          0.01595,
+          0.04722,
+          0.07654,
+          0.10272,
+          0.12468,
+          0.14152,
+          0.15255,
+          0.15732,
+          0.1575,
+          0.15256,
+          0.14153,
+          0.1247,
+          0.10274,
+          0.07656,
+          0.04723,
+          0.01597,
+          -0.01597,
+          -0.04723,
+          -0.07656,
+          -0.10274,
+          -0.1247,
+          -0.14153,
+          -0.15256,
+          -0.1575,
+          -0.15732,
+          -0.15256,
+          -0.14153,
+          -0.12469,
+          -0.10273,
+          -0.07655,
+          -0.04723,
+          -0.01597,
+          0.01595
+        ]
+      }
+    ]
+  },
+  "wall": {
+    "segments": [
+      {
+        "since_shot": 0,
+        "r": [
+          1.07669,
+          1.07026,
+          1.05765,
+          1.03939,
+          1.01623,
+          0.98912,
+          0.95916,
+          0.9276,
+          0.89524,
+          0.86381,
+          0.83385,
+          0.80674,
+          0.78357,
+          0.76531,
+          0.7527,
+          0.74626,
+          0.74626,
+          0.7527,
+          0.76531,
+          0.78357,
+          0.80674,
+          0.83385,
+          0.86381,
+          0.89524,
+          0.92758,
+          0.95915,
+          0.9891,
+          1.01622,
+          1.03938,
+          1.05764,
+          1.07025,
+          1.07669,
+          1.07669
+        ],
+        "z": [
+          0.01595,
+          0.04722,
+          0.07654,
+          0.10272,
+          0.12468,
+          0.14152,
+          0.15255,
+          0.15732,
+          0.1575,
+          0.15256,
+          0.14153,
+          0.1247,
+          0.10274,
+          0.07656,
+          0.04723,
+          0.01597,
+          -0.01597,
+          -0.04723,
+          -0.07656,
+          -0.10274,
+          -0.1247,
+          -0.14153,
+          -0.15256,
+          -0.1575,
+          -0.15732,
+          -0.15256,
+          -0.14153,
+          -0.12469,
+          -0.10273,
+          -0.07655,
+          -0.04723,
+          -0.01597,
+          0.01595
+        ]
+      }
+    ]
+  },
+  "sensors": {
+    "\\TOP.SENSORS.MAGNETIC:PA1_S01P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.74626,
+          "z": -0.01597,
+          "phi": -42.5,
+          "theta": 185.252,
+          "tilt": -84.18,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S02P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.7527,
+          "z": -0.04723,
+          "phi": -42.5,
+          "theta": 195.766,
+          "tilt": -72.548,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S03P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.76531,
+          "z": -0.07656,
+          "phi": -42.5,
+          "theta": 206.331,
+          "tilt": -60.917,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S04P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.78357,
+          "z": -0.10274,
+          "phi": -42.5,
+          "theta": 216.981,
+          "tilt": -49.285,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S05P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.80674,
+          "z": -0.1247,
+          "phi": -42.5,
+          "theta": 227.75,
+          "tilt": -37.654,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S06P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.83385,
+          "z": -0.14153,
+          "phi": -42.5,
+          "theta": 238.672,
+          "tilt": -26.022,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S07P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.86381,
+          "z": -0.15256,
+          "phi": -42.5,
+          "theta": 249.779,
+          "tilt": -14.39,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S08P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.89524,
+          "z": -0.1575,
+          "phi": -42.5,
+          "theta": 261.064,
+          "tilt": 0.0,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S09P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.92758,
+          "z": -0.15732,
+          "phi": -42.5,
+          "theta": 272.76,
+          "tilt": 2.76,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S10P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.95915,
+          "z": -0.15256,
+          "phi": -42.5,
+          "theta": 284.392,
+          "tilt": 14.392,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S11P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.9891,
+          "z": -0.14153,
+          "phi": -42.5,
+          "theta": 296.023,
+          "tilt": 26.023,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S12P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.01622,
+          "z": -0.12469,
+          "phi": -42.5,
+          "theta": 307.655,
+          "tilt": 37.655,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S13P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.03938,
+          "z": -0.10273,
+          "phi": -42.5,
+          "theta": 319.286,
+          "tilt": 49.286,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S14P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.05764,
+          "z": -0.07655,
+          "phi": -42.5,
+          "theta": 330.918,
+          "tilt": 60.918,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S15P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07025,
+          "z": -0.04723,
+          "phi": -42.5,
+          "theta": 342.55,
+          "tilt": 72.55,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S16P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07669,
+          "z": -0.01597,
+          "phi": -42.5,
+          "theta": 354.181,
+          "tilt": 84.181,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S17P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07669,
+          "z": 0.01595,
+          "phi": -42.5,
+          "theta": 5.813,
+          "tilt": 95.813,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S18P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07026,
+          "z": 0.04722,
+          "phi": -42.5,
+          "theta": 17.444,
+          "tilt": 107.444,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S19P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.05765,
+          "z": 0.07654,
+          "phi": -42.5,
+          "theta": 29.076,
+          "tilt": 119.076,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S20P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.03939,
+          "z": 0.10272,
+          "phi": -42.5,
+          "theta": 40.708,
+          "tilt": 130.708,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S21P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.01623,
+          "z": 0.12468,
+          "phi": -42.5,
+          "theta": 52.339,
+          "tilt": 142.339,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S22P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.98912,
+          "z": 0.14152,
+          "phi": -42.5,
+          "theta": 63.971,
+          "tilt": 153.971,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S23P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.95916,
+          "z": 0.15255,
+          "phi": -42.5,
+          "theta": 75.602,
+          "tilt": 165.602,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S24P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.9276,
+          "z": 0.15732,
+          "phi": -42.5,
+          "theta": 87.234,
+          "tilt": 177.234,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S25P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.89524,
+          "z": 0.1575,
+          "phi": -42.5,
+          "theta": 98.936,
+          "tilt": 180.0,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S26P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.86381,
+          "z": 0.15256,
+          "phi": -42.5,
+          "theta": 110.221,
+          "tilt": -165.61,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S27P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.83385,
+          "z": 0.14153,
+          "phi": -42.5,
+          "theta": 121.328,
+          "tilt": -153.978,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S28P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.80674,
+          "z": 0.1247,
+          "phi": -42.5,
+          "theta": 132.25,
+          "tilt": -142.346,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S29P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.78357,
+          "z": 0.10274,
+          "phi": -42.5,
+          "theta": 143.019,
+          "tilt": -130.715,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S30P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.76531,
+          "z": 0.07656,
+          "phi": -42.5,
+          "theta": 153.669,
+          "tilt": -119.083,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S31P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.7527,
+          "z": 0.04723,
+          "phi": -42.5,
+          "theta": 164.234,
+          "tilt": -107.452,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S32P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.74626,
+          "z": 0.01597,
+          "phi": -42.5,
+          "theta": 174.748,
+          "tilt": -95.82,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S01P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.74626,
+          "z": -0.01597,
+          "phi": 137.5,
+          "theta": 185.252,
+          "tilt": -84.18,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S02P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.7527,
+          "z": -0.04723,
+          "phi": 137.5,
+          "theta": 195.766,
+          "tilt": -72.548,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S03P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.76531,
+          "z": -0.07656,
+          "phi": 137.5,
+          "theta": 206.331,
+          "tilt": -60.917,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S04P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.78357,
+          "z": -0.10274,
+          "phi": 137.5,
+          "theta": 216.981,
+          "tilt": -49.285,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S05P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.80674,
+          "z": -0.1247,
+          "phi": 137.5,
+          "theta": 227.75,
+          "tilt": -37.654,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S06P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.83385,
+          "z": -0.14153,
+          "phi": 137.5,
+          "theta": 238.672,
+          "tilt": -26.022,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S07P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.86381,
+          "z": -0.15256,
+          "phi": 137.5,
+          "theta": 249.779,
+          "tilt": -14.39,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S08P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.89524,
+          "z": -0.1575,
+          "phi": 137.5,
+          "theta": 261.064,
+          "tilt": 0.0,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S09P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.92758,
+          "z": -0.15732,
+          "phi": 137.5,
+          "theta": 272.76,
+          "tilt": 2.76,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S10P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.95915,
+          "z": -0.15256,
+          "phi": 137.5,
+          "theta": 284.392,
+          "tilt": 14.392,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S11P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.9891,
+          "z": -0.14153,
+          "phi": 137.5,
+          "theta": 296.023,
+          "tilt": 26.023,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S12P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.01622,
+          "z": -0.12469,
+          "phi": 137.5,
+          "theta": 307.655,
+          "tilt": 37.655,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S13P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.03938,
+          "z": -0.10273,
+          "phi": 137.5,
+          "theta": 319.286,
+          "tilt": 49.286,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S14P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.05764,
+          "z": -0.07655,
+          "phi": 137.5,
+          "theta": 330.918,
+          "tilt": 60.918,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S15P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07025,
+          "z": -0.04723,
+          "phi": 137.5,
+          "theta": 342.55,
+          "tilt": 72.55,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S16P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07669,
+          "z": -0.01597,
+          "phi": 137.5,
+          "theta": 354.181,
+          "tilt": 84.181,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S17P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07669,
+          "z": 0.01595,
+          "phi": 137.5,
+          "theta": 5.813,
+          "tilt": 95.813,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S18P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07026,
+          "z": 0.04722,
+          "phi": 137.5,
+          "theta": 17.444,
+          "tilt": 107.444,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S19P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.05765,
+          "z": 0.07654,
+          "phi": 137.5,
+          "theta": 29.076,
+          "tilt": 119.076,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S20P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.03939,
+          "z": 0.10272,
+          "phi": 137.5,
+          "theta": 40.708,
+          "tilt": 130.708,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S21P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.01623,
+          "z": 0.12468,
+          "phi": 137.5,
+          "theta": 52.339,
+          "tilt": 142.339,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S22P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.98912,
+          "z": 0.14152,
+          "phi": 137.5,
+          "theta": 63.971,
+          "tilt": 153.971,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S23P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.95916,
+          "z": 0.15255,
+          "phi": 137.5,
+          "theta": 75.602,
+          "tilt": 165.602,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S24P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.9276,
+          "z": 0.15732,
+          "phi": 137.5,
+          "theta": 87.234,
+          "tilt": 177.234,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S25P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.89524,
+          "z": 0.1575,
+          "phi": 137.5,
+          "theta": 98.936,
+          "tilt": 180.0,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S26P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.86381,
+          "z": 0.15256,
+          "phi": 137.5,
+          "theta": 110.221,
+          "tilt": -165.61,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S27P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.83385,
+          "z": 0.14153,
+          "phi": 137.5,
+          "theta": 121.328,
+          "tilt": -153.978,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S28P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.80674,
+          "z": 0.1247,
+          "phi": 137.5,
+          "theta": 132.25,
+          "tilt": -142.346,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S29P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.78357,
+          "z": 0.10274,
+          "phi": 137.5,
+          "theta": 143.019,
+          "tilt": -130.715,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S30P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.76531,
+          "z": 0.07656,
+          "phi": 137.5,
+          "theta": 153.669,
+          "tilt": -119.083,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S31P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.7527,
+          "z": 0.04723,
+          "phi": 137.5,
+          "theta": 164.234,
+          "tilt": -107.452,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S32P": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.74626,
+          "z": 0.01597,
+          "phi": 137.5,
+          "theta": 174.748,
+          "tilt": -95.82,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S01R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.74626,
+          "z": -0.01597,
+          "phi": -42.5,
+          "theta": 185.252,
+          "tilt": -174.18,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S03R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.76531,
+          "z": -0.07656,
+          "phi": -42.5,
+          "theta": 206.331,
+          "tilt": -150.917,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S05R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.80674,
+          "z": -0.1247,
+          "phi": -42.5,
+          "theta": 227.75,
+          "tilt": -127.654,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S07R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.86381,
+          "z": -0.15256,
+          "phi": -42.5,
+          "theta": 249.779,
+          "tilt": -104.39,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S09R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.92758,
+          "z": -0.15732,
+          "phi": -42.5,
+          "theta": 272.76,
+          "tilt": -87.24,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S11R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.9891,
+          "z": -0.14153,
+          "phi": -42.5,
+          "theta": 296.023,
+          "tilt": -63.977,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S13R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.03938,
+          "z": -0.10273,
+          "phi": -42.5,
+          "theta": 319.286,
+          "tilt": -40.714,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S15R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07025,
+          "z": -0.04723,
+          "phi": -42.5,
+          "theta": 342.55,
+          "tilt": -17.45,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S17R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07669,
+          "z": 0.01595,
+          "phi": -42.5,
+          "theta": 5.813,
+          "tilt": 5.813,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S19R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.05765,
+          "z": 0.07654,
+          "phi": -42.5,
+          "theta": 29.076,
+          "tilt": 29.076,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S21R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.01623,
+          "z": 0.12468,
+          "phi": -42.5,
+          "theta": 52.339,
+          "tilt": 52.339,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S23R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.95916,
+          "z": 0.15255,
+          "phi": -42.5,
+          "theta": 75.602,
+          "tilt": 75.602,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S25R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.89524,
+          "z": 0.1575,
+          "phi": -42.5,
+          "theta": 98.936,
+          "tilt": 90.0,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S27R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.83385,
+          "z": 0.14153,
+          "phi": -42.5,
+          "theta": 121.328,
+          "tilt": 116.022,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S29R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.78357,
+          "z": 0.10274,
+          "phi": -42.5,
+          "theta": 143.019,
+          "tilt": 139.285,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA1_S31R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.7527,
+          "z": 0.04723,
+          "phi": -42.5,
+          "theta": 164.234,
+          "tilt": 162.548,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S01R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.74626,
+          "z": -0.01597,
+          "phi": 137.5,
+          "theta": 185.252,
+          "tilt": -174.18,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S03R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.76531,
+          "z": -0.07656,
+          "phi": 137.5,
+          "theta": 206.331,
+          "tilt": -150.917,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S05R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.80674,
+          "z": -0.1247,
+          "phi": 137.5,
+          "theta": 227.75,
+          "tilt": -127.654,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S07R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.86381,
+          "z": -0.15256,
+          "phi": 137.5,
+          "theta": 249.779,
+          "tilt": -104.39,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S09R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.92758,
+          "z": -0.15732,
+          "phi": 137.5,
+          "theta": 272.76,
+          "tilt": -87.24,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S11R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.9891,
+          "z": -0.14153,
+          "phi": 137.5,
+          "theta": 296.023,
+          "tilt": -63.977,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S13R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.03938,
+          "z": -0.10273,
+          "phi": 137.5,
+          "theta": 319.286,
+          "tilt": -40.714,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S15R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07025,
+          "z": -0.04723,
+          "phi": 137.5,
+          "theta": 342.55,
+          "tilt": -17.45,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S17R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.07669,
+          "z": 0.01595,
+          "phi": 137.5,
+          "theta": 5.813,
+          "tilt": 5.813,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S19R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.05765,
+          "z": 0.07654,
+          "phi": 137.5,
+          "theta": 29.076,
+          "tilt": 29.076,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S21R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 1.01623,
+          "z": 0.12468,
+          "phi": 137.5,
+          "theta": 52.339,
+          "tilt": 52.339,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S23R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.95916,
+          "z": 0.15255,
+          "phi": 137.5,
+          "theta": 75.602,
+          "tilt": 75.602,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S25R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.89524,
+          "z": 0.1575,
+          "phi": 137.5,
+          "theta": 98.936,
+          "tilt": 90.0,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S27R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.83385,
+          "z": 0.14153,
+          "phi": 137.5,
+          "theta": 121.328,
+          "tilt": 116.022,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S29R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.78357,
+          "z": 0.10274,
+          "phi": 137.5,
+          "theta": 143.019,
+          "tilt": 139.285,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    },
+    "\\TOP.SENSORS.MAGNETIC:PA2_S31R": {
+      "segments": [
+        {
+          "since_shot": 0,
+          "r": 0.7527,
+          "z": 0.04723,
+          "phi": 137.5,
+          "theta": 164.234,
+          "tilt": 162.548,
+          "gain": 1.0,
+          "na": 1.0
+        }
+      ]
+    }
+  },
+  "sensor_sets": {
+    "PA1 Bp poloidal": {
+      "type": "list",
+      "sensors": [
+        "\\TOP.SENSORS.MAGNETIC:PA1_S01P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S02P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S03P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S04P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S05P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S06P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S07P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S08P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S09P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S10P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S11P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S12P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S13P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S14P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S15P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S16P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S17P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S18P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S19P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S20P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S21P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S22P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S23P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S24P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S25P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S26P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S27P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S28P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S29P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S30P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S31P",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S32P"
+      ]
+    },
+    "PA2 Bp poloidal": {
+      "type": "list",
+      "sensors": [
+        "\\TOP.SENSORS.MAGNETIC:PA2_S01P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S02P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S03P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S04P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S05P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S06P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S07P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S08P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S09P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S10P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S11P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S12P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S13P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S14P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S15P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S16P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S17P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S18P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S19P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S20P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S21P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S22P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S23P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S24P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S25P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S26P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S27P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S28P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S29P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S30P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S31P",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S32P"
+      ]
+    },
+    "PA1 Br radial": {
+      "type": "list",
+      "sensors": [
+        "\\TOP.SENSORS.MAGNETIC:PA1_S01R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S03R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S05R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S07R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S09R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S11R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S13R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S15R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S17R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S19R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S21R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S23R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S25R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S27R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S29R",
+        "\\TOP.SENSORS.MAGNETIC:PA1_S31R"
+      ]
+    },
+    "PA2 Br radial": {
+      "type": "list",
+      "sensors": [
+        "\\TOP.SENSORS.MAGNETIC:PA2_S01R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S03R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S05R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S07R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S09R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S11R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S13R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S15R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S17R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S19R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S21R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S23R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S25R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S27R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S29R",
+        "\\TOP.SENSORS.MAGNETIC:PA2_S31R"
+      ]
+    },
+    "PA1 all": {
+      "type": "composite",
+      "sets": [
+        "PA1 Bp poloidal",
+        "PA1 Br radial"
+      ]
+    },
+    "PA2 all": {
+      "type": "composite",
+      "sets": [
+        "PA2 Bp poloidal",
+        "PA2 Br radial"
+      ]
+    },
+    "All PA Bp": {
+      "type": "composite",
+      "sets": [
+        "PA1 Bp poloidal",
+        "PA2 Bp poloidal"
+      ]
+    }
+  }
+}
