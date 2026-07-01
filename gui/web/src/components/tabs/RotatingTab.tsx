@@ -49,7 +49,7 @@ function PanelPlaceholder({ text, height = 200 }: { text: string; height?: numbe
   return (
     <div style={{
       height, display: "flex", alignItems: "center", justifyContent: "center",
-      color: "var(--text-dim)", fontSize: "11px", textAlign: "center", padding: "12px",
+      color: "var(--text-dim)", fontSize: "calc(11px * var(--font-scale))", textAlign: "center", padding: "12px",
       border: "1px dashed var(--border)", borderRadius: "4px",
     }}>
       {text}
@@ -822,7 +822,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "270px", gap: "0px" }}>
         <div style={{ width: subintervalLeftWidth, overflow: "auto", flexShrink: 0 }}>
-          <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          <h4 style={{ fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Raw Signal <span style={{ textTransform: "none" }}>dB/dt (4&nbsp;ms window)</span>
           </h4>
           {rawTrace
@@ -831,7 +831,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleSubintervalSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
-          <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          <h4 style={{ fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Frequency Spectrum
           </h4>
           <Plot data={specSubplotsData} layout={specSubplotsLayout} height={250} exportName={`shot_${machine}_frequency_spectrum`} download={{ machine, nodeId: "spectrogram", params: specParams }} />
@@ -871,7 +871,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: arrayLeftWidth, overflow: "auto", flexShrink: 0 }}>
-          <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          <h4 style={{ fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(φ, t)</span>
           </h4>
           {torData
@@ -880,7 +880,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleArraySplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
-          <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          <h4 style={{ fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Poloidal Array Waves <span style={{ textTransform: "none" }}>δB<sub>p</sub>(θ, t)</span>
           </h4>
           {polData
@@ -897,7 +897,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     return (
       <div style={{ display: "flex", flexDirection: "row", height: "240px", gap: "0px" }}>
         <div style={{ width: modeLeftWidth, overflow: "auto", flexShrink: 0 }}>
-          <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          <h4 style={{ fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Toroidal Phase Fit <span style={{ textTransform: "none" }}>(n = {String(toroidalMeta?.n_estimate ?? toroidalMeta?.n_fit ?? "")})</span>
           </h4>
           {processedToroidalNode
@@ -906,7 +906,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         </div>
         <DraggableDivider direction="horizontal" onDelta={handleModeSplit} />
         <div style={{ flex: 1, overflow: "auto", paddingLeft: "8px" }}>
-          <h4 style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
+          <h4 style={{ fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", color: "var(--text-dim)", margin: "0 0 8px" }}>
             Poloidal Phase Fit{poloidalMeta ? ` (m = ${String(poloidalMeta.m_fit ?? "")}, fittype = ${fittype})` : ""}
           </h4>
           {processedPoloidalNode
@@ -983,7 +983,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       // marginTop 7px matches the height of the DraggableDividers between the top
       // panels, so every card is spaced consistently down the column.
       <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
-        <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+        <h4 style={{ margin: 0, fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
           {title}
           {subtitle ? <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}> · {subtitle}</span> : null}
         </h4>
@@ -1017,7 +1017,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
           {sidebarExpanded && (
-            <span style={{ fontWeight: 600, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+            <span style={{ fontWeight: 600, fontSize: "calc(11px * var(--font-scale))", textTransform: "uppercase", letterSpacing: "0.5px" }}>
               Controls
             </span>
           )}
@@ -1028,7 +1028,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
               color: "var(--text)",
               border: "none",
               cursor: "pointer",
-              fontSize: "12px",
+              fontSize: "calc(12px * var(--font-scale))",
               padding: 0,
               width: "20px",
             }}
@@ -1041,10 +1041,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
           <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "100%", overflowY: "auto" }}>
             {/* Data Source Badge */}
             <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: "10px" }}>
-              <div style={{ fontSize: "10px", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: "4px" }}>
+              <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: "4px" }}>
                 Data Source
               </div>
-              <div style={{ fontSize: "11px", fontWeight: 600, color: dataSourceColor }}>
+              <div style={{ fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, color: dataSourceColor }}>
                 {dataSourceText}
               </div>
             </div>
@@ -1053,16 +1053,16 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 and which are idle (droppable from the pull to speed it up). */}
             {channelInfo && (
               <details style={{ borderBottom: "1px solid var(--border)", paddingBottom: "10px" }}>
-                <summary style={{ fontSize: "10px", color: "var(--text-dim)", textTransform: "uppercase", cursor: "pointer" }}>
+                <summary style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", textTransform: "uppercase", cursor: "pointer" }}>
                   Data Channels ({channelInfo.n_used}/{channelInfo.n_total} used)
                 </summary>
                 <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "8px", maxHeight: "220px", overflowY: "auto" }}>
                   <div>
-                    <div style={{ fontSize: "9px", color: "var(--good)", textTransform: "uppercase", marginBottom: "3px" }}>
+                    <div style={{ fontSize: "calc(9px * var(--font-scale))", color: "var(--good)", textTransform: "uppercase", marginBottom: "3px" }}>
                       Used ({channelInfo.used.length})
                     </div>
                     {channelInfo.used.map((c) => (
-                      <div key={c.name} style={{ fontSize: "10px", fontFamily: "monospace", lineHeight: 1.45, display: "flex", justifyContent: "space-between", gap: "6px" }}>
+                      <div key={c.name} style={{ fontSize: "calc(10px * var(--font-scale))", fontFamily: "monospace", lineHeight: 1.45, display: "flex", justifyContent: "space-between", gap: "6px" }}>
                         <span style={{ color: "var(--text)" }}>{c.name}</span>
                         <span style={{ color: "var(--text-dim)", textAlign: "right" }}>{c.roles.join(", ")}</span>
                       </div>
@@ -1070,10 +1070,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   </div>
                   {channelInfo.unused.length > 0 && (
                     <div>
-                      <div style={{ fontSize: "9px", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: "3px" }}>
+                      <div style={{ fontSize: "calc(9px * var(--font-scale))", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: "3px" }}>
                         Idle — droppable ({channelInfo.unused.length})
                       </div>
-                      <div style={{ fontSize: "10px", fontFamily: "monospace", lineHeight: 1.45, color: "var(--text-dim)", wordBreak: "break-all" }}>
+                      <div style={{ fontSize: "calc(10px * var(--font-scale))", fontFamily: "monospace", lineHeight: 1.45, color: "var(--text-dim)", wordBreak: "break-all" }}>
                         {channelInfo.unused.join(", ")}
                       </div>
                     </div>
@@ -1085,7 +1085,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             {/* Time Cursor Scrubber Slider */}
             {processedSpecNode && (
               <div style={{ display: "flex", flexDirection: "column", gap: "4px", borderBottom: "1px solid var(--border)", paddingBottom: "10px" }}>
-                <label htmlFor="time-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+                <label htmlFor="time-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
                   Time Scrubber (t0): <strong style={{ color: "var(--good)" }}>{cursorMs.toFixed(0)} ms</strong>
                 </label>
                 <input
@@ -1104,7 +1104,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
             {/* Frequency limits */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
               <div>
-                <label htmlFor="fmin-input" style={{ fontSize: "11px", color: "var(--text-dim)", display: "block", marginBottom: "2px" }}>
+                <label htmlFor="fmin-input" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", display: "block", marginBottom: "2px" }}>
                   f_min (kHz)
                 </label>
                 <input
@@ -1119,13 +1119,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
                     border: "1px solid var(--border-2)",
                     padding: "5px",
                     borderRadius: "4px",
-                    fontSize: "11px",
+                    fontSize: "calc(11px * var(--font-scale))",
                     boxSizing: "border-box",
                   }}
                 />
               </div>
               <div>
-                <label htmlFor="fmax-input" style={{ fontSize: "11px", color: "var(--text-dim)", display: "block", marginBottom: "2px" }}>
+                <label htmlFor="fmax-input" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", display: "block", marginBottom: "2px" }}>
                   f_max (kHz)
                 </label>
                 <input
@@ -1140,7 +1140,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                     border: "1px solid var(--border-2)",
                     padding: "5px",
                     borderRadius: "4px",
-                    fontSize: "11px",
+                    fontSize: "calc(11px * var(--font-scale))",
                     boxSizing: "border-box",
                   }}
                 />
@@ -1149,7 +1149,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
             {/* fittype */}
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <label htmlFor="fittype-select" style={{ fontSize: "11px", color: "var(--text-dim)" }}>Poloidal Fit (fittype) <em style={{ opacity: 0.7 }}>(not wired)</em></label>
+              <label htmlFor="fittype-select" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>Poloidal Fit (fittype) <em style={{ opacity: 0.7 }}>(not wired)</em></label>
               <select
                 id="fittype-select"
                 value={fittype}
@@ -1174,7 +1174,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
               style={{ display: "flex", flexDirection: "column", gap: "4px" }}
               title="Frequency-bin width for the coherence estimate — smooths the coherence map and the sub-interval coherence trace."
             >
-              <label htmlFor="smoothing-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+              <label htmlFor="smoothing-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
                 Coherence Smoothing: <strong style={{ color: "var(--text)" }}>{smoothing} pts</strong>
               </label>
               <input
@@ -1193,7 +1193,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
               style={{ display: "flex", flexDirection: "column", gap: "4px" }}
               title="Hides cells below this power percentile (noise floor) across the spectrogram, n-map, and spectrum."
             >
-              <label htmlFor="power-gate-range" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+              <label htmlFor="power-gate-range" style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
                 Power Gate: <strong style={{ color: "var(--text)" }}>{powerGate.toFixed(1)}%</strong>
               </label>
               <input
@@ -1221,7 +1221,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   color: "var(--text)",
                   border: "none",
                   cursor: "pointer",
-                  fontSize: "11px",
+                  fontSize: "calc(11px * var(--font-scale))",
                   fontWeight: 600,
                   textTransform: "uppercase",
                   padding: "4px 0",
@@ -1235,7 +1235,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "8px", borderTop: "1px dashed var(--border-2)", paddingTop: "8px" }}>
                   {/* FFT Window size select */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="fft-window-select" style={{ fontSize: "10px", color: "var(--text-dim)" }}>FFT Window Size</label>
+                    <label htmlFor="fft-window-select" style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>FFT Window Size</label>
                     <select
                       id="fft-window-select"
                       value={fftWindow}
@@ -1246,7 +1246,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                         border: "1px solid var(--border-2)",
                         padding: "4px",
                         borderRadius: "4px",
-                        fontSize: "11px",
+                        fontSize: "calc(11px * var(--font-scale))",
                         outline: "none",
                       }}
                     >
@@ -1259,7 +1259,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
                   {/* FFT Overlap slider */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <label htmlFor="fft-overlap-range" style={{ fontSize: "10px", color: "var(--text-dim)" }}>
+                    <label htmlFor="fft-overlap-range" style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>
                       FFT Overlap: <strong style={{ color: "var(--text)" }}>{fftOverlap}%</strong>
                     </label>
                     <input
@@ -1276,10 +1276,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
                   {/* Probe Angles input fields (side-by-side) */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <span style={{ fontSize: "10px", color: "var(--text-dim)" }}>Toroidal Probes (φ)</span>
+                    <span style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>Toroidal Probes (φ)</span>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
                       <div>
-                        <label htmlFor="phi1-input" style={{ fontSize: "9px", color: "var(--text-dim)", display: "block" }}>Probe 1</label>
+                        <label htmlFor="phi1-input" style={{ fontSize: "calc(9px * var(--font-scale))", color: "var(--text-dim)", display: "block" }}>Probe 1</label>
                         <input
                           id="phi1-input"
                           type="number"
@@ -1294,13 +1294,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
                             border: "1px solid var(--border-2)",
                             padding: "4px",
                             borderRadius: "4px",
-                            fontSize: "11px",
+                            fontSize: "calc(11px * var(--font-scale))",
                             boxSizing: "border-box",
                           }}
                         />
                       </div>
                       <div>
-                        <label htmlFor="phi2-input" style={{ fontSize: "9px", color: "var(--text-dim)", display: "block" }}>Probe 2</label>
+                        <label htmlFor="phi2-input" style={{ fontSize: "calc(9px * var(--font-scale))", color: "var(--text-dim)", display: "block" }}>Probe 2</label>
                         <input
                           id="phi2-input"
                           type="number"
@@ -1315,7 +1315,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                             border: "1px solid var(--border-2)",
                             padding: "4px",
                             borderRadius: "4px",
-                            fontSize: "11px",
+                            fontSize: "calc(11px * var(--font-scale))",
                             boxSizing: "border-box",
                           }}
                         />
@@ -1341,8 +1341,8 @@ export default function RotatingTab({ machine }: { machine: string }) {
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: 0, height: specHeight, minHeight: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <h3 style={{ margin: 0, fontWeight: 600, fontSize: "13px" }}>Spectrogram Ḃ<sub>p</sub>(t, f)</h3>
-              <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+              <h3 style={{ margin: 0, fontWeight: 600, fontSize: "calc(13px * var(--font-scale))" }}>Spectrogram Ḃ<sub>p</sub>(t, f)</h3>
+              <span style={{ fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }}>
                 Active cursor: <strong style={{ color: "var(--good)" }}>{cursorMs ? `${cursorMs.toFixed(1)} ms` : "none"}</strong>
               </span>
             </div>
@@ -1353,7 +1353,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 title="STFT window — frequency resolution = 1/window"
                 value={specSliceMs}
                 onChange={(e) => setSpecSliceMs(parseFloat(e.target.value))}
-                style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border-2)", padding: "3px 6px", borderRadius: "4px", fontSize: "11px", outline: "none" }}
+                style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border-2)", padding: "3px 6px", borderRadius: "4px", fontSize: "calc(11px * var(--font-scale))", outline: "none" }}
               >
                 <option value={1}>1 kHz · coarse</option>
                 <option value={2}>500 Hz · medium</option>
@@ -1371,7 +1371,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   padding: "4px 10px",
                   borderRadius: "3px",
                   cursor: "pointer",
-                  fontSize: "11px",
+                  fontSize: "calc(11px * var(--font-scale))",
                   fontWeight: 500,
                 }}
               >
@@ -1386,7 +1386,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   padding: "4px 10px",
                   borderRadius: "3px",
                   cursor: "pointer",
-                  fontSize: "11px",
+                  fontSize: "calc(11px * var(--font-scale))",
                   fontWeight: 500,
                 }}
               >
@@ -1402,7 +1402,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
         {/* Panel 1: Sub-Interval Spectrum */}
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel1Height, minHeight: 0 }}>
-          <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+          <h4 style={{ margin: 0, fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
             Sub-Interval Spectrum <span style={{ textTransform: "none" }}>(t-slice)</span>
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -1414,7 +1414,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
         {/* Panel 2: Array Data Wave-Stripes */}
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel2Height, minHeight: 0 }}>
-          <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+          <h4 style={{ margin: 0, fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
             Array Data Wave-Stripes
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -1426,7 +1426,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
 
         {/* Panel 3: Mode Structure Fits (toroidal/poloidal phase fits) */}
         <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px", margin: 0, height: panel3Height, minHeight: 0 }}>
-          <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+          <h4 style={{ margin: 0, fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
             Mode Structure Fits
           </h4>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -1446,7 +1446,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
           { machine, nodeId: "poloidal_shape", params: { time: cursorMs } })}
         {processedPatternNode && processedPatternNode.kind === "contour" && (
           <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
-            <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+            <h4 style={{ margin: 0, fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
               2D Modal Pattern (θ, φ)
               <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}>
                 {" · "}
@@ -1460,13 +1460,13 @@ export default function RotatingTab({ machine }: { machine: string }) {
                 style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", padding: "2px 0" }}
                 title="Pans the periodic θ (poloidal) axis so this angle sits at the plot origin."
               >
-                <span style={{ fontSize: "9px", color: "var(--text-dim)", whiteSpace: "nowrap" }}>θ orig</span>
+                <span style={{ fontSize: "calc(9px * var(--font-scale))", color: "var(--text-dim)", whiteSpace: "nowrap" }}>θ orig</span>
                 <input
                   type="range" min={0} max={360} step={2} value={patternCut}
                   onChange={(e) => setPatternCut(Number(e.target.value))}
                   style={{ writingMode: "vertical-lr", direction: "rtl", width: "18px", height: "210px" }}
                 />
-                <span style={{ fontSize: "9px", color: "var(--text)" }}>{patternCut}°</span>
+                <span style={{ fontSize: "calc(9px * var(--font-scale))", color: "var(--text)" }}>{patternCut}°</span>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
                 {renderModePattern()}

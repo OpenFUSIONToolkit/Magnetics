@@ -366,7 +366,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       {loading && <div className="placeholder">loading geometry…</div>}
       {noData ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
-                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>Sensor visualization unavailable.</strong><br />
           The HDF5 file for this shot has not been fetched yet.<br />
           Use the <strong>pull panel</strong> in the left sidebar to fetch the data.
@@ -378,7 +378,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       {meta && (
         <>
           {/* Sensor-set selection, grouped by kind. Check any sets to show them. */}
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: 13 }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: "calc(13px * var(--font-scale))" }}>
             {KINDS.map((kind) => {
               const ks = sets.filter((s) => s.kind === kind);
               if (!ks.length) return null;
