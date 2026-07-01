@@ -16,7 +16,7 @@ from magnetics.service.app import app
 client = TestClient(app)
 
 _GRID_KINDS = {"heatmap", "contour"}
-_VALID_KINDS = {"contour", "heatmap", "scatter2d", "line", "metrics", "equilibrium"}
+_VALID_KINDS = {"contour", "heatmap", "scatter2d", "line", "bar", "metrics", "equilibrium"}
 
 
 def test_machines_lists_the_synthetic_shot(synthetic_shot):

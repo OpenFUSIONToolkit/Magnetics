@@ -206,6 +206,42 @@ export default function NodeView({ node, height }: { node: Node; height?: number
       );
     }
 
+    case "bar": {
+      // Categorical spectrum (e.g. P(m) over poloidal mode number). The highlighted
+      // category (best-fit mode) is drawn in the accent colour, the rest muted; an
+      // optional secondary series (nominal MAC) rides on top as a marker line.
+      const xs = node.x.map((v) => String(v));
+      const colors = node.x.map((v) =>
+        node.highlight != null && v === node.highlight ? "#ff5cad" : "#4aa3ff",
+      );
+      const traces: Partial<Plotly.PlotData>[] = [
+        {
+          type: "bar", x: xs, y: node.y, marker: { color: colors },
+          name: node.axes.y, hovertemplate: `%{x}: %{y:.3f}<extra></extra>`,
+        } as Partial<Plotly.PlotData>,
+      ];
+      if (node.secondary) {
+        traces.push({
+          type: "scatter", mode: "lines+markers", x: xs, y: node.secondary.y,
+          name: node.secondary.name, yaxis: "y2",
+          marker: { color: "#ffb454", size: 6 }, line: { color: "#ffb454", width: 1, dash: "dot" },
+          hovertemplate: `%{x}: %{y:.3f}<extra></extra>`,
+        } as Partial<Plotly.PlotData>);
+      }
+      const layout: Partial<Plotly.Layout> = {
+        ...axisLayout(node.axes),
+        showlegend: false,
+        bargap: 0.35,
+      };
+      if (node.secondary) {
+        layout.yaxis2 = {
+          overlaying: "y", side: "right", range: [0, 1], showgrid: false,
+          title: { text: node.secondary.name, font: { size: 9 } }, tickfont: { size: 8 },
+        } as Partial<Plotly.LayoutAxis>;
+      }
+      return <Plot data={traces} height={height} layout={layout} />;
+    }
+
     default: {
       // A kind outside the known union (backend shipped a new node before the
       // contract was updated, or a malformed payload). Render a placeholder —

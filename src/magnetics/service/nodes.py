@@ -916,6 +916,78 @@ def _poloidal_phase_fit(shot, params=None) -> dict:
     )
 
 
+def _poloidal_m_spectrum(shot, params=None) -> dict:
+    """Shape-based poloidal mode number m via the Modal Assurance Criterion (eigspec
+    eq 9), with a Monte-Carlo confidence over the per-probe phase σ.
+
+    Independent cross-check on ``poloidal_phase_fit``'s slope fit: match the measured
+    (φ-detrended, θ*-corrected) poloidal *phase pattern* against ideal e^{−imθ} templates
+    — after SNR-gating dead probes (see :func:`mode_shape.poloidal_m_spectrum`) — and,
+    propagating each probe's phase σ, report P(m). That gives an even/odd (e.g. 1/1 vs
+    2/1) call with a probability rather than a bare integer. Bars are P(m); the nominal
+    MAC rides behind as a secondary marker, and ``quality`` gates the verdict on how well
+    the shape matches a *pure* mode at all."""
+    arr, mode, f_khz, t0_ms, kappa = _poloidal_mode(shot, params)
+    res, n_used, n_total = mode_shape.poloidal_m_spectrum(
+        mode.toroidal_angle, mode.phase, mode.amplitude, mode.phase_error
+    )
+
+    # toroidal n (when a time cursor is set) to name the m/n mode in the verdict
+    n_tor = None
+    if t0_ms is not None:
+        try:
+            n_tor = _toroidal_n(str(shot), t0_ms * 1e-3, f_khz)
+        except ValueError, KeyError:
+            n_tor = None
+
+    best_m = res.best_m
+    parity = "even" if best_m % 2 == 0 else "odd"
+    p_parity = res.p_even if best_m % 2 == 0 else res.p_odd
+    # absolute MAC of the winner: how well the measured shape actually matches a *pure*
+    # e^{−imθ} mode. A confident P(m) on top of a low MAC just means "least-bad of poor
+    # fits" (no clean poloidal mode, or |m| beyond what this sparse array resolves), so
+    # gate the verdict on it rather than printing a spuriously precise m/n.
+    mac_best = float(res.mac_nominal[int(np.argmax(res.mac_nominal))])
+    quality = "clean" if mac_best >= 0.6 else "marginal" if mac_best >= 0.3 else "weak"
+    mode_label = f"m/n = {abs(best_m)}/{abs(n_tor)}" if n_tor else f"|m| = {abs(best_m)}"
+    if quality == "weak":
+        verdict = f"no clean poloidal mode (best {mode_label}, MAC {mac_best:.2f})"
+    else:
+        verdict = f"{mode_label} (P={p_parity:.2f} {parity}-m, MAC {mac_best:.2f})"
+
+    ms = [int(m) for m in res.m_values]
+    return contracts.bar(
+        ms,
+        [round(float(p), 4) for p in res.p_by_m],
+        {"x": "poloidal mode number m", "y": "P(m)  — MAC posterior"},
+        highlight=best_m,
+        secondary={"name": "MAC (nominal)", "y": [round(float(v), 4) for v in res.mac_nominal]},
+        meta={
+            "best_m": best_m,
+            "n": n_tor,
+            "verdict": verdict,
+            "mac_best": round(mac_best, 3),
+            "quality": quality,
+            "p_best": round(float(res.p_best), 3),
+            "p_even": round(float(res.p_even), 3),
+            "p_odd": round(float(res.p_odd), 3),
+            "p_by_m": {int(m): round(float(p), 3) for m, p in zip(res.m_values, res.p_by_m)},
+            "n_draws": res.n_draws,
+            "n_probes": n_total,
+            "n_used": n_used,
+            "kappa": round(float(kappa), 3) if kappa is not None else None,
+            "used_theta_star": kappa is not None,
+            "f_kHz": f_khz,
+            "t0_ms": t0_ms,
+            "shot": str(shot),
+            "note": "MAC of the φ-detrended poloidal phase pattern vs e^{−imθ} templates "
+            f"({n_used}/{n_total} probes above the SNR gate); P(m) from a Monte-Carlo over "
+            "the per-probe phase σ. 'quality' reflects the absolute MAC — a low value "
+            "means no pattern matches a pure mode, so the m is not to be trusted.",
+        },
+    )
+
+
 def _gp_shape(mode):
     """GP-smoothed complex mode shape with Tier-1-seeded heteroscedastic noise."""
     z = mode_shape.shape_vector(mode.phase, mode.amplitude)
@@ -1336,6 +1408,7 @@ _BUILDERS = {
     "toroidal_stripes": _toroidal_stripes,
     "poloidal_stripes": _poloidal_stripes,
     "poloidal_phase_fit": _poloidal_phase_fit,
+    "poloidal_m_spectrum": _poloidal_m_spectrum,
     "raw_trace": _raw_trace,
 }
 

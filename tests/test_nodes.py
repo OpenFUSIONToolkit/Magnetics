@@ -220,6 +220,27 @@ def test_poloidal_phase_fit_node():
     assert "m_fit" in n["meta"]
 
 
+def test_poloidal_m_spectrum_node():
+    shot = _first_shot()
+    try:
+        n = nodes.build_node(shot, "poloidal_m_spectrum", {"time": 3000})
+    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
+        pytest.skip(f"no poloidal array in this shot: {e}")
+    assert n["kind"] == "bar"
+    assert len(n["x"]) == len(n["y"])  # one probability per candidate m
+    m = n["meta"]
+    assert "best_m" in m and "verdict" in m
+    assert 0.0 <= m["mac_best"] <= 1.0
+    assert m["quality"] in {"clean", "marginal", "weak"}
+    assert 0 < m["n_used"] <= m["n_probes"]  # SNR gate keeps a subset of the array
+    # P(m) is a proper distribution over the candidates (draws + per-probe σ present)
+    assert m["n_draws"] > 0
+    assert abs(sum(n["y"]) - 1.0) < 1e-6
+    assert 0.0 <= m["p_even"] <= 1.0 and 0.0 <= m["p_odd"] <= 1.0
+    assert abs(m["p_even"] + m["p_odd"] - 1.0) < 1e-6
+    assert n["secondary"]["y"] and len(n["secondary"]["y"]) == len(n["x"])  # nominal MAC
+
+
 def test_unknown_node_raises():
     shot = _first_shot()
     with pytest.raises(KeyError):

@@ -76,6 +76,19 @@ export interface LineNode {
   meta?: Record<string, unknown>;
 }
 
+/** A categorical bar chart — e.g. the MAC / probability spectrum over mode number.
+ * `x` are the categories (mode numbers), `y` the bar heights; `highlight` marks the
+ * best-fit category and `secondary` is an optional parallel series (nominal MAC). */
+export interface BarNode {
+  kind: "bar";
+  x: (number | string)[];
+  y: number[];
+  axes: Axes;
+  highlight?: number | string | null;
+  secondary?: { name: string; y: number[] } | null;
+  meta?: Record<string, unknown>;
+}
+
 /** A plasma equilibrium slice — normalized poloidal flux ψ_N(R,Z) + boundary.
  * Mirrors an EFIT gEQDSK slice: `psi_n` is row-major [z][r], 0 at the magnetic
  * axis and 1 at the last closed flux surface. Time-parametrized (one slice). */
@@ -107,6 +120,7 @@ export type Node =
   | HeatmapNode
   | Scatter2DNode
   | LineNode
+  | BarNode
   | EquilibriumNode
   | MetricsNode;
 

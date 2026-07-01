@@ -201,6 +201,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // of phase_fit. 422s when the shot lacks the poloidal array; the panel hides then.
   const { node: poloidalPhaseFitNode } = useNode(machine, "poloidal_phase_fit", { time: cursorMs });
 
+  // MAC-based poloidal m with a Monte-Carlo confidence: an independent, shape-based
+  // cross-check on the slope fit above, and the even/odd (1/1 vs 2/1) verdict. 422s
+  // when the shot lacks the poloidal array; the panel hides then.
+  const { node: mSpectrumNode } = useNode(machine, "poloidal_m_spectrum", { time: cursorMs });
+
   // One Mirnov probe's raw dB/dt time series in a 4 ms window around the cursor.
   const { node: rawTraceNode } = useNode(machine, "raw_trace", { time: cursorMs });
 
@@ -1467,6 +1472,44 @@ export default function RotatingTab({ machine }: { machine: string }) {
             </div>
           </div>
         )}
+        {mSpectrumNode && mSpectrumNode.kind === "bar" && (() => {
+          const m = shapeMeta(mSpectrumNode) as Record<string, number | string | boolean> | undefined;
+          const pEven = Number(m?.p_even ?? 0), pOdd = Number(m?.p_odd ?? 0);
+          const parityHi = pEven >= pOdd ? pEven : pOdd;
+          const parityName = pEven >= pOdd ? "even-m" : "odd-m";
+          const quality = String(m?.quality ?? "");
+          // colour the verdict by how well the shape matches a *pure* mode: a weak MAC
+          // means the printed m is untrustworthy, so it must not read as a firm answer.
+          const verdictColor = quality === "weak" ? "var(--warn, #ffb454)"
+            : quality === "marginal" ? "var(--text)" : "var(--accent)";
+          return (
+            <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
+              <h4 style={{ margin: 0, fontSize: "11px", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+                Poloidal m — MAC + Confidence
+                <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}>
+                  {" · shape-based m (eigspec eq 9), P(m) from a Monte-Carlo over per-probe σ"}
+                </span>
+              </h4>
+              {/* verdict banner — the plain-language even/odd (1/1 vs 2/1) answer */}
+              <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap", fontSize: "12px" }}>
+                <span style={{ fontSize: "15px", fontWeight: 700, color: verdictColor }}>{String(m?.verdict ?? "")}</span>
+                <span style={{ color: "var(--text-dim)" }}>
+                  P({parityName}) = <strong style={{ color: "var(--text)" }}>{parityHi.toFixed(2)}</strong>
+                  {"  ·  P(even) "}{pEven.toFixed(2)}{" / P(odd) "}{pOdd.toFixed(2)}
+                  {"  ·  MAC "}<strong style={{ color: "var(--text)" }}>{Number(m?.mac_best ?? 0).toFixed(2)}</strong>
+                </span>
+                <span style={{ color: "var(--text-dim)" }}>
+                  {Number(m?.n_used ?? m?.n_probes ?? 0)}/{Number(m?.n_probes ?? 0)} probes (SNR-gated)
+                  {m?.used_theta_star ? ` · θ* (κ=${m?.kappa})` : " · geometric θ (no κ)"}
+                  {m?.n_draws ? ` · ${Number(m.n_draws)} draws` : ""}
+                </span>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <NodeView node={mSpectrumNode} height={200} />
+              </div>
+            </div>
+          );
+        })()}
         {analysisCard("Mode Persistence", modeTrackNode, "line", 200,
           shapeMeta(modeTrackNode)?.dominant_n != null
             ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`

@@ -310,6 +310,132 @@ def mac_n_spectrum(
     return ns, macs, int(ns[int(np.argmax(macs))])
 
 
+@dataclass(slots=True)
+class MacMResult:
+    kind: str  # "mac_m_spectrum"
+    m_values: NDArray[np.integer]  # candidate poloidal mode numbers
+    mac_nominal: NDArray[np.floating]  # MAC of the measured shape vs each e^{−imθ} template
+    p_by_m: NDArray[np.floating]  # P(argmax MAC = this m) over the Monte-Carlo draws
+    best_m: int  # argmax of the nominal (noise-free) MAC spectrum
+    p_best: float  # posterior probability mass on ``best_m``
+    p_even: float  # Σ P over even |m| (m=0 counted even) → even-parity confidence
+    p_odd: float  # Σ P over odd |m| → odd-parity confidence
+    n_draws: int  # Monte-Carlo draws used (0 → deterministic, no per-probe σ)
+
+
+def _mac_spectrum_matrix(templates_conj, tt_norm, z):
+    """MAC of one complex shape ``z`` against every template row at once.
+
+    ``templates_conj[m] = conj(e^{−imθ})`` and ``tt_norm[m] = template†template`` are
+    precomputed so a Monte-Carlo loop is a single matmul per draw, not a Python loop
+    over modes. Returns the MAC value per template row (each in [0, 1])."""
+    num = np.abs(templates_conj @ z) ** 2  # |vᵢ†z|² per row
+    den = tt_norm * float(np.real(np.vdot(z, z)))  # (vᵢ†vᵢ)(z†z)
+    return np.where(den > 0.0, num / np.where(den > 0.0, den, 1.0), 0.0)
+
+
+def mac_m_probability(
+    angle_deg: NDArray[np.floating],
+    complex_shape: NDArray[np.complexfloating],
+    *,
+    value_noise: NDArray[np.floating] | None = None,
+    m_range: tuple[int, int] = (-6, 6),
+    n_draws: int = 400,
+    seed: int = 0,
+) -> MacMResult:
+    """Shape-based poloidal mode number m with a Monte-Carlo confidence (eigspec eq 9).
+
+    Matches the measured (φ-detrended) poloidal shape vector against ideal templates
+    e^{−imθ} — the poloidal twin of :func:`mac_n_spectrum` — then, given the per-probe
+    1σ ``value_noise`` (from :func:`shape_noise`), draws ``n_draws`` complex-Gaussian
+    realizations of the shape and records how often each m wins the MAC. That yields a
+    posterior P(m) rather than a bare peak, so an even/odd (e.g. 1/1 vs 2/1) call comes
+    with a probability instead of a single integer. A fixed ``seed`` keeps it
+    deterministic and cacheable. With no ``value_noise`` it degrades to the nominal peak.
+    """
+    theta = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
+    z = np.asarray(complex_shape, dtype=np.complex128)
+    ms = np.arange(m_range[0], m_range[1] + 1)
+    templates_conj = np.exp(1j * np.outer(ms, theta))  # conj(e^{−imθ}) = e^{+imθ}
+    tt_norm = np.full(ms.size, float(theta.size))  # |e^{±imθ}|² summed = n_probes
+
+    mac_nominal = _mac_spectrum_matrix(templates_conj, tt_norm, z)
+    best_idx = int(np.argmax(mac_nominal))
+    best_m = int(ms[best_idx])
+
+    if value_noise is None or n_draws <= 0:
+        p_by_m = (np.arange(ms.size) == best_idx).astype(np.float64)
+        draws = 0
+    else:
+        sig = np.asarray(value_noise, dtype=np.float64)
+        rng = np.random.default_rng(seed)
+        counts = np.zeros(ms.size, dtype=np.float64)
+        for _ in range(n_draws):
+            noise = (rng.standard_normal(z.size) + 1j * rng.standard_normal(z.size)) * (
+                sig / np.sqrt(2.0)
+            )
+            counts[int(np.argmax(_mac_spectrum_matrix(templates_conj, tt_norm, z + noise)))] += 1.0
+        p_by_m = counts / float(n_draws)
+        draws = int(n_draws)
+
+    even = (np.abs(ms) % 2) == 0
+    return MacMResult(
+        kind="mac_m_spectrum",
+        m_values=ms,
+        mac_nominal=mac_nominal,
+        p_by_m=p_by_m,
+        best_m=best_m,
+        p_best=float(p_by_m[best_idx]),
+        p_even=float(p_by_m[even].sum()),
+        p_odd=float(p_by_m[~even].sum()),
+        n_draws=draws,
+    )
+
+
+def poloidal_m_spectrum(
+    angle_deg: NDArray[np.floating],
+    phase_deg: NDArray[np.floating],
+    amplitude: NDArray[np.floating],
+    phase_error_deg: NDArray[np.floating] | None = None,
+    *,
+    snr_gate: float = 0.05,
+    m_range: tuple[int, int] = (-6, 6),
+    n_draws: int = 400,
+    seed: int = 0,
+) -> tuple[MacMResult, int, int]:
+    """Poloidal mode number from the array's *phase pattern*, SNR-gated (eigspec eq 9).
+
+    A mode number is a phase winding (δB ∝ e^{i(mθ−nφ)}), so identify m from the
+    *unit-amplitude* phasor pattern e^{iφ_k}: on a poloidal array the per-probe amplitude
+    is set by probe sensitivity and flux-surface geometry — spanning 3–4 decades — not by
+    the mode, so an amplitude-weighted MAC is captured by one or two large probes. Probes
+    below ``snr_gate``·max|z| are dropped (dead/saturated channels contribute only random
+    phase); the per-probe phase σ (rad) drives the Monte-Carlo confidence. Falls back to
+    the full set when too few probes clear the gate. Returns (result, n_used, n_total).
+    """
+    amp = np.abs(np.asarray(amplitude, dtype=np.float64))
+    ang = np.asarray(angle_deg, dtype=np.float64)
+    ph = np.deg2rad(np.asarray(phase_deg, dtype=np.float64))
+    n_total = int(amp.size)
+
+    keep = amp >= snr_gate * amp.max() if amp.max() > 0 else np.ones(amp.size, dtype=bool)
+    if int(keep.sum()) < 4:  # too few survive the gate — keep everything rather than fail
+        keep = np.ones(amp.size, dtype=bool)
+
+    z_unit = np.exp(1j * ph[keep])  # phase pattern only — amplitude discarded
+    noise = None
+    if phase_error_deg is not None:
+        s = np.deg2rad(np.asarray(phase_error_deg, dtype=np.float64))[keep]
+        ok = np.isfinite(s) & (s > 0)
+        fill = float(np.median(s[ok])) if np.any(ok) else 0.1
+        noise = np.where(ok, s, fill)
+
+    res = mac_m_probability(
+        ang[keep], z_unit, value_noise=noise, m_range=m_range, n_draws=n_draws, seed=seed
+    )
+    return res, int(keep.sum()), n_total
+
+
 # ---------------------------------------------------------------------------
 # Time-resolved mode tracking (eigspec figure 9)
 # ---------------------------------------------------------------------------

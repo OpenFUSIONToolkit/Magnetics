@@ -8,8 +8,10 @@ from magnetics.core.mode_shape import (
     gp_mode_shape,
     gp_periodic_fit,
     mac,
+    mac_m_probability,
     mac_n_spectrum,
     mode_pattern_2d,
+    poloidal_m_spectrum,
     periodic_kernel,
     shape_vector,
 )
@@ -181,6 +183,92 @@ class TestMacNSpectrum:
         fit = fit_toroidal_mode(mode)
         _, _, best = mac_n_spectrum(phi, shape_vector(mode.phase, mode.amplitude))
         assert best == fit.n
+
+
+class TestMacMProbability:
+    def _shape(self, theta_deg, m_true):
+        # φ-detrended poloidal shape: phase = −m·θ (what _poloidal_mode produces)
+        return shape_vector(-m_true * theta_deg, np.ones_like(theta_deg))
+
+    def test_peaks_and_parity_on_clean_mode(self):
+        theta = np.array([0.0, 40.0, 80.0, 130.0, 170.0, 220.0, 270.0, 320.0])
+        for m_true, parity in ((1, "odd"), (2, "even"), (3, "odd")):
+            res = mac_m_probability(
+                theta, self._shape(theta, m_true), value_noise=np.full(theta.size, 0.05)
+            )
+            assert abs(res.best_m) == m_true
+            assert res.mac_nominal.max() > 0.99
+            hi = res.p_even if parity == "even" else res.p_odd
+            assert hi > 0.9  # a clean mode is confidently the right parity
+
+    def test_probabilities_form_a_distribution(self):
+        theta = np.array([0.0, 45.0, 90.0, 150.0, 210.0, 300.0])
+        res = mac_m_probability(
+            theta, self._shape(theta, 2), value_noise=np.full(theta.size, 0.1), n_draws=300
+        )
+        assert abs(res.p_by_m.sum() - 1.0) < 1e-9
+        assert abs(res.p_even + res.p_odd - 1.0) < 1e-9
+        assert res.n_draws == 300
+
+    def test_noise_spreads_the_posterior(self):
+        # a sparse array + heavy noise must NOT stay pinned at p=1 on one m
+        theta = np.array([0.0, 30.0, 70.0, 110.0])
+        res = mac_m_probability(
+            theta, self._shape(theta, 2), value_noise=np.full(theta.size, 0.9), seed=1
+        )
+        assert res.p_best < 1.0  # honest uncertainty, not overconfident
+
+    def test_deterministic_without_noise(self):
+        theta = np.array([0.0, 45.0, 90.0, 150.0, 210.0, 300.0])
+        res = mac_m_probability(theta, self._shape(theta, 2), value_noise=None)
+        assert res.best_m == 2 and res.n_draws == 0
+        assert res.p_by_m.max() == 1.0  # collapses to the nominal peak
+
+    def test_seed_is_reproducible(self):
+        theta = np.array([0.0, 40.0, 95.0, 160.0, 250.0])
+        args = dict(value_noise=np.full(theta.size, 0.3), seed=7, n_draws=200)
+        a = mac_m_probability(theta, self._shape(theta, 1), **args)
+        b = mac_m_probability(theta, self._shape(theta, 1), **args)
+        np.testing.assert_array_equal(a.p_by_m, b.p_by_m)
+
+
+class TestPoloidalMSpectrum:
+    def test_phase_pattern_ignores_amplitude_spread(self):
+        # a clean m=2 phase winding with wild per-probe amplitudes (3 decades) — the
+        # amplitude-weighted MAC would be captured by the big probe; the phase-pattern
+        # one must still nail m=2.
+        theta = np.array([0.0, 40.0, 80.0, 130.0, 170.0, 220.0, 270.0, 320.0])
+        phase = -2.0 * theta  # deg
+        amp = np.array([1.0, 1000.0, 2.0, 0.5, 800.0, 1.0, 3.0, 0.7])
+        res, n_used, n_total = poloidal_m_spectrum(theta, phase, amp)
+        assert abs(res.best_m) == 2 and res.mac_nominal.max() > 0.99
+        assert n_total == 8 and n_used == 8  # nothing below the 5% gate here
+
+    def test_snr_gate_drops_dead_probes(self):
+        # 5 clean m=1 probes (unevenly spaced, so no m=1↔m=−3 aliasing) + 4 dead ones
+        # (tiny amplitude, random phase). The gate must drop the dead ones so m=1 wins.
+        clean = np.array([0.0, 50.0, 110.0, 200.0, 300.0])
+        dead = np.array([25.0, 150.0, 240.0, 330.0])
+        theta = np.concatenate([clean, dead])
+        phase = np.concatenate([-1.0 * clean, np.array([12.0, 200.0, 77.0, 300.0])])
+        amp = np.concatenate([np.ones(5), np.full(4, 1e-4)])
+        res, n_used, n_total = poloidal_m_spectrum(theta, phase, amp)
+        assert n_total == 9 and n_used == 5  # only the 5 real probes survive the gate
+        assert abs(res.best_m) == 1 and res.mac_nominal.max() > 0.99
+
+    def test_falls_back_when_too_few_survive(self):
+        # if fewer than 4 clear the gate, keep everything rather than fail
+        amp = np.array([1.0, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6])
+        theta = np.array([0.0, 60.0, 120.0, 180.0, 240.0, 300.0])
+        res, n_used, n_total = poloidal_m_spectrum(theta, -theta, amp)
+        assert n_used == 6  # gate would leave 1 → fall back to all 6
+
+    def test_carries_monte_carlo_confidence(self):
+        theta = np.array([0.0, 45.0, 90.0, 150.0, 210.0, 300.0])
+        res, _, _ = poloidal_m_spectrum(
+            theta, -2.0 * theta, np.ones(6), np.full(6, 20.0), n_draws=200
+        )
+        assert res.n_draws == 200 and abs(res.p_by_m.sum() - 1.0) < 1e-9
 
 
 class TestNoiseCalibration:
