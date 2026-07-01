@@ -1,7 +1,7 @@
 // Quasi-stationary view — OWNED BY TEAMMATE A.
 // Branch: gui-quasistationary — build here, PR into `gui`.
 // VISION §4.1, §7. Summaries: 04_SLCONTOUR_summary2019, 08_Slcontour_II_2023.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Plotly from "plotly.js-dist-min";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
@@ -112,17 +112,21 @@ function CollapseHeader({
   open, onToggle, children,
 }: { open: boolean; onToggle: () => void; children: React.ReactNode }) {
   return (
-    <div
+    <button
+      type="button"
       onClick={onToggle}
+      aria-expanded={open}
       style={{
         display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
         userSelect: "none", marginBottom: open ? 6 : 0,
+        width: "100%", textAlign: "left",
+        background: "none", border: "none", padding: 0, fontFamily: "inherit",
       }}
       className="metrics-title"
     >
       <span style={{ fontSize: 9 }}>{open ? "▼" : "▶"}</span>
       {children}
-    </div>
+    </button>
   );
 }
 
@@ -228,15 +232,20 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // ── Channel checkboxes for signal conditioning ────────────────────
   const [enabledChannels, setEnabledChannels] = useState<Set<string>>(new Set());
+  // Signature of the channel list we last initialized from. Re-seed the enabled set
+  // only when the list genuinely CHANGES (e.g. switching arrays) — NOT whenever the
+  // node ref changes with size===0, which used to silently re-check every channel the
+  // moment the user unchecked them all and re-plotted the same array.
+  const channelInitRef = useRef<string | null>(null);
   useEffect(() => {
     if (!signalNode) return;
     const pairs = signalNode.meta?.pairs as { channel: string }[] | undefined;
-    if (pairs && enabledChannels.size === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init of the channel set when the node first loads
+    if (!pairs) return;
+    const sig = pairs.map(p => p.channel).join("|");
+    if (channelInitRef.current !== sig) {
+      channelInitRef.current = sig;
       setEnabledChannels(new Set(pairs.map(p => p.channel)));
     }
-  // Only populate when channel list first loads.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalNode]);
 
   const toggleChannel = useCallback((ch: string) => {
@@ -654,6 +663,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               <div className="metrics-title">δB<sub>p</sub>(φ, t) · Contour — θ = 0°</div>
               {(["rdbu", "cividis", "viridis"] as const).map(cm => (
                 <button key={cm} onClick={() => setColormapChoice(cm)}
+                  aria-pressed={colormapChoice === cm}
                   style={{
                     fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
                     background: colormapChoice === cm ? "var(--accent)" : "var(--panel)",

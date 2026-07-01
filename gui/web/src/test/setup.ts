@@ -1,5 +1,11 @@
 // Vitest setup: adds jest-dom matchers (toBeInTheDocument, etc.) to expect.
 import '@testing-library/jest-dom/vitest'
+import { afterEach } from 'vitest'
+import { cleanup } from '@testing-library/react'
+
+// `globals` isn't enabled, so RTL's auto-cleanup afterEach isn't installed — register
+// it here so each test starts from a clean DOM (renders don't leak between tests).
+afterEach(() => cleanup())
 
 // jsdom on newer Node (23+) can expose a `window.localStorage` whose methods
 // aren't callable (getItem is not a function), which crashes any component that

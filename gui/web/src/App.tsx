@@ -22,9 +22,28 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 export default function App() {
-  const { machines, machine, tab, loadingMachines, init, setMachine, setTab } = useStore();
+  // Per-field selectors: subscribing to the whole store re-rendered the entire
+  // shell on every cursor scrub (setCursorMs); App doesn't read cursorMs.
+  const machines = useStore((s) => s.machines);
+  const machine = useStore((s) => s.machine);
+  const tab = useStore((s) => s.tab);
+  const loadingMachines = useStore((s) => s.loadingMachines);
+  const init = useStore((s) => s.init);
+  const setMachine = useStore((s) => s.setMachine);
+  const setTab = useStore((s) => s.setTab);
 
   useEffect(() => { void init(); }, [init]);
+
+  // Honest data-source badge: a live backend with zero fetched shots still serves
+  // the mock machines, so key off the SELECTED machine's `mock` flag (from the
+  // backend), falling back to usingLiveBackend only when the flag is absent.
+  const selected = machines.find((m) => m.id === machine);
+  const mock = selected?.mock ?? !usingLiveBackend();
+  const badgeText = !mock
+    ? "● live backend"
+    : usingLiveBackend()
+      ? "○ demo data (no shots fetched)"
+      : "○ offline / demo";
 
   return (
     <div className="app">
@@ -32,34 +51,46 @@ export default function App() {
         <span className="title">Magnetics</span>
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
-        <span className="badge">{usingLiveBackend() ? "● live backend" : "○ offline / demo"}</span>
+        <span className="badge">{badgeText}</span>
         <ThemeToggle />
       </header>
 
       <aside className="rail-left">
         <PullControl />
         <div className="rail-section">
-          <h3>Shot / machine</h3>
+          <h3 id="shot-list-label">Shot / machine</h3>
           {loadingMachines && <div className="placeholder">loading…</div>}
-          {machines.map((m) => (
-            <div
-              key={m.id}
-              className={`machine-item${m.id === machine ? " active" : ""}`}
-              onClick={() => setMachine(m.id)}
-            >
-              <div className="id">{m.label}</div>
-              {m.note && <div className="note">{m.note}</div>}
-            </div>
-          ))}
+          <div role="listbox" aria-labelledby="shot-list-label">
+            {machines.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                role="option"
+                aria-selected={m.id === machine}
+                className={`machine-item${m.id === machine ? " active" : ""}`}
+                onClick={() => setMachine(m.id)}
+              >
+                <div className="id">{m.label}</div>
+                {m.note && <div className="note">{m.note}</div>}
+              </button>
+            ))}
+          </div>
         </div>
       </aside>
 
       <main className="main">
-        <div className="tabbar">
+        <div className="tabbar" role="tablist" aria-label="Analysis views">
           {TABS.map((t) => (
-            <div key={t.id} className={`tab${t.id === tab ? " active" : ""}`} onClick={() => setTab(t.id)}>
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={t.id === tab}
+              className={`tab${t.id === tab ? " active" : ""}`}
+              onClick={() => setTab(t.id)}
+            >
               {t.label}
-            </div>
+            </button>
           ))}
         </div>
         {!machine ? (

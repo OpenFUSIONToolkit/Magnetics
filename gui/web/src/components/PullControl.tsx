@@ -60,6 +60,10 @@ export default function PullControl() {
   if (!usingLiveBackend()) return null;
   const needsCreds = backend === "remote" || backend === "mdsthin";
   const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
+  // Gate the Pull button: clearing the field or typing non-digits would otherwise
+  // POST shot 0/NaN to /api/fetch.
+  const shotNum = Number(shot);
+  const shotValid = Number.isFinite(shotNum) && shotNum > 0;
 
   async function pull() {
     setBusy(true);
@@ -123,7 +127,8 @@ export default function PullControl() {
           ))}
         </select>
       )}
-      <input className="pull-input" value={shot}
+      <input className="pull-input" value={shot} inputMode="numeric"
+        aria-label="shot number" aria-invalid={!shotValid}
         onChange={(e) => setShot(e.target.value)} placeholder="shot number" />
       <select className="pull-input" value={analysis} disabled={!!sensorSet}
         onChange={(e) => setAnalysis(e.target.value)}>
@@ -196,15 +201,22 @@ export default function PullControl() {
           )}
         </>
       )}
-      <button className="pull-btn" disabled={busy} onClick={pull}>
+      <button className="pull-btn" disabled={busy || !shotValid} onClick={pull}>
         {busy ? `pulling… ${Math.round(frac * 100)}%` : "Pull"}
       </button>
       {busy && (
-        <div className="pull-bar">
+        <div
+          className="pull-bar"
+          role="progressbar"
+          aria-label="pull progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(frac * 100)}
+        >
           <div className="pull-bar-fill" style={{ width: `${frac * 100}%` }} />
         </div>
       )}
-      {msg && <div className="note">{msg}</div>}
+      {msg && <div className="note" role="status" aria-live="polite">{msg}</div>}
     </div>
   );
 }

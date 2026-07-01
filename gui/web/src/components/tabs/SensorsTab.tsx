@@ -105,7 +105,10 @@ export default function SensorsTab({ machine }: { machine: string }) {
   const wallSurface = dark ? "rgb(225,232,245)" : "rgb(70,90,110)";
   const wallSurfaceOpacity = dark ? 0.22 : 0.16;
 
-  const [showEq, setShowEq] = useState(true);
+  // Don't default the equilibrium overlay ON while its backend node doesn't exist
+  // (EQUILIBRIUM_BACKEND=false) — a checked box with a swatch that draws nothing reads
+  // as broken. Seed from the flag so it lights up automatically when the node lands.
+  const [showEq, setShowEq] = useState(EQUILIBRIUM_BACKEND);
   const [showVV, setShowVV] = useState(true);
   const [showCoils, setShowCoils] = useState(true);
 
@@ -355,6 +358,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
 
       {loading && <div className="placeholder">loading geometry…</div>}
       {error && <div className="placeholder">geometry unavailable: {error}</div>}
+      {!loading && !error && !meta && (
+        <div className="placeholder">No sensor layout for this shot&rsquo;s geometry.</div>
+      )}
 
       {meta && (
         <>
@@ -382,10 +388,15 @@ export default function SensorsTab({ machine }: { machine: string }) {
             })}
             <div style={{ minWidth: 150 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>overlays</div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
+              <label style={{
+                display: "flex", alignItems: "center", gap: 6,
+                cursor: EQUILIBRIUM_BACKEND ? "pointer" : "not-allowed",
+                opacity: EQUILIBRIUM_BACKEND ? 1 : 0.5,
+              }}>
+                <input type="checkbox" checked={showEq} disabled={!EQUILIBRIUM_BACKEND}
+                  onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
-                equilibrium
+                {EQUILIBRIUM_BACKEND ? "equilibrium" : "equilibrium (coming soon)"}
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />
