@@ -1,4 +1,4 @@
-// App shell: header · left rail (shot picker) · tabbed main · right rail (quality).
+// App shell: header · left rail (shot picker) · tabbed main.
 // The four tabs are independent files owned by different people — they read from
 // the store and render `kind`-nodes via <NodeView>. Adding a view = one file.
 //
@@ -76,15 +76,6 @@ export default function App() {
           </ErrorBoundary>
         )}
       </main>
-
-      <aside className="rail-right">
-        <div className="rail-section">
-          <h3>Quality</h3>
-          <div className="placeholder">
-            Condition number K, χ², and channel counts surface here once a fit is selected.
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }
