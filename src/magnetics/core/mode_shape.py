@@ -321,6 +321,8 @@ class MacMResult:
     p_even: float  # Σ P over even |m| (m=0 counted even) → even-parity confidence
     p_odd: float  # Σ P over odd |m| → odd-parity confidence
     n_draws: int  # Monte-Carlo draws used (0 → deterministic, no per-probe σ)
+    margin: float  # best MAC − next-best MAC (small ⇒ an alias near-tie, not a clean pick)
+    alias_ms: list[int]  # other m whose MAC is within ``alias_margin`` of the best
 
 
 def _mac_spectrum_matrix(templates_conj, tt_norm, z):
@@ -342,6 +344,7 @@ def mac_m_probability(
     m_range: tuple[int, int] = (-6, 6),
     n_draws: int = 400,
     seed: int = 0,
+    alias_margin: float = 0.1,
 ) -> MacMResult:
     """Shape-based poloidal mode number m with a Monte-Carlo confidence (eigspec eq 9).
 
@@ -352,6 +355,10 @@ def mac_m_probability(
     posterior P(m) rather than a bare peak, so an even/odd (e.g. 1/1 vs 2/1) call comes
     with a probability instead of a single integer. A fixed ``seed`` keeps it
     deterministic and cacheable. With no ``value_noise`` it degrades to the nominal peak.
+
+    Also reports the MAC ``margin`` (best − next-best) and the ``alias_ms`` set (other m
+    within ``alias_margin`` of the best): on a sparse poloidal array several m fit almost
+    equally, and a small margin flags that the winner is an alias tie, not a clean pick.
     """
     theta = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
     z = np.asarray(complex_shape, dtype=np.complex128)
@@ -378,6 +385,15 @@ def mac_m_probability(
         p_by_m = counts / float(n_draws)
         draws = int(n_draws)
 
+    # margin to the next-best distinct m, and the alias set within `alias_margin` of best
+    others = np.delete(mac_nominal, best_idx)
+    margin = float(mac_nominal[best_idx] - others.max()) if others.size else 1.0
+    alias_ms = [
+        int(m)
+        for i, m in enumerate(ms)
+        if i != best_idx and mac_nominal[i] >= mac_nominal[best_idx] - alias_margin
+    ]
+
     even = (np.abs(ms) % 2) == 0
     return MacMResult(
         kind="mac_m_spectrum",
@@ -385,6 +401,8 @@ def mac_m_probability(
         mac_nominal=mac_nominal,
         p_by_m=p_by_m,
         best_m=best_m,
+        margin=margin,
+        alias_ms=alias_ms,
         p_best=float(p_by_m[best_idx]),
         p_even=float(p_by_m[even].sum()),
         p_odd=float(p_by_m[~even].sum()),

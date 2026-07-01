@@ -18,7 +18,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
+from ..core import contracts, equilibrium, geometry, mode_shape, qs_bridge, spectral
 from ..data import device_geom, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
@@ -178,6 +178,33 @@ def _kappa_at(shot, t0_ms=None):
     else:
         k = float(np.interp(t0_ms, np.asarray(t, dtype=float)[good], d[good]))
     return k if 1.0 <= k <= 4.0 else None
+
+
+def _q_at(shot, t0_ms=None):
+    """The EFIT02 q-profile q(ψ_N) at the cursor time as (psi_n, q), interpolated across
+    EFIT slices and clamped to the reconstruction's time range. None when the shot was
+    pulled without a q-profile (older pulls, or no EFIT02) — the poloidal m fit then runs
+    unanchored."""
+    try:
+        prof = h5source.load_q_profile(shot)
+    except KeyError, OSError:
+        return None
+    if prof is None:
+        return None
+    t, psi, q = prof  # t[ntime] ms, psi[npsi], q[ntime, npsi]
+    q = np.asarray(q, dtype=float)
+    if q.ndim != 2 or q.shape[0] == 0:
+        return None
+    tt = np.asarray(t, dtype=float)
+    if t0_ms is None or tt.size < 2:
+        qcol = np.nanmedian(q, axis=0)
+    else:
+        t0 = float(np.clip(t0_ms, tt.min(), tt.max()))
+        qcol = np.array([float(np.interp(t0, tt, q[:, j])) for j in range(q.shape[1])])
+    good = np.isfinite(qcol)
+    if int(good.sum()) < 2:
+        return None
+    return np.asarray(psi, dtype=float)[good], qcol[good]
 
 
 @lru_cache(maxsize=16)
@@ -1033,18 +1060,62 @@ def _poloidal_m_spectrum(shot, params=None) -> dict:
         except ValueError, KeyError:
             n_tor = None
 
-    best_m = res.best_m
-    parity = "even" if best_m % 2 == 0 else "odd"
-    p_parity = res.p_even if best_m % 2 == 0 else res.p_odd
-    # absolute MAC of the winner: how well the measured shape actually matches a *pure*
-    # e^{−imθ} mode. A confident P(m) on top of a low MAC just means "least-bad of poor
-    # fits" (no clean poloidal mode, or |m| beyond what this sparse array resolves), so
-    # gate the verdict on it rather than printing a spuriously precise m/n.
+    best_m = res.best_m  # raw MAC argmax (alias-prone on a sparse array)
     mac_best = float(res.mac_nominal[int(np.argmax(res.mac_nominal))])
-    quality = "clean" if mac_best >= 0.6 else "marginal" if mac_best >= 0.3 else "weak"
-    mode_label = f"m/n = {abs(best_m)}/{abs(n_tor)}" if n_tor else f"|m| = {abs(best_m)}"
+
+    # q-profile anchor: the poloidal array is sparse and uneven, so the MAC winner is
+    # often an alias — a physical high-m mode folds down to a spurious small one. With the
+    # EFIT02 (MSE-constrained) q-profile, keep only m whose q = m/|n| has a real rational
+    # surface, and if the raw winner is unphysical (e.g. m/n = 1/3, q ≈ 0.33 inside the
+    # q ≈ 1 axis) swap in the best-MAC physical alias. n from the toroidal array anchors it.
+    qprof = _q_at(str(shot), t0_ms) if n_tor else None
+    anchor = None
+    if qprof is not None and n_tor:
+        anchor = equilibrium.anchor_poloidal_m(
+            res.m_values, res.mac_nominal, n_tor, q_psi=qprof[1], psi_n=qprof[0]
+        )
+    # hoist the anchor fields into plain locals (None when unanchored) so the verdict
+    # logic and meta don't repeatedly re-narrow the optional dataclass.
+    chosen_m = anchor.chosen_m if anchor is not None else best_m
+    q_surface = anchor.q_surface if anchor is not None else None
+    q_psi_n = anchor.psi_n if anchor is not None else None
+    q_corrected = anchor.corrected if anchor is not None else False
+    raw_m = anchor.raw_m if anchor is not None else best_m
+    allowed_ms = list(anchor.allowed_ms) if anchor is not None else None
+
+    parity = "even" if chosen_m % 2 == 0 else "odd"
+    p_parity = res.p_even if chosen_m % 2 == 0 else res.p_odd
+    q_ok = q_surface is not None
+    aliased = res.margin < 0.08 or bool(res.alias_ms)
+
+    # quality ladder: weak (no pure-mode match at all) < ambiguous (alias near-tie, no q
+    # to break it) < marginal < clean. A q-anchor that finds a physical surface overrides
+    # the alias ambiguity — that's the whole point of bringing the equilibrium in.
+    if mac_best < 0.3:
+        quality = "weak"
+    elif q_ok:
+        quality = "q-anchored"
+    elif aliased:
+        quality = "ambiguous"
+    elif mac_best >= 0.6:
+        quality = "clean"
+    else:
+        quality = "marginal"
+
+    mode_label = f"m/n = {abs(chosen_m)}/{abs(n_tor)}" if n_tor else f"|m| = {abs(chosen_m)}"
+    alias_set = sorted({abs(chosen_m), *(abs(a) for a in res.alias_ms)})
     if quality == "weak":
         verdict = f"no clean poloidal mode (best {mode_label}, MAC {mac_best:.2f})"
+    elif q_surface is not None:  # q-anchored
+        loc = f" @ ψ_N={q_psi_n:.2f}" if q_psi_n is not None else ""
+        verdict = f"{mode_label} — resonant q={q_surface:.2f}{loc}"
+        if q_corrected:
+            verdict += f" (raw MAC m={raw_m} was a sampling alias)"
+    elif quality == "ambiguous":
+        verdict = (
+            f"ambiguous: |m| ∈ {alias_set} (MAC margin {res.margin:.2f}) — "
+            "sampling-limited; no EFIT02 q-profile to disambiguate"
+        )
     else:
         verdict = f"{mode_label} (P={p_parity:.2f} {parity}-m, MAC {mac_best:.2f})"
 
@@ -1053,14 +1124,22 @@ def _poloidal_m_spectrum(shot, params=None) -> dict:
         ms,
         [round(float(p), 4) for p in res.p_by_m],
         {"x": "poloidal mode number m", "y": "P(m)  — MAC posterior"},
-        highlight=best_m,
+        highlight=chosen_m,
         secondary={"name": "MAC (nominal)", "y": [round(float(v), 4) for v in res.mac_nominal]},
         meta={
-            "best_m": best_m,
+            "best_m": chosen_m,
+            "raw_m": best_m,
             "n": n_tor,
             "verdict": verdict,
-            "mac_best": round(mac_best, 3),
             "quality": quality,
+            "mac_best": round(mac_best, 3),
+            "margin": round(float(res.margin), 3),
+            "alias_ms": [int(a) for a in res.alias_ms],
+            "q_anchored": q_ok,
+            "q_surface": round(float(q_surface), 3) if q_surface is not None else None,
+            "q_corrected": bool(q_corrected),
+            "psi_n": round(float(q_psi_n), 3) if q_psi_n is not None else None,
+            "allowed_ms": allowed_ms,
             "p_best": round(float(res.p_best), 3),
             "p_even": round(float(res.p_even), 3),
             "p_odd": round(float(res.p_odd), 3),
@@ -1074,9 +1153,10 @@ def _poloidal_m_spectrum(shot, params=None) -> dict:
             "t0_ms": t0_ms,
             "shot": str(shot),
             "note": "MAC of the φ-detrended poloidal phase pattern vs e^{−imθ} templates "
-            f"({n_used}/{n_total} probes above the SNR gate); P(m) from a Monte-Carlo over "
-            "the per-probe phase σ. 'quality' reflects the absolute MAC — a low value "
-            "means no pattern matches a pure mode, so the m is not to be trusted.",
+            f"({n_used}/{n_total} probes above SNR gate); P(m) from a Monte-Carlo over the "
+            "per-probe phase σ. When an EFIT02 q-profile is present the physical m is the "
+            "MAC alias with a real q=m/n surface; otherwise the bare MAC winner (alias-prone "
+            "on a sparse array) with a margin/alias-set caveat.",
         },
     )
 
