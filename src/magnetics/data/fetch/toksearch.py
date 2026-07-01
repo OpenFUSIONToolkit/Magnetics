@@ -697,7 +697,6 @@ def _fetch_mdsthin_tree(
         return fetch_all(Connection(f"127.0.0.1:{lport}"))
 
 
-# --- toksearch backend (cluster, native local PTDATA) -------------------------
 # --- mds-tree device backend (KSTAR: per-signal openTree via a VPN transport) -
 def _node_tree_map(dev):
     """Map each canonical sensor id -> its MDS tree, from the device's per-group
@@ -780,7 +779,10 @@ def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1
     return out
 
 
-def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_signals=None):
+# --- toksearch backend (cluster, native local PTDATA) -------------------------
+def _fetch_toksearch(
+    shot, pointnames, *, tmin, tmax, stride, progress, tree_signals=None, server=None
+):
     """Pull pointnames for a shot via a toksearch Pipeline.
 
     This is the on-cluster fast path: `toksearch_d3d.PtDataSignal` reads PTDATA
@@ -793,6 +795,13 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
     two backends write the SAME HDF5. toksearch parallelizes across *shots*, not
     signals, so a single shot uses `compute_serial`; reduction (window/decimate) is
     applied client-side after the fetch to stay version-agnostic.
+
+    EFIT-tree signals (elongation etc.) are NOT fetched via `MdsSignal`: the remote
+    backend runs the cluster interpreter directly (no conda activate / module load),
+    so the MDSplus tree-path env EFIT needs is unset and a local tree open fails for
+    every candidate. Instead they go over a DIRECT mdsip connection to `server` (the
+    device's atlas address) -- on-network from the cluster, no SSH tunnel -- reusing
+    the mdsthin path's proven openTree->get fetch.
 
     Requires `toksearch` + the `toksearch_d3d` plugin (PtDataSignal lives in the
     plugin, not core toksearch -- core is device-agnostic and omits PTDATA).
@@ -818,31 +827,11 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
             )
 
     tree_signals = tree_signals or {}
-    # EFIT-tree signals (e.g. elongation) come from MdsSignal(node, tree), not
-    # PtDataSignal. Each candidate is fetched under a temp key; we resolve to the
-    # first that returns data after the pipeline runs.
-    MdsSignal = None
-    tree_keys: dict[str, list[tuple[str, str, str]]] = {}
-    if tree_signals:
-        try:
-            from toksearch import MdsSignal  # type: ignore
-        except ImportError:
-            MdsSignal = None
-
+    # Only PTDATA pointnames go through the toksearch Pipeline; EFIT-tree signals are
+    # fetched separately over mdsip (see _toksearch_tree_channels) after this runs.
     pipe = Pipeline([shot])
     for pt in pointnames:
         pipe.fetch(pt, PtDataSignal(pt))  # ical=1 default == ptdata2()
-    if MdsSignal is not None:
-        for name, candidates in tree_signals.items():
-            keys = []
-            for k, (tree, node) in enumerate(candidates):
-                key = f"__tree_{name}_{k}"
-                try:
-                    pipe.fetch(key, MdsSignal(node, tree))
-                    keys.append((key, tree, node))
-                except Exception:
-                    pass
-            tree_keys[name] = keys
 
     progress(0.0, "running toksearch pipeline")
     # Single shot -> compute_serial (cross-shot parallelism is moot for one record);
@@ -896,28 +885,44 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
                 )
         progress(i / n, pt)
 
-    # Resolve EFIT-tree signals: first candidate key with usable data wins. No
-    # decimation (EFIT time bases are already coarse), window-trim only.
-    for name, keys in tree_keys.items():
-        ch = Channel(name, ok=False, error="no data")
-        for key, tree, node in keys:
-            sig = None if key in errors else (rec[key] if key in rec.keys() else None)
-            if not sig or "data" not in sig:
-                continue
-            y = np.atleast_1d(np.asarray(sig["data"]))
-            t = np.atleast_1d(np.asarray(sig["times"]))
-            if y.size >= 1 and t.size == y.size:
-                t, y = _reduce(t, y, tmin, tmax, 1)
-                ch = Channel(
-                    name,
-                    t.astype(np.float64, copy=False),
-                    y.astype(np.float32, copy=False),
-                    ok=True,
-                )
-                break
-        results.append(ch)
-        progress(1.0, f"tree:{name} ({'ok' if ch.ok else 'missing'})")
+    # EFIT-tree signals: fetch over a direct mdsip connection to the device server
+    # (not MdsSignal — see the docstring). Window-trim only, no decimation.
+    results += _toksearch_tree_channels(shot, tree_signals, server, tmin, tmax, progress)
     return results
+
+
+def _toksearch_tree_channels(shot, tree_signals, server, tmin, tmax, progress):
+    """Fetch EFIT/tree signals for the toksearch backend via a DIRECT mdsip
+    connection to the device's MDSplus `server` (atlas), reusing the mdsthin path's
+    openTree->get fetch.
+
+    Why not toksearch's `MdsSignal`: the remote backend runs the cluster interpreter
+    directly (no conda activate / module load), so the MDSplus tree-path env EFIT
+    needs is unset and a local tree open fails for every candidate. The cluster is
+    on-network, so we reach the same mdsip server the mdsthin backend uses -- no SSH
+    tunnel -- and the trees resolve there. Any connection failure degrades to
+    not-ok Channels so the PTDATA pull still succeeds.
+    """
+    if not tree_signals:
+        return []
+    if not server:
+        return [Channel(n, ok=False, error="no tree server configured") for n in tree_signals]
+
+    def connect():
+        host = server.split("://", 1)[-1].split("@", 1)[-1]  # normalize to host:port
+        try:
+            import MDSplus  # ty: ignore[unresolved-import]  # present wherever toksearch runs
+
+            return MDSplus.Connection(host)
+        except ImportError:
+            from mdsthin import Connection
+
+            return Connection(host)
+
+    try:
+        return _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress)
+    except Exception as exc:
+        return [Channel(n, ok=False, error=f"tree server {server}: {exc}") for n in tree_signals]
 
 
 # --- HDF5 writer (lzf + chunked + deduped time bases) -------------------------
@@ -1402,6 +1407,7 @@ def fetch_shot(
             stride=stride,
             progress=progress,
             tree_signals=tree_signals,
+            server=server,
         )
     elif backend == "mdsthin":
         # username is optional: with an ssh-config Host alias as the gateway (the

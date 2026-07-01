@@ -8,11 +8,24 @@ import type * as Plotly from "plotly.js";
 import type { Node, Quality } from "./contract";
 import Plot from "./Plot";
 import { FIELD_DIVERGING, POWER_SEQUENTIAL, MODE_PALETTE, plotChrome } from "./colormaps";
+import { nodeDownloadUrl } from "./api";
 import { useStore } from "../store";
 
 const QCOLOR: Record<Quality, string> = { good: "#54e08a", warn: "#ffb454", bad: "#ff5c5c" };
 
-export default function NodeView({ node, height }: { node: Node; height?: number }) {
+export default function NodeView({
+  node,
+  height,
+  exportName,
+  download,
+}: {
+  node: Node;
+  height?: number;
+  /** Base filename for image exports, forwarded to the inner Plot. */
+  exportName?: string;
+  /** Enables the per-plot HDF5 "Data" download, forwarded to the inner Plot. */
+  download?: { machine: string; nodeId: string; params?: Record<string, string | number> };
+}) {
   const dark = useStore((s) => s.theme === "dark");
   // Foreground ink that flips with the theme so white markers/labels/error bars
   // don't disappear on the light plot background.
@@ -20,11 +33,28 @@ export default function NodeView({ node, height }: { node: Node; height?: number
   const inkSubtle = dark ? "rgba(255,255,255,0.45)" : "rgba(20,34,46,0.5)";
   const inkEdge = dark ? "#000" : "#ffffff";
   const knockout = plotChrome(dark ? "dark" : "light").plot_bgcolor; // marker ring = bg
+  // Metrics is a scalar panel (no plot) — offer just a data download when available.
+  const metricsDataUrl = download
+    ? nodeDownloadUrl(download.machine, download.nodeId, download.params)
+    : null;
   switch (node.kind) {
     case "metrics":
       return (
         <div className="metrics">
-          <div className="metrics-title">{node.title}</div>
+          <div className="metrics-title">
+            {node.title}
+            {metricsDataUrl && (
+              <a
+                className="metrics-download"
+                title="Download these values as HDF5"
+                href={metricsDataUrl}
+                download
+                style={{ float: "right", fontSize: 10, color: "var(--text-dim)", textDecoration: "none" }}
+              >
+                ⬇ data
+              </a>
+            )}
+          </div>
           {node.fields.map((f, i) => (
             <div className="metric-row" key={i}>
               <span className="metric-label">{f.label}</span>
@@ -64,7 +94,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
           hovertemplate: "%{text}<extra></extra>",
         } as Partial<Plotly.PlotData>);
       }
-      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
+      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} exportName={exportName} download={download} />;
     }
 
     case "heatmap": {
@@ -85,6 +115,8 @@ export default function NodeView({ node, height }: { node: Node; height?: number
       return (
         <Plot
           height={height}
+          exportName={exportName}
+          download={download}
           layout={axisLayout(node.axes)}
           data={[{
             type: "heatmap", x: node.x, y: node.y, z: node.z,
@@ -142,7 +174,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
           connectgaps: false,  // null entries = wrap breaks; don't bridge them
         } as Partial<Plotly.PlotData>);
       }
-      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} />;
+      return <Plot data={traces} height={height} layout={axisLayout(node.axes)} exportName={exportName} download={download} />;
     }
 
     case "equilibrium": {
@@ -164,7 +196,7 @@ export default function NodeView({ node, height }: { node: Node; height?: number
           marker: { symbol: "cross", size: 8, color: "#2ee6cf" }, hoverinfo: "skip", showlegend: false,
         } as Partial<Plotly.PlotData>,
       ];
-      return <Plot data={traces} height={height} layout={{ ...base, yaxis: { ...base.yaxis, scaleanchor: "x", scaleratio: 1 } } as Partial<Plotly.Layout>} />;
+      return <Plot data={traces} height={height} exportName={exportName} download={download} layout={{ ...base, yaxis: { ...base.yaxis, scaleanchor: "x", scaleratio: 1 } } as Partial<Plotly.Layout>} />;
     }
 
     case "line": {
@@ -200,6 +232,8 @@ export default function NodeView({ node, height }: { node: Node; height?: number
       return (
         <Plot
           height={height}
+          exportName={exportName}
+          download={download}
           layout={{ ...axisLayout(node.axes), showlegend: true, legend: { font: { size: 10 }, orientation: "h", y: 1.12 } }}
           data={traces}
         />
