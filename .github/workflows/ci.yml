@@ -65,6 +65,28 @@ jobs:
           # exit 5 = no tests collected yet (skeleton); treat as success
           if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
 
+  typecheck:
+    name: Typecheck (ty)
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: analysis
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (Python 3.14 from .python-version)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install project + deps
+        run: uv sync
+
+      - name: Typecheck (ty)
+        run: uv run ty check src/magnetics
+
   web:
     name: Web (gui)
     needs: changes
