@@ -124,3 +124,15 @@ def test_kstar_poloidal_shape_node(kstar_shot):
     n = nodes.build_node(kstar_shot, "poloidal_shape")
     assert n["kind"] == "line"
     assert {s["name"] for s in n["series"]} >= {"Re", "Im"}
+
+
+# ── Sensors R-Z view: EFIT first-wall contour ────────────────────────────────
+def test_kstar_geometry_node_has_efit_wall(kstar_shot):
+    """The KSTAR limiter contour from the EFIT g-file renders in the Sensors view,
+    even though the sensors have no r/z yet (wall-only geometry)."""
+    n = nodes.build_node(kstar_shot, "geometry")
+    assert n["kind"] == "scatter2d"
+    wall = n["meta"]["wall"]
+    assert len(wall["r"]) == len(wall["z"]) >= 30
+    assert 1.2 < min(wall["r"]) and max(wall["r"]) < 2.4  # KSTAR inboard/outboard
+    assert min(wall["z"]) < -1.0 and max(wall["z"]) > 1.0  # spans full height

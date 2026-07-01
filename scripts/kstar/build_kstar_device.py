@@ -70,7 +70,80 @@ SENSOR_GEOM: dict[str, dict] = {
 }
 # First-wall / vessel / coil contours (metres). Emitted only when non-empty, so
 # regenerating today reproduces the current wall-less config with no regression.
-FIRST_WALL: dict = {}  # {"r": [...], "z": [...]}
+# FIRST_WALL: KSTAR limiter contour from the EFIT g-file g042485.005650_kin_2
+# (GEQDSK `rlim`/`zlim`, 33-pt closed loop) — machine-fixed, so shot-independent.
+FIRST_WALL: dict = {
+    "r": [
+        1.265,
+        1.608,
+        1.683,
+        1.631,
+        1.578,
+        1.593,
+        1.626,
+        2.006,
+        2.233,
+        2.235,
+        2.263,
+        2.298,
+        2.316,
+        2.316,
+        2.298,
+        2.263,
+        2.235,
+        2.233,
+        2.006,
+        2.01,
+        1.906,
+        1.807,
+        1.789,
+        1.625,
+        1.625,
+        1.606,
+        1.408,
+        1.348,
+        1.31,
+        1.376,
+        1.313,
+        1.265,
+        1.265,
+    ],
+    "z": [
+        1.085,
+        1.429,
+        1.431,
+        1.326,
+        1.32,
+        1.153,
+        1.09,
+        0.773,
+        0.444,
+        0.369,
+        0.31,
+        0.189,
+        0.062,
+        -0.062,
+        -0.189,
+        -0.31,
+        -0.369,
+        -0.444,
+        -0.773,
+        -0.774,
+        -0.857,
+        -0.935,
+        -0.953,
+        -1.081,
+        -1.39,
+        -1.333,
+        -1.06,
+        -1.06,
+        -1.114,
+        -0.935,
+        -0.697,
+        -0.426,
+        1.085,
+    ],
+}
 VACUUM_VESSEL: dict = {}  # {"plates": [{"r": [...], "z": [...]}, ...]}
 COILS: dict = {}  # {"sets": [{"name","count","turns","rz": {"r":[...],"z":[...]}}, ...]}
 
@@ -421,6 +494,15 @@ if VACUUM_VESSEL:
     doc["vacuum_vessel"] = {"segments": [{"since_shot": 0, **VACUUM_VESSEL}]}
 if COILS:
     doc["coils"] = {"segments": [{"since_shot": 0, **COILS}]}
+
+# Preserve geometry merged in by scripts/import_device_geometry.py (GPEC coils, and
+# any wall/VV): if this sensor-focused build didn't supply its own, don't clobber
+# what's already on disk. Lets the two generators run in either order safely.
+if OUT.exists():
+    _prev = json.loads(OUT.read_text())
+    for _k in ("first_wall", "vacuum_vessel", "coils", "wall"):
+        if _k not in doc and _k in _prev:
+            doc[_k] = _prev[_k]
 
 OUT.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
 print(f"wrote {OUT.relative_to(ROOT)}")
