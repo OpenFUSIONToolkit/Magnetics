@@ -15,6 +15,7 @@ Endpoints (see docs/CONTRACT.md):
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import threading
@@ -30,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..data import h5source
-from . import mock, nodes
+from . import export, mock, nodes
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,15 @@ def devices():
             {
                 "id": path.stem,  # e.g. "diiid" → --device diiid
                 "name": d.get("name", path.stem),  # e.g. "DIII-D"
+                "default_shot": d.get("default_shot"),  # per-device example shot
                 "sensor_sets": list(d.get("sensor_sets", {}).keys()),
+                # `access` = "mdsplus_tree" for NSTX-style devices whose sensors live
+                # in an MDSplus tree: those pull ONLY via mdsthin + a named sensor_set
+                # (no cluster/remote path, no analysis→signal map). Lets the GUI adapt.
+                "access": d.get("access", "ptdata"),
+                # remote (cluster) backend is available only when the device file has
+                # a network.cluster block (DIII-D omega); NSTX has none.
+                "remote_capable": bool((d.get("network", {}) or {}).get("cluster")),
             }
         )
     return out
@@ -107,6 +116,33 @@ def node(shot: str, node_id: str, request: Request):
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/api/node/{shot}/{node_id}/download")
+def node_download(shot: str, node_id: str, request: Request):
+    """The same kind-node as /api/node/... but serialized to an HDF5 file — the
+    per-plot "Download data" button. Query params are forwarded (and recorded in the
+    file) so the download matches exactly what's on screen. 404/422 like node()."""
+    params = dict(request.query_params)
+    try:
+        n = nodes.build_node(shot, node_id, params)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    # A node that built cleanly (200 on /api/node) must never 500 the download with a
+    # raw stack trace — the HDF5 writer sits outside the block above, so guard it too.
+    try:
+        payload = export.node_to_hdf5(shot, node_id, n, params)
+    except Exception as e:  # noqa: BLE001 — serializer failure → clean 500, logged server-side
+        logger.exception("HDF5 export failed for shot %s node %s", shot, node_id)
+        raise HTTPException(500, f"could not serialize node '{node_id}' to HDF5: {e}")
+    filename = f"shot_{shot}_{node_id}.h5"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/x-hdf5",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/channels/{shot}")
@@ -134,7 +170,8 @@ class FetchRequest(BaseModel):
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
     device: str | None = None  # data/device/<device>.json
     sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
-    # remote backend overrides (None → fetcher defaults: omega ssh alias, env python)
+    # remote backend overrides (None → device file's network.cluster block: explicit
+    # omega.gat.com host + auto cybele ProxyJump + env python — no ssh-config alias)
     remote_host: str | None = None
     ssh_jump: str | None = None
     remote_dir: str | None = None

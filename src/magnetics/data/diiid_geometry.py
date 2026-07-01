@@ -20,7 +20,9 @@ _LOOP_MIN_DPHI = 5.0
 
 
 def _family(channel: str) -> str:
-    m = re.match(r"^[A-Za-z]+", channel)
+    # Skip any leading non-letters (e.g. NSTX's '\' tree-path prefix) before the
+    # alpha family run, so '\bdot_l1d...' → 'bdot' rather than the whole path.
+    m = re.search(r"[A-Za-z]+", channel)
     return m.group(0) if m else channel
 
 
@@ -34,15 +36,19 @@ def _kind(family: str) -> str:
 
 
 def _kind_from_set_name(set_name: str) -> str | None:
-    """Infer Bp/Br/coil from a sensor-set name (e.g. 'Bp LFS midplane',
-    'C-coils'); None if unknown so members fall back to the family-prefix rule."""
+    """Infer Bp/Br/coil from a sensor-set name (e.g. 'Bp LFS midplane', 'C-coils',
+    or an NSTX 'HN toroidal array'); None if unknown so members fall back to the
+    family-prefix rule."""
     s = set_name.lower()
     if "coil" in s:
         return "coil"
     if "bp" in s:
         return "Bp"
-    if "br" in s:
+    if "br" in s or "saddle" in s:
         return "Br"
+    # Mirnov arrays (toroidal/poloidal/HF/HN/Mirnov) measure the poloidal field.
+    if "mirnov" in s or "toroidal" in s or "poloidal" in s:
+        return "Bp"
     return None
 
 
