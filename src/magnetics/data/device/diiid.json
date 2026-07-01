@@ -3,11 +3,12 @@
   "R0": 1.69,
   "network": {
     "domain": "gat.com",
-    "jump": { "host": "cybele.gat.com", "port": 2039 },
-    "mdsip": { "host": "atlas.gat.com", "port": 8000 },
+    "jump": { "host": "cybele.gat.com", "port": 2039, "duo": false },
+    "mdsip": { "host": "atlas.gat.com", "port": 8000, "duo": false },
     "cluster": {
       "host": "omega.gat.com",
       "port": 22,
+      "duo": false,
       "python": "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
     }
   },

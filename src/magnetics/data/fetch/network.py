@@ -16,6 +16,11 @@ block -- the single source of truth, so neither the CLI user nor the GUI needs a
 - ``mdsip``   — the MDSplus data server the mdsthin backend reads.
 - ``cluster`` — the compute host the ``remote`` backend runs the toksearch pull on.
 
+Each endpoint may also carry ``"duo": true|false`` noting whether reaching it needs
+an interactive 2FA (Duo/SecurID) passcode -- DIII-D (key-based through cybele) is
+``false``; absent is treated as ``true`` (assume it's needed, so the UI still
+prompts). See ``needs_duo``.
+
 ``on_site_network`` decides the hop count automatically: on a host inside the site
 domain (``*.gat.com`` for DIII-D, ``*.pppl.gov`` for NSTX) the data hosts are
 directly reachable, so we skip the gateway entirely; off-site we route through it.
@@ -98,6 +103,14 @@ def gateway_address(device: str) -> str | None:
         return load_device(device).get("gateway")
     except Exception:
         return None
+
+
+def needs_duo(device: str, which: str = "jump") -> bool:
+    """Whether reaching the given endpoint (``jump`` / ``mdsip`` / ``cluster``)
+    needs an interactive 2FA (Duo/SecurID) passcode, per the device file's per-url
+    ``duo`` flag. Absent → True (conservative: assume it's needed so callers still
+    prompt). Defaults to the ``jump`` gateway, which is the off-site auth point."""
+    return bool((_network(device).get(which, {}) or {}).get("duo", True))
 
 
 def cluster_login(device: str) -> dict:

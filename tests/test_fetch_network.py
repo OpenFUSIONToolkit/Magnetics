@@ -31,6 +31,26 @@ def test_nstx_endpoints_and_no_cluster():
     assert network.cluster_login("nstx")["host"] is None
 
 
+# --- per-url duo / 2FA metadata -----------------------------------------------
+def test_diiid_endpoints_do_not_need_duo():
+    # key-based through cybele — explicitly marked duo:false on every endpoint
+    assert network.needs_duo("diiid", "jump") is False
+    assert network.needs_duo("diiid", "mdsip") is False
+    assert network.needs_duo("diiid", "cluster") is False
+
+
+def test_nstx_endpoints_need_duo():
+    assert network.needs_duo("nstx", "jump") is True
+    assert network.needs_duo("nstx", "mdsip") is True
+
+
+def test_needs_duo_absent_defaults_true(monkeypatch):
+    monkeypatch.setattr(network, "load_device", lambda device: {"network": {"jump": {}}})
+    assert network.needs_duo("whatever", "jump") is True
+    # a wholly unknown endpoint is also treated as needing 2FA
+    assert network.needs_duo("whatever", "cluster") is True
+
+
 # --- legacy flat gateway/server fallback --------------------------------------
 def test_legacy_flat_keys_are_honored(monkeypatch):
     flat = {"gateway": "gw.example.org:2222", "server": "mds.example.org:8000"}
