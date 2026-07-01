@@ -155,13 +155,6 @@ export default function SensorsTab({ machine }: { machine: string }) {
     return meta.sensors.filter((s) => names.has(s.name));
   }, [meta, sets, selectedSets]);
 
-  // Vessel center (for the local poloidal-tangent direction of each loop).
-  const Rc = useMemo(() => {
-    if (!meta) return 1.7;
-    const r = meta.wall.r;
-    return (Math.max(...r) + Math.min(...r)) / 2;
-  }, [meta]);
-
   const traces2d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
     const t: Partial<Plotly.PlotData>[] = [];
@@ -323,8 +316,11 @@ export default function SensorsTab({ machine }: { machine: string }) {
         const x: (number | null)[] = [], y: (number | null)[] = [], z: (number | null)[] = [];
         const txt: (string | null)[] = [];
         for (const s of loops) {
-          const u = Math.atan2(s.z, s.r - Rc);
-          const tr = -Math.sin(u), tz = Math.cos(u), h = s.length / 2;
+          // Poloidal extent oriented by the loop's own tilt (its real R-Z angle,
+          // +R toward +Z) — same as loopSegment2d, NOT the vessel tangent, which
+          // tilts off-midplane loops (e.g. the inner saddle loops) the wrong way.
+          const a = d2r(s.tilt);
+          const tr = Math.cos(a), tz = Math.sin(a), h = s.length / 2;
           const Rp = s.r + h * tr, Zp = s.z + h * tz, Rm = s.r - h * tr, Zm = s.z - h * tz;
           const seg = Math.max(2, Math.ceil(s.delta_phi / 6));
           const arc = Array.from({ length: seg + 1 },
@@ -345,7 +341,7 @@ export default function SensorsTab({ machine }: { machine: string }) {
       }
     }
     return t;
-  }, [meta, Rc, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
+  }, [meta, visibleSensors, wallSurface, wallSurfaceOpacity, showCoils]);
 
   return (
     <div className="card">
