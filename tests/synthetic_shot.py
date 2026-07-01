@@ -86,13 +86,27 @@ def _channels(shot: int, *, include_qs: bool) -> list[Channel]:
         names += _MPID_POLOIDAL
     names = list(dict.fromkeys(names))  # dedup, keep order
 
+    from magnetics.data import devices
+
+    dev = devices.load_device("diiid")
+
     chans: list[Channel] = []
     for nm in names:
         phi = diiid.phi_of(nm, shot)
         if phi is None:
             continue  # not modeled at this shot → leave out (fetcher would skip it)
         theta = diiid.real_theta_of(nm, shot) or 0.0
-        chans.append(Channel(nm, t_ms.copy(), _sensor_signal(t_s, phi, theta), ok=True))
+        sig = _sensor_signal(t_s, phi, theta)
+        # Differential probes (MPID/ISLD/ESLD) physically report field(X) − field(pair);
+        # subtract the pair's field so the signal matches the pairwise-difference basis
+        # the QS fit builds for paired sensors (see qs_fit / qs_device).
+        pair = (devices.geometry_nearest(dev, nm, shot) or {}).get("pair")
+        if pair and str(pair) != "None":
+            pphi = diiid.phi_of(pair, shot)
+            if pphi is not None:
+                ptheta = diiid.real_theta_of(pair, shot) or 0.0
+                sig = sig - _sensor_signal(t_s, pphi, ptheta)
+        chans.append(Channel(nm, t_ms.copy(), sig, ok=True))
 
     # Plasma traces (routed to the plasma Dataset / κ path; not sensor channels).
     ip = (1.0e6 * t_s / t_s[-1]).astype(np.float32)  # 0 → 1 MA ramp

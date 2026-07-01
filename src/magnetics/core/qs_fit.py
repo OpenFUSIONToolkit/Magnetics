@@ -251,6 +251,23 @@ def fit(
                 fill = np.nanmean(sigma) if np.isfinite(np.nanmean(sigma)) else 1.0
             sigma[bad] = fill
 
+    # ── paired-sensor differencing (SLCONTOUR pairwise-difference basis) ────────
+    # A differential sensor (pair != "None") reports field(X) - field(pair), so the
+    # design-matrix column is differenced at X and at its pair. The pair ends ride in
+    # on the geometry (qs_device.sensor_geometry); NaN marks an unpaired channel.
+    if f"pair_{xkey}_end1" in ds:
+        px1 = ds[f"pair_{xkey}_end1"].values
+        px2 = ds[f"pair_{xkey}_end2"].values
+        py1 = ds[f"pair_{ykey}_end1"].values
+        py2 = ds[f"pair_{ykey}_end2"].values
+    else:
+        px1 = px2 = py1 = py2 = np.full_like(x1, np.nan)
+    has_pair = np.isfinite(px1)
+    # OMFIT sources the pair's signal_sigma (fit_magnetics.py:136-141: all-NaN -> own
+    # sigma, then NaN -> nanmean). Our sigma is the constant per-shot value for every
+    # channel, so pair sigma == own sigma; revisit when real per-sensor sigma lands.
+    psigma = sigma
+
     # ── basis-specific mode / centre setup ────────────────────────────────────
     is_sinusoidal = fit_basis.startswith("sinusoidal")
     is_gaussian = fit_basis.startswith("gaussian")
@@ -258,9 +275,8 @@ def fit(
     if is_sinusoidal:
         ms = np.atleast_1d(ms)
         ns = np.atleast_1d(ns)
-        dp = None  # paired sensors not present in this dataset
-        if dp is None and 0 not in ns:
-            _printv("WARNING: Sensors are not paired! Consider including n=0.")
+        if (~has_pair).any() and 0 not in ns:
+            _printv("WARNING: Some sensors are not paired! Consider including n=0.")
         if not np.all(ms == 0) and not np.any(np.sign(ms) == helicity):
             ms = ms * -1
             _printv(f"WARNING: Flipping sign of m to conform to helicity {helicity:+}")
@@ -325,6 +341,9 @@ def fit(
     if is_sinusoidal:
         for n, m in nms:
             fmn = form_basis_function(n, m, x1, x2, y1, y2, fit_basis) / sigma
+            if has_pair.any():
+                fmn_pair = form_basis_function(n, m, px1, px2, py1, py2, fit_basis) / psigma
+                fmn = np.where(has_pair, (fmn - fmn_pair) / 2.0, fmn)
             if np.allclose(fmn.imag, 0):
                 A_cols.append(fmn.real)
                 ncomp.append(1)
@@ -345,6 +364,14 @@ def fit(
                         form_basis_function(n, m, x1 + x0, x2 + x0, y1 + y0, y2 + y0, fit_basis)
                         / sigma
                     )
+                    if has_pair.any():
+                        fmn_pair = (
+                            form_basis_function(
+                                n, m, px1 + x0, px2 + x0, py1 + y0, py2 + y0, fit_basis
+                            )
+                            / psigma
+                        )
+                        fmn = np.where(has_pair, (fmn - fmn_pair) / 2.0, fmn)
                     A_cols = A_cols[:-2] + [fmn.real]
                     ncomp[-1] = 1
     else:  # gaussian — basis functions are always real
@@ -365,6 +392,24 @@ def fit(
                 )
                 / sigma
             )
+            if has_pair.any():
+                fmn_pair = (
+                    form_basis_function(
+                        n,
+                        m,
+                        px1,
+                        px2,
+                        py1,
+                        py2,
+                        fit_basis,
+                        ncycle=_ncycle,
+                        mcycle=_mcycle,
+                        nepsilon=_nepsilon,
+                        mepsilon=_mepsilon,
+                    )
+                    / psigma
+                )
+                fmn = np.where(has_pair, (fmn - fmn_pair) / 2.0, fmn)
             A_cols.append(fmn)
             ncomp.append(1)
 
@@ -448,6 +493,7 @@ def fit(
         fit_mcycle=_mcycle,
         fit_neps=_nepsilon,
         fit_meps=_mepsilon,
+        n_paired=int(has_pair.sum()),
     )
     _condition_warning(raw_cn)
     return ds
