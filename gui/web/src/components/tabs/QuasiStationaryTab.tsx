@@ -146,7 +146,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [fitQualityOpen, setFitQualityOpen] = useState(false);
   const [svdOpen, setSvdOpen]               = useState(false);
   const [sensorMapOpen, setSensorMapOpen]   = useState(false);
-  const [advancedOpen, setAdvancedOpen]     = useState(false);
 
   // ── Deferred fetch: only compute when user clicks Plot ────────────
   const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
@@ -665,7 +664,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         <p className="desc" style={{ margin: 0 }}>shot {machine}</p>
       </div>
 
-      {/* ── Settings bar ──────────────────────────────────────────────── */}
+      {/* ── Row 1: Basics — array, time trim, mode numbers ─────────────── */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}
           title="Select which sensor array is used for the fit. Choose from the options in the dropdown.">
@@ -696,6 +695,27 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           <input value={ms} onChange={e => setMs(e.target.value)}
             style={{ width: 40, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          {paramsDirty && (
+            <span style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>settings changed</span>
+          )}
+          <button
+            onClick={() => setCommittedParams(qsParams)}
+            style={{
+              fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              background: paramsDirty ? "var(--accent)" : "var(--panel)",
+              color: paramsDirty ? "#fff" : "var(--text-dim)",
+              border: "1px solid var(--border)",
+              fontWeight: paramsDirty ? 600 : 400,
+            }}
+          >
+            Plot
+          </button>
+        </div>
+      </div>
+
+      {/* ── Row 2: Data — detrend, bandpass, SVD filtering, uncertainty ── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}
           title="Detrending must happen inside of the trimmed bounds. Baseline removes each channel's mean from within the band, linear removes a linear trend fit within the band, and endpoints removes a line connecting the endpoints of the band.">
           Detrend
@@ -718,81 +738,49 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           </label>
         )}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-          {paramsDirty && (
-            <span style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>settings changed</span>
-          )}
-          <button
-            onClick={() => setAdvancedOpen(o => !o)}
-            style={{
-              fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px", borderRadius: 3, cursor: "pointer",
-              background: advancedOpen ? "var(--border)" : "var(--panel)",
-              color: "var(--text)",
-              border: "1px solid var(--border)",
-              fontWeight: 400,
-            }}
-          >
-            Advanced {advancedOpen ? "▲" : "▼"}
-          </button>
-          <button
-            onClick={() => setCommittedParams(qsParams)}
-            style={{
-              fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px", borderRadius: 3, cursor: "pointer",
-              background: paramsDirty ? "var(--accent)" : "var(--panel)",
-              color: paramsDirty ? "#fff" : "var(--text-dim)",
-              border: "1px solid var(--border)",
-              fontWeight: paramsDirty ? 600 : 400,
-            }}
-          >
-            Plot
-          </button>
-        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="High and low frequency cutoffs for band pass filtering the prepared data.">
+          bandpass (Hz)
+          <input value={cutoffLo} onChange={e => setCutoffLo(e.target.value)}
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          –
+          <input value={cutoffHi} onChange={e => setCutoffHi(e.target.value)}
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Sets the minimum singular values kept in a SVD filter of the channel-by-time data matrix. This filters the data for the most coherent spatial-temporal combinations of sensors of the selected time window (use 1.0 if the time window includes disparate amplitude scales of interest).">
+          fraction of energy included
+          <input value={energyFraction} onChange={e => setEnergyFraction(e.target.value)}
+            style={{ width: 50, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Measurement uncertainty (σ, in T) applied uniformly to every sensor channel in the fit.">
+          uncertainty (σ)
+          <input value={uncertainty} onChange={e => setUncertainty(e.target.value)}
+            style={{ width: 70, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
       </div>
 
-      {/* ── Advanced options — toggled by the "Advanced" button above, styled ──
-          like the settings bar it belongs to (not the collapsible plot sections) ── */}
-      {advancedOpen && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Measurement uncertainty (σ, in T) applied uniformly to every sensor channel in the fit.">
-            uncertainty (σ)
-            <input value={uncertainty} onChange={e => setUncertainty(e.target.value)}
-              style={{ width: 70, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Sets the minimum singular values kept in a SVD filter of the channel-by-time data matrix. This filters the data for the most coherent spatial-temporal combinations of sensors of the selected time window (use 1.0 if the time window includes disparate amplitude scales of interest).">
-            fraction of energy included
-            <input value={energyFraction} onChange={e => setEnergyFraction(e.target.value)}
-              style={{ width: 50, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Type of basis function used in the design matrix. sinusoidal-point evaluates A·exp(i·m·θ + i·n·φ) at each sensor's center; sinusoidal-integral averages it over the sensor's extent (preferred for finite-size sensors). gaussian-point/gaussian-integral use localized radial basis functions instead of global sinusoids.">
-            basis function
-            <select value={fitBasis} onChange={e => setFitBasis(e.target.value)}
-              style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
-              <option value="sinusoidal-integral">sinusoidal-integral</option>
-              <option value="sinusoidal-point">sinusoidal-point</option>
-              <option value="gaussian-integral">gaussian-integral</option>
-              <option value="gaussian-point">gaussian-point</option>
-            </select>
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Sets the condition number of the basis function matrix used for the lsq fitting. Smaller condition numbers will ignore mode combinations the chosen channels are relatively poor at constraining. Sufficiently larger numbers will blindly fit all modes chosen above.">
-            fit condition
-            <input value={fitCond} onChange={e => setFitCond(e.target.value)}
-              style={{ width: 50, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="High and low frequency cutoffs for band pass filtering the prepared data.">
-            bandpass (Hz)
-            <input value={cutoffLo} onChange={e => setCutoffLo(e.target.value)}
-              style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-            –
-            <input value={cutoffHi} onChange={e => setCutoffHi(e.target.value)}
-              style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-        </div>
-      )}
+      {/* ── Row 3: Fitting — basis function, fit conditioning ──────────── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Type of basis function used in the design matrix. sinusoidal-point evaluates A·exp(i·m·θ + i·n·φ) at each sensor's center; sinusoidal-integral averages it over the sensor's extent (preferred for finite-size sensors). gaussian-point/gaussian-integral use localized radial basis functions instead of global sinusoids.">
+          basis function
+          <select value={fitBasis} onChange={e => setFitBasis(e.target.value)}
+            style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            <option value="sinusoidal-integral">sinusoidal-integral</option>
+            <option value="sinusoidal-point">sinusoidal-point</option>
+            <option value="gaussian-integral">gaussian-integral</option>
+            <option value="gaussian-point">gaussian-point</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Sets the condition number of the basis function matrix used for the lsq fitting. Smaller condition numbers will ignore mode combinations the chosen channels are relatively poor at constraining. Sufficiently larger numbers will blindly fit all modes chosen above.">
+          fit condition
+          <input value={fitCond} onChange={e => setFitCond(e.target.value)}
+            style={{ width: 50, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+      </div>
 
       {/* ── Plot content — show immediately; message only if data unavailable ── */}
       {noData ? (
