@@ -676,7 +676,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}
           title="Prepared and fit data will be trimmed to be within these bounds.">
-          t trim (ms)
+          time (ms)
           <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
             style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           –
