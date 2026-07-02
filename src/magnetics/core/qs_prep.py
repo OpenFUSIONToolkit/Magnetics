@@ -29,6 +29,13 @@ from .qs_device import is_device, resolve_channel_filter
 
 logger = logging.getLogger(__name__)
 
+# Hard cap on emitted time samples, independent of cutoff_hz — the frequency-filter
+# block below decimates as a side effect of filtering, but a permissive cutoff_hz
+# (e.g. a (0, inf) passthrough, or any f_high near Nyquist) leaves that decimation
+# at a no-op, letting a shot's full native sample count (10^5-10^6) flow downstream
+# and blow up node payload sizes. Matches nodes.py's _raw_trace line-plot cap.
+_MAX_PREP_SAMPLES = 2000
+
 
 def causal_gaussian(values, sigma, truncate=4.0):
     """One-sided (causal) Gaussian smoothing along a 1-D array.
@@ -69,7 +76,8 @@ def prepare(
     :param channel_filter: regex / list / friendly filter name.
     :param time_trim: (t1, t2) seconds — analysis window.
     :param cutoff_hz: (f_low, f_high) bandpass corners; ``f_low==0`` -> lowpass,
-        ``f_high>=Nyquist`` -> highpass.
+        ``f_high>=Nyquist`` -> highpass. Output is additionally capped at
+        ``_MAX_PREP_SAMPLES`` samples regardless of filter settings.
     :param detrend_type: 'none' | 'baseline' | 'linear' | 'endpoints'.
     :param detrend_band: (t1, t2) sub-interval used to estimate the trend.
     :param energy: fraction of data-matrix SVD energy to keep (<1 removes noise).
@@ -188,6 +196,13 @@ def prepare(
             f"{t[0]:.4g}–{t[-1]:.4g} s). Widen the window or reduce cutoff_hz[0]."
         )
     ds = ds.sel(time=tsel)
+
+    # Unconditional size cap — the filter block above only decimates when it actually
+    # runs, so a permissive cutoff_hz (e.g. a full (0, inf) passthrough) would otherwise
+    # leave the native sample count uncapped.
+    if ds.sizes["time"] > _MAX_PREP_SAMPLES:
+        idx = np.linspace(0, ds.sizes["time"] - 1, _MAX_PREP_SAMPLES).astype(int)
+        ds = ds.isel(time=idx)
 
     # ----- detrend -------------------------------------------------------- #
     _detrend(ds, channels, detrend_type.lower(), detrend_band, _printv)
