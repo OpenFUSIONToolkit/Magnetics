@@ -739,7 +739,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           </label>
         )}
         <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-          title="High and low frequency cutoffs for band pass filtering the prepared data.">
+          title="High and low frequency cutoffs for band pass filtering the prepared data. 0/inf disables the low/high cutoff (full passthrough at 0, inf).">
           bandpass (Hz)
           <input value={cutoffLo} onChange={e => setCutoffLo(e.target.value)}
             style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
