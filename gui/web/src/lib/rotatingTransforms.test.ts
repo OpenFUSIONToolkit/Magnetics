@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { gatePosToPct, percentile } from "./rotatingTransforms";
+import { gatePosToPct, medianStep, percentile } from "./rotatingTransforms";
 
 test("percentile: endpoints and linear interpolation", () => {
   expect(percentile([10, 20, 30, 40], 0)).toBe(10);
@@ -16,6 +16,19 @@ test("percentile sorts its input in place (documented contract)", () => {
   const arr = [3, 1, 2];
   percentile(arr, 50);
   expect(arr).toEqual([1, 2, 3]);
+});
+
+test("medianStep: median cell width of a monotone axis", () => {
+  expect(medianStep([0, 2, 4, 6])).toBe(2); // uniform 2-unit grid
+  // sorted diffs [1, 1, 4] → odd count → median 1
+  expect(medianStep([0, 1, 2, 6])).toBe(1);
+  // even count of diffs → mean of the two middle values: diffs [2,2,10,10] → 6
+  expect(medianStep([0, 2, 4, 14, 24])).toBe(6);
+});
+
+test("medianStep: degenerate axis → NaN", () => {
+  expect(medianStep(undefined)).toBeNaN();
+  expect(medianStep([5])).toBeNaN();
 });
 
 test("gatePosToPct: monotonic, clamped, log-headroom mapping", () => {

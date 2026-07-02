@@ -13,10 +13,13 @@ from magnetics.service import nodes
 
 
 def _first_shot():
+    # Prefer a DIII-D shot: these tests assume full geometry + QS arrays, which the
+    # synthetic KSTAR shot (device=kstar, toroidal-only, no r/z) does not yet carry.
     ms = nodes.machines()
     if not ms:
         pytest.skip("no fetched HDF5 in the data dir")
-    return ms[0]["id"]
+    non_kstar = [m for m in ms if (m.get("device") or "").lower() != "kstar"]
+    return (non_kstar or ms)[0]["id"]
 
 
 def test_machines_shape():
@@ -37,6 +40,49 @@ def test_spectrogram_node():
     assert n["kind"] == "heatmap"
     assert len(n["z"]) == len(n["y"])  # rows = freqs
     assert len(n["z"][0]) == len(n["x"])  # cols = times
+
+
+def _count_null(z):
+    return sum(1 for row in z for v in row if v is None)
+
+
+def test_spectrogram_denoise_gates_cells():
+    shot = _first_shot()
+    base = nodes.build_node(shot, "spectrogram")
+    gated = nodes.build_node(shot, "spectrogram", {"denoise": 1, "coherence_min": 0.9})
+    # same (t, f) grid — the gate blanks cells, it doesn't reshape the spectrogram
+    assert len(gated["z"]) == len(base["z"])
+    assert len(gated["x"]) == len(base["x"])
+    # the ungated view has no null cells; the coherence gate introduces transparent ones
+    assert _count_null(base["z"]) == 0
+    assert _count_null(gated["z"]) > 0
+
+
+def test_spectrogram_smooth_preserves_grid_and_off_is_noop():
+    shot = _first_shot()
+    base = nodes.build_node(shot, "spectrogram")
+    sm = nodes.build_node(
+        shot, "spectrogram", {"smooth": 1, "smooth_t_cells": 3, "smooth_f_cells": 1.5}
+    )
+    # same (t, f) grid — smoothing blurs values, it doesn't reshape
+    assert len(sm["z"]) == len(base["z"]) and len(sm["x"]) == len(base["x"])
+    # ...but the values must actually change, or the smooth wiring silently no-op'd
+    assert sm["z"] != base["z"]
+    # smoothing off (flag 0) reproduces the default spectrogram exactly
+    off = nodes.build_node(
+        shot, "spectrogram", {"smooth": 0, "smooth_t_cells": 3, "smooth_f_cells": 1.5}
+    )
+    assert off["z"] == base["z"]
+
+
+def test_spectrogram_denoise_off_matches_default():
+    # denoise flag off (both gates 0) must reproduce the default spectrogram exactly.
+    shot = _first_shot()
+    base = nodes.build_node(shot, "spectrogram")
+    off = nodes.build_node(
+        shot, "spectrogram", {"denoise": 0, "coherence_min": 0, "power_floor_k": 0}
+    )
+    assert off["z"] == base["z"]
 
 
 def test_contour_node():
