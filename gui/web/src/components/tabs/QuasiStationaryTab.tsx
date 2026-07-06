@@ -89,6 +89,23 @@ const CHANNEL_FILTERS = [
   "Bp HFS -midplane",
 ];
 
+// ── Typed y-axis zoom control — same look as the "time (ms)" crop boxes,
+// but purely a client-side Plotly range override (no refetch/backend param).
+function YRangeControl({
+  label, lo, hi, onLo, onHi, title,
+}: { label: string; lo: string; hi: string; onLo: (v: string) => void; onHi: (v: string) => void; title: string }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }} title={title}>
+      {label}
+      <input placeholder="auto" value={lo} onChange={e => onLo(e.target.value)}
+        style={{ width: 44, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+      –
+      <input placeholder="auto" value={hi} onChange={e => onHi(e.target.value)}
+        style={{ width: 44, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+    </label>
+  );
+}
+
 // ── Collapsible section header ────────────────────────────────────────
 function CollapseHeader({
   open, onToggle, children,
@@ -181,6 +198,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // Linked time-axis zoom (declared here so the trim-window effect below can reset it).
   const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
+
+  // ── Typed y-axis zoom (client-side only — doesn't touch fetched data) ──
+  const [phiYMin, setPhiYMin] = useState("");  // "" = auto (0–360°)
+  const [phiYMax, setPhiYMax] = useState("");
 
   // When the trim window changes, clear any user zoom so the axis re-fits to the new data.
   useEffect(() => {
@@ -294,6 +315,42 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       setTimeRange([Number(e["xaxis.range[0]"]), Number(e["xaxis.range[1]"])]);
     }
   }, []);
+
+  // φ(t) contour: also keep the "y (θ°)" boxes in sync when the user zooms/pans/
+  // double-click-resets the plot directly (drag-box zoom, scroll, etc.), not just
+  // when they type into the boxes.
+  //
+  // A rubber-band drag inside the plot always reports both xaxis.* and yaxis.*
+  // at once, even though dragging a box on this contour is how a user scales
+  // the θ axis — so a plain box-zoom must NOT also shift the (linked) time
+  // window every other panel shares. Only a deliberate drag on the x-axis
+  // ruler itself (x fields with no y fields) — or a full double-click reset,
+  // which reports both axes autoranging together — touches the shared time range.
+  const handlePhiRelayout = useCallback((e: Record<string, unknown>) => {
+    const xAuto = e["xaxis.autorange"] === true;
+    const yAuto = e["yaxis.autorange"] === true;
+    const hasYRange = e["yaxis.range[0]"] != null;
+
+    if (xAuto && yAuto) {
+      setTimeRange(null);
+      setPhiYMin(""); setPhiYMax("");
+      return;
+    }
+    if (!hasYRange) {
+      if (xAuto) {
+        setTimeRange(null);
+      } else if (e["xaxis.range[0]"] != null) {
+        setTimeRange([Number(e["xaxis.range[0]"]), Number(e["xaxis.range[1]"])]);
+      }
+    }
+
+    if (yAuto) {
+      setPhiYMin(""); setPhiYMax("");
+    } else if (hasYRange) {
+      setPhiYMin(String(Math.round(Number(e["yaxis.range[0]"]) * 10) / 10));
+      setPhiYMax(String(Math.round(Number(e["yaxis.range[1]"]) * 10) / 10));
+    }
+  }, [setPhiYMin, setPhiYMax]);
 
   // ── Shared time axis ──────────────────────────────────────────────
   // Double-click resets to [tMin, tMax] — the union of every linked panel's real
@@ -608,13 +665,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     return traces;
   }, [phiTimePlot, phiPeak, cmapProps]);
 
+  const phiYRange = useMemo((): [number, number] =>
+    (phiYMin !== "" && phiYMax !== "") ? [Number(phiYMin), Number(phiYMax)] : [0, 360],
+  [phiYMin, phiYMax]);
+
   const phiTimeLayout = useMemo(() =>
     phiTimePlot ? ({
       xaxis: { ...timeXAxis, title: { text: phiTimePlot.axes.x } },
-      yaxis: { title: { text: phiTimePlot.axes.y }, range: [0, 360], dtick: 90, tickvals: [0, 90, 180, 270, 360] },
+      yaxis: { title: { text: phiTimePlot.axes.y }, range: phiYRange, dtick: 90, tickvals: [0, 90, 180, 270, 360] },
       margin: { t: 4, b: 40, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [phiTimePlot, timeXAxis]);
+  [phiTimePlot, timeXAxis, phiYRange]);
 
   // ── Section 7: amplitude & phase ─────────────────────────────────
   const ampData = useMemo(() =>
@@ -819,6 +880,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                   {cm === "rdbu" ? "default" : cm}
                 </button>
               ))}
+              <div style={{ marginLeft: "auto" }}>
+                <YRangeControl label="y (θ°)" lo={phiYMin} hi={phiYMax} onLo={setPhiYMin} onHi={setPhiYMax}
+                  title="Zoom the θ axis to a custom range (view only — doesn't affect the fit)." />
+              </div>
             </div>
             {phiRms && (
               <Plot height={100} data={[{
@@ -832,7 +897,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                 margin: { t: 4, b: 4, l: 60, r: 80 },
               } as Partial<Plotly.Layout>} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_rms")} download={dl("phi_t")} />
             )}
-            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
+            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handlePhiRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
           </div>
         )}
 
