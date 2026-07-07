@@ -1,4 +1,4 @@
-// App shell: header · left rail (shot picker) · tabbed main · right rail (quality).
+// App shell: header · left rail (shot picker) · tabbed main.
 // The four tabs are independent files owned by different people — they read from
 // the store and render `kind`-nodes via <NodeView>. Adding a view = one file.
 //
@@ -8,7 +8,7 @@ import { useEffect } from "react";
 import "./theme.css";
 import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
-import ThemeToggle from "./components/ThemeToggle";
+import SettingsMenu from "./components/SettingsMenu";
 import PullControl from "./components/PullControl";
 import ErrorBoundary from "./components/ErrorBoundary";
 import SensorsTab from "./components/tabs/SensorsTab";
@@ -22,15 +22,29 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 export default function App() {
-  const { machines, machine, tab, loadingMachines, init, setMachine, setTab } = useStore();
+  const { machines, machine, devices, device, tab, loadingMachines, init, setMachine, setDevice, setTab } =
+    useStore();
   const removeMachine = useStore((s) => s.removeMachine);
   const clearMachines = useStore((s) => s.clearMachines);
 
   useEffect(() => { void init(); }, [init]);
 
-  // Deletable = real fetched shots (mock demo machines have nothing on disk). Only
-  // offer delete controls against a live backend.
-  const deletable = usingLiveBackend() ? machines.filter((m) => !m.mock) : [];
+  // Filter the shot list to the selected device (by display name). If no device
+  // is resolved yet, show everything.
+  const selName = devices.find((d) => d.id === device)?.name;
+  const visibleMachines = selName ? machines.filter((m) => m.device === selName) : machines;
+
+  // When the device changes and the current shot isn't in its list, jump to the
+  // first shot for that device (keeps the main view consistent with the picker).
+  useEffect(() => {
+    if (visibleMachines.length && !visibleMachines.some((m) => m.id === machine)) {
+      setMachine(visibleMachines[0].id);
+    }
+  }, [device, machines, devices]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deletable = real fetched shots (mock demo machines have nothing on disk), scoped
+  // to the visible device. Only offer delete controls against a live backend.
+  const deletable = usingLiveBackend() ? visibleMachines.filter((m) => !m.mock) : [];
 
   async function onDelete(id: string, label: string) {
     if (!window.confirm(`Delete ${label} and all its underlying data? This cannot be undone.`)) return;
@@ -58,11 +72,26 @@ export default function App() {
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
         <span className="badge">{usingLiveBackend() ? "● live backend" : "○ offline / demo"}</span>
-        <ThemeToggle />
+        <SettingsMenu />
       </header>
 
       <aside className="rail-left">
         <PullControl />
+        {devices.length > 0 && (
+          <div className="rail-section">
+            <h3>Device</h3>
+            <select
+              className="pull-input"
+              value={device}
+              aria-label="device"
+              onChange={(e) => setDevice(e.target.value)}
+            >
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="rail-section">
           <div className="rail-head">
             <h3>Shot / machine</h3>
@@ -74,7 +103,7 @@ export default function App() {
             )}
           </div>
           {loadingMachines && <div className="placeholder">loading…</div>}
-          {machines.map((m) => (
+          {visibleMachines.map((m) => (
             <div
               key={m.id}
               className={`machine-item${m.id === machine ? " active" : ""}`}
@@ -118,15 +147,6 @@ export default function App() {
           </ErrorBoundary>
         )}
       </main>
-
-      <aside className="rail-right">
-        <div className="rail-section">
-          <h3>Quality</h3>
-          <div className="placeholder">
-            Condition number K, χ², and channel counts surface here once a fit is selected.
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }

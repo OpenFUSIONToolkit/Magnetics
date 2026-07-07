@@ -37,6 +37,7 @@ password is needed at all. Secrets are passed once to ssh and never stored.
 
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 import sys
@@ -69,6 +70,20 @@ DEFAULT_OUT_STAGE = "/tmp/magnetics_out"
 # Invoke the cluster env's interpreter DIRECTLY -- no `module load` / `conda activate`
 # (its activate.d scripts set nothing PTDATA needs; direct is ~4-5s faster per pull).
 DEFAULT_PYTHON = "/fusion/projects/codes/conda/omega/envs_public/toksearch_env/bin/python"
+
+# ``remote_dir`` is interpolated into remote shell commands and rsync remote specs.
+# Reject shell metacharacters and option-like relative paths at the input boundary.
+_SAFE_REMOTE_DIR = re.compile(r"^~?[\w./\-]+$")
+
+
+def _validate_remote_dir(remote_dir: str) -> str:
+    if not _SAFE_REMOTE_DIR.match(remote_dir) or remote_dir.startswith("-"):
+        raise ValueError(
+            f"unsafe remote_dir {remote_dir!r}: only '~', letters, digits, '_', '.', "
+            "'-' and '/' are allowed (no spaces or shell metacharacters), and relative "
+            "paths must not start with '-'"
+        )
+    return remote_dir
 
 
 def _log(msg: str) -> None:
@@ -106,6 +121,7 @@ def run_remote(
     the network, no hop needed); pass an explicit host[:port] to force one, or an
     empty string to force none (e.g. an ssh-config alias that carries its own
     ProxyJump)."""
+    remote_dir = _validate_remote_dir(remote_dir)
     login = cluster_login(device)
     out_stage_base = (out_stage or DEFAULT_OUT_STAGE).rstrip("/")
     host = host or login["host"] or DEFAULT_HOST

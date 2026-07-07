@@ -19,7 +19,7 @@ from functools import lru_cache
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import device_geom, diiid_geometry, h5source
+from ..data import device_geom, devices, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,68 @@ def refresh() -> None:
     h5source.refresh()
     for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run, _dev_geom):
         fn.cache_clear()
+
+
+# ── device dispatch: declared sensor-array sets (non-DIII-D) ─────────────────
+def _device_key(shot):
+    """The device-file key for this shot's display name (``DIII-D``→``diii-d`` has no
+    JSON → None, so DIII-D keeps its legacy channel selectors). Returns (dev, key)."""
+    disp = (h5source.meta(shot).get("device") or "").lower()
+    try:
+        return devices.load_device(disp), disp
+    except Exception:  # noqa: BLE001 — unknown device → legacy path
+        return None, None
+
+
+def _arrays(shot):
+    """(dev, arrays) when this shot's device declares its rotating-array sets
+    (``device["arrays"] = {"toroidal": <set>, "poloidal": <set>}``), else (None, None).
+    A device that declares arrays routes the selectors through ``_set_channels``
+    instead of the DIII-D family heuristics."""
+    dev, _ = _device_key(shot)
+    a = dev.get("arrays") if dev else None
+    return (dev, a) if a else (None, None)
+
+
+def _set_channels(dev, set_name, shot, angle="phi"):
+    """Channels of a declared device sensor set that are present in this shot, each with
+    its geometry ``angle`` (phi/theta), sorted by that angle. Returns list of (name,
+    angle_deg). A ``composite`` set expands its members recursively. Channels absent from
+    the pull or lacking the requested angle are dropped (so a set with no ``theta`` yields
+    an empty list — the caller then raises its usual 'not enough probes').
+
+    When ``angle == "theta"`` and a channel carries (r, z) but no explicit ``theta``,
+    θ is derived as ``atan2(z, r - R0)`` about the machine axis (mirrors
+    ``diiid.real_theta_of``), so supplying r/z alone is enough to unblock poloidal nodes."""
+    present = set(h5source.channel_names(shot))
+    sets = dev.get("sensor_sets", {})
+    r0 = float(dev.get("R0", 1.69))
+
+    def _names(name, seen):
+        spec = sets.get(name, {})
+        if spec.get("type") == "composite":
+            out = []
+            for sub in spec.get("sets", []):
+                if sub not in seen:
+                    seen.add(sub)
+                    out.extend(_names(sub, seen))
+            return out
+        return list(spec.get("sensors", []))
+
+    out = []
+    for n in _names(set_name, {set_name}):
+        if n not in present:
+            continue
+        g = devices.geometry_at(dev, n, int(shot))
+        if not g:
+            continue
+        val = g.get(angle)
+        if val is None and angle == "theta" and g.get("r") is not None and g.get("z") is not None:
+            val = float(np.degrees(np.arctan2(float(g["z"]), float(g["r"]) - r0)) % 360.0)
+        if val is not None:
+            out.append((n, float(val)))
+    out.sort(key=lambda na: na[1])
+    return out
 
 
 def _array_channels(shot, families: tuple[str, ...]):
@@ -278,9 +340,15 @@ def _named_sets(dg, substr: str) -> list[str]:
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
 def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     """Two toroidally-separated probes for the 2-point cross-spectrogram.
-    Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set),
-    then integrated Bp. Returns ((name1, phi1), (name2, phi2)) with the widest
-    non-zero separation."""
+    Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set / a
+    KSTAR declared toroidal array), then integrated Bp. Returns ((name1, phi1),
+    (name2, phi2)) with the widest non-zero separation."""
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares an explicit toroidal set (KSTAR) → use it precisely
+        arr = _set_channels(dev, arrays["toroidal"], shot)
+        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
+            return arr[0], arr[-1]
+        raise ValueError("need two toroidally-separated probes for a spectrogram")
     for families in _pick_pair_prefs(shot):
         arr = _array_channels(shot, families)  # (name, phi), sorted by phi
         if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
@@ -795,6 +863,12 @@ def _toroidal_arr(shot):
     pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
     probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
     scrambles the fit, so they're excluded."""
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares an explicit toroidal set (KSTAR) → use it precisely
+        arr = _set_channels(dev, arrays["toroidal"], shot)
+        if len(arr) < 4:
+            raise ValueError("not enough toroidal-array channels for a mode fit")
+        return arr
     dg = _dev_geom(str(shot))
     if dg.device_id == "diiid":
         arr = _array_channels(shot, ("MPI_BDOT",))
@@ -963,6 +1037,12 @@ def _poloidal_shape(shot, params=None) -> dict:
 
 # ── poloidal mode at one frequency (uses real DIII-D θ for the 2D pattern) ────
 def _poloidal_arr(shot):
+    dev, arrays = _arrays(shot)
+    if arrays:  # device declares an explicit poloidal set (KSTAR) → select by geometry θ
+        arr = _set_channels(dev, arrays["poloidal"], shot, angle="theta")
+        if len(arr) < 4 or len({round(th, 1) for _, th in arr}) < 4:
+            raise ValueError("not enough poloidal-array probes with real θ for a 2D pattern")
+        return arr
     dg = _dev_geom(str(shot))
     theta = _real_theta(shot)
     names = h5source.channel_names(shot)
@@ -1208,7 +1288,7 @@ def _mode_over_time(shot, params=None) -> dict:
     )
 
 
-# ── quasi-stationary fit (SLCONTOUR via magnetics-code pipeline) ─────────────
+# ── quasi-stationary fit (SLCONTOUR via the core.qs_* pipeline) ─────────────
 
 _QS_RUN_LOCK = threading.Lock()
 
@@ -1226,15 +1306,18 @@ def _qs_run(
     energy: float,
     tmin_s: float,
     tmax_s: float,
+    fit_basis: str,
+    fit_cond: float,
+    sigma: float | None,
 ):
     """Run the full SLCONTOUR pipeline (io_data → prep → fit) for one shot.
 
-    Delegates to magnetics-code/run.run_steps. All tuning parameters are
+    Delegates to core.qs_run.run_steps. All tuning parameters are
     explicit cache-key arguments so the result is reused across node requests
     that share the same settings. tmin_s/tmax_s are in seconds and come from
     _prep_qs_ds (which reads HDF5 defaults and applies any user override).
     """
-    from .._slcontour.run import run_steps
+    from ..core.qs_run import run_steps
 
     # detrend_band is in ms from the GUI; (0, 0) = auto → first 10ms of shot window
     if detrend_band == (0.0, 0.0):
@@ -1254,6 +1337,11 @@ def _qs_run(
             energy=energy,
             detrend_type=detrend_type,
             detrend_band=(db_lo_s, db_hi_s),
+        ),
+        fit_kwargs=dict(
+            fit_basis=fit_basis,
+            fit_cond=fit_cond,
+            sigma_override=sigma,
         ),
         verbose=False,
     )
@@ -1303,9 +1391,16 @@ def _prep_qs_ds(shot, params):
     ms_raw = params.get("ms", "0") if params else "0"
     ns = tuple(int(x.strip()) for x in str(ns_raw).split(",") if x.strip())
     ms = tuple(int(x.strip()) for x in str(ms_raw).split(",") if x.strip())
-    channel_filter = (
-        params.get("channel_filter", "Bp_LFS_midplane") if params else "Bp_LFS_midplane"
-    )
+    # Default QS sensor set is device-specific: prefer the device's declared
+    # ``qs_default_set``, else its ``quasi_stationary`` composite if present, else
+    # DIII-D's ``Bp_LFS_midplane``. The GUI may still override via ?channel_filter=.
+    dev, _ = _device_key(str(shot))
+    default_cf = "Bp_LFS_midplane"
+    if dev:
+        default_cf = dev.get("qs_default_set") or (
+            "quasi_stationary" if "quasi_stationary" in dev.get("sensor_sets", {}) else default_cf
+        )
+    channel_filter = params.get("channel_filter", default_cf) if params else default_cf
     detrend_type = params.get("detrend_type", "baseline") if params else "baseline"
     # detrend_band: GUI sends absolute ms values. When absent, use sentinel (0,0)
     # so _qs_run defaults to the first 10ms of the shot window.
@@ -1318,6 +1413,10 @@ def _prep_qs_ds(shot, params):
     cutoff_lo = float(params.get("cutoff_lo", 5.0)) if params else 5.0
     cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
     energy = float(params.get("energy", 0.98)) if params else 0.98
+    fit_basis = params.get("fit_basis", "sinusoidal-integral") if params else "sinusoidal-integral"
+    fit_cond = float(params.get("fit_cond", 10.0)) if params else 10.0
+    sigma_str = params.get("sigma") if params else None
+    sigma = float(sigma_str) if sigma_str is not None else None
 
     # Time trim: read shot-window defaults from HDF5, then apply any user override.
     path = h5source.shot_file(str(shot))
@@ -1345,6 +1444,9 @@ def _prep_qs_ds(shot, params):
             energy,
             tmin_s,
             tmax_s,
+            fit_basis,
+            fit_cond,
+            sigma,
         )
 
 
@@ -1383,9 +1485,9 @@ def _sensor_map_rz(shot, params=None) -> dict:
     channels = list(run.prepared["channel"].values)
     device = str(raw.attrs.get("device", "DIII-D"))
 
-    from .._slcontour.omfit_compat import load_wall
+    from ..core.qs_device import load_wall
 
-    r_wall, z_wall = load_wall(device)
+    r_wall, z_wall = load_wall(device, int(shot))
 
     series = []
     for c in channels:
@@ -1447,6 +1549,16 @@ def _chi_sq_t(shot, params=None) -> dict:
     return qs_bridge.fit_to_chi_sq_node(_prep_qs_ds(shot, params).fit)
 
 
+def _svd_energy(shot, params=None) -> dict:
+    """Data-matrix SVD cumulative energy fraction vs index → LineNode."""
+    return qs_bridge.fit_to_svd_energy_node(_prep_qs_ds(shot, params).fit)
+
+
+def _svd_design_condition(shot, params=None) -> dict:
+    """Design-matrix per-singular-value condition number vs index → LineNode."""
+    return qs_bridge.fit_to_svd_condition_node(_prep_qs_ds(shot, params).fit)
+
+
 def _fit_signals(shot, params=None) -> dict:
     """Fitted signal per channel vs time → LineNode (Section 6 middle panel)."""
     return qs_bridge.fit_to_fit_signals_node(_prep_qs_ds(shot, params).fit)
@@ -1475,6 +1587,8 @@ _BUILDERS = {
     "sensor_map_cylindrical": _sensor_map_cylindrical,
     "signal_conditioning": _signal_conditioning,
     "chi_sq_t": _chi_sq_t,
+    "svd_energy": _svd_energy,
+    "svd_condition": _svd_design_condition,
     "fit_signals": _fit_signals,
     "fit_residuals": _fit_residuals,
     # rotating eigspec (develop): GP mode shapes + patterns + tracks

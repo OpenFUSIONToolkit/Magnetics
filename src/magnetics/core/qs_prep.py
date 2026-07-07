@@ -1,4 +1,4 @@
-"""Port of ``SCRIPTS/prep_magnetics.py`` — signal conditioning before the fit.
+"""A port of the OMFIT magnetics *prep* script — the QS pipeline's prep step (signal conditioning before the fit).
 
 Steps (matching the OMFIT original):
   1. trim channels (by regex) and time to the window of interest;
@@ -18,13 +18,23 @@ implement the causal Gaussian filter here (:func:`causal_gaussian`).
 
 from __future__ import annotations
 
+import logging
 import re
 
 import numpy as np
 import xarray as xr
 from scipy.integrate import cumulative_trapezoid
 
-from .omfit_compat import is_device, printe, printv, printw, resolve_channel_filter
+from .qs_device import is_device, resolve_channel_filter
+
+logger = logging.getLogger(__name__)
+
+# Hard cap on emitted time samples, independent of cutoff_hz — the frequency-filter
+# block below decimates as a side effect of filtering, but a permissive cutoff_hz
+# (e.g. a (0, inf) passthrough, or any f_high near Nyquist) leaves that decimation
+# at a no-op, letting a shot's full native sample count (10^5-10^6) flow downstream
+# and blow up node payload sizes. Matches nodes.py's _raw_trace line-plot cap.
+_MAX_PREP_SAMPLES = 2000
 
 
 def causal_gaussian(values, sigma, truncate=4.0):
@@ -66,7 +76,8 @@ def prepare(
     :param channel_filter: regex / list / friendly filter name.
     :param time_trim: (t1, t2) seconds — analysis window.
     :param cutoff_hz: (f_low, f_high) bandpass corners; ``f_low==0`` -> lowpass,
-        ``f_high>=Nyquist`` -> highpass.
+        ``f_high>=Nyquist`` -> highpass. Output is additionally capped at
+        ``_MAX_PREP_SAMPLES`` samples regardless of filter settings.
     :param detrend_type: 'none' | 'baseline' | 'linear' | 'endpoints'.
     :param detrend_band: (t1, t2) sub-interval used to estimate the trend.
     :param energy: fraction of data-matrix SVD energy to keep (<1 removes noise).
@@ -79,7 +90,7 @@ def prepare(
 
     def _printv(*a):
         if verbose:
-            printv(*a)
+            logger.info(" ".join(str(x) for x in a))
 
     raw = shotdata.raw
     plasma = shotdata.plasma
@@ -116,15 +127,15 @@ def prepare(
                 ds["vacuum"] = coup.sel(channel=ds["channel"])
                 ds["signal"] = ds["signal"] - ds["vacuum"]
             else:
-                printe(f"No DC coupling record for {invalid} -> skipping DC compensation")
+                logger.error("No DC coupling record for %s -> skipping DC compensation", invalid)
         else:
-            printw("dc_comp requested but no coil channels matched -> skipping")
+            logger.warning("dc_comp requested but no coil channels matched -> skipping")
 
     # ----- device-specific signal swap (2019 DIII-D wiring mix-up) --------- #
     if is_device(device, "DIII-D") and shotdata.shot > 177705:
         present = set(ds["channel"].values)
         if {"ESLD66M079", "ESLD66M319"} <= present:
-            printw("Swapping ESLD66M319/ESLD66M079 for this shot (2019 wiring mix-up)")
+            logger.warning("Swapping ESLD66M319/ESLD66M079 for this shot (2019 wiring mix-up)")
             tmp = ds["signal"].copy(deep=True)
             ds["signal"].loc[{"channel": "ESLD66M079"}] = tmp.sel(channel="ESLD66M319").values
             ds["signal"].loc[{"channel": "ESLD66M319"}] = tmp.sel(channel="ESLD66M079").values
@@ -155,11 +166,15 @@ def prepare(
         if cutoff_hz[0] == 0:
             _printv("   > causal lowpass")
             sigma = 0.25 / (dt * cutoff_hz[1])
-            filter_func = lambda v: causal_gaussian(v, sigma)
+
+            def filter_func(v):
+                return causal_gaussian(v, sigma)
         elif cutoff_hz[1] >= nyqst:
             _printv("   > causal highpass")
             sigma = 0.25 / (dt * cutoff_hz[0])
-            filter_func = lambda v: v - causal_gaussian(v, sigma)
+
+            def filter_func(v):
+                return v - causal_gaussian(v, sigma)
         else:
             _printv("   > causal bandpass")
             sigma0 = 0.25 / (dt * cutoff_hz[0])
@@ -177,10 +192,17 @@ def prepare(
     if len(tsel) == 0:
         raise ValueError(
             f"time_trim={time_trim} left 0 samples after filter/downsample "
-            f"(downsampled dt≈{t[1]-t[0]:.4g} s, {len(t)} samples spanned "
+            f"(downsampled dt≈{t[1] - t[0]:.4g} s, {len(t)} samples spanned "
             f"{t[0]:.4g}–{t[-1]:.4g} s). Widen the window or reduce cutoff_hz[0]."
         )
     ds = ds.sel(time=tsel)
+
+    # Unconditional size cap — the filter block above only decimates when it actually
+    # runs, so a permissive cutoff_hz (e.g. a full (0, inf) passthrough) would otherwise
+    # leave the native sample count uncapped.
+    if ds.sizes["time"] > _MAX_PREP_SAMPLES:
+        idx = np.linspace(0, ds.sizes["time"] - 1, _MAX_PREP_SAMPLES).astype(int)
+        ds = ds.isel(time=idx)
 
     # ----- detrend -------------------------------------------------------- #
     _detrend(ds, channels, detrend_type.lower(), detrend_band, _printv)
@@ -206,9 +228,7 @@ def _detrend(ds, channels, detrend_type, detrend_band, _printv):
     time = ds["time"].values
     if detrend_type in ("baseline", "linear"):
         band = np.atleast_2d(detrend_band)
-        det_times = np.concatenate(
-            [time[(time >= b[0]) & (time <= b[1])] for b in band]
-        )
+        det_times = np.concatenate([time[(time >= b[0]) & (time <= b[1])] for b in band])
         in_band = np.isin(time, det_times)
         if detrend_type == "baseline":
             _printv(" - Removing baseline")
@@ -247,8 +267,10 @@ def _svd_condition(ds, energy, _printv):
         U, s, Vh = np.linalg.svd(ds["signal"].values / np.sqrt(P * T), full_matrices=False)
     except MemoryError:
         step = max(2, int(np.ceil(T / 10000)))
-        printw(f"Downsampling time x{step} for an informational SVD only")
-        U, s, Vh = np.linalg.svd(ds["signal"].values[:, ::step] / np.sqrt(P * T), full_matrices=False)
+        logger.warning("Downsampling time x%d for an informational SVD only", step)
+        U, s, Vh = np.linalg.svd(
+            ds["signal"].values[:, ::step] / np.sqrt(P * T), full_matrices=False
+        )
         energy = 1.0  # shapes won't match for reforming the data
 
     energy_tot = np.sum(s**2)

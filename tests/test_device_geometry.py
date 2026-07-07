@@ -71,6 +71,14 @@ def test_geometry_none_when_decommissioned_or_out_of_range():
     assert devices.geometry_at(DEV, "S_OK", 100000) is None
 
 
+def test_top_level_feature_nearest_preserves_strict_feature_at():
+    dev = {"wall": {"segments": [{"since_shot": 200, "r": [1.0], "z": [0.0]}]}}
+
+    assert devices.feature_at(dev, "wall", 100) is None
+    assert devices.feature_nearest(dev, "wall", 100) == {"r": [1.0], "z": [0.0]}
+    assert devices.feature_nearest(dev, "wall", None) == {"r": [1.0], "z": [0.0]}
+
+
 # ── fetch assembly: _resolve_pointnames (no network) ──────────────────────────
 def test_fetch_resolution_recent_shot_keeps_all():
     from magnetics.data.fetch import toksearch as tf
