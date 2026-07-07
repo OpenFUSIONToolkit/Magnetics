@@ -18,32 +18,11 @@ const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#0
 // Clearly distinct hues so each mode reads immediately, not blue/orange.
 const MODE_PALETTE = ["#2ca02c", "#9467bd", "#d62728", "#8c564b", "#e377c2", "#bcbd22", "#17becf"];
 
-// ── Light-mode Plotly overrides ───────────────────────────────────────
-const LT_AXIS = {
-  gridcolor: "#e2e8f0", zerolinecolor: "#94a3b8",
-  linecolor: "#94a3b8", tickcolor: "#94a3b8",
-};
-const LT_BASE: Partial<Plotly.Layout> = {
-  plot_bgcolor: "#f8fafc",
-  font: { family: "IBM Plex Mono, ui-monospace, monospace", size: 11, color: "#1a2332" },
-};
-
 // ── Hooks & helpers ───────────────────────────────────────────────────
+// Plotly chrome (axis colors, base font) is themed identically by the shared
+// <Plot> wrapper's baseLayout() — no need to duplicate it here.
 function useDarkMode(): boolean {
   return useStore((s) => s.theme === "dark");
-}
-
-function themedLayout(
-  dark: boolean,
-  overrides: Partial<Plotly.Layout>,
-): Partial<Plotly.Layout> {
-  if (dark) return overrides;
-  return {
-    ...LT_BASE,
-    ...overrides,
-    xaxis: { ...LT_AXIS, ...(overrides.xaxis as object) },
-    yaxis: { ...LT_AXIS, ...(overrides.yaxis as object) },
-  };
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -110,6 +89,23 @@ const CHANNEL_FILTERS = [
   "Bp HFS -midplane",
 ];
 
+// ── Typed y-axis zoom control — same look as the "time (ms)" crop boxes,
+// but purely a client-side Plotly range override (no refetch/backend param).
+function YRangeControl({
+  label, lo, hi, onLo, onHi, title,
+}: { label: string; lo: string; hi: string; onLo: (v: string) => void; onHi: (v: string) => void; title: string }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)" }} title={title}>
+      {label}
+      <input placeholder="auto" value={lo} onChange={e => onLo(e.target.value)}
+        style={{ width: 44, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+      –
+      <input placeholder="auto" value={hi} onChange={e => onHi(e.target.value)}
+        style={{ width: 44, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+    </label>
+  );
+}
+
 // ── Collapsible section header ────────────────────────────────────────
 function CollapseHeader({
   open, onToggle, children,
@@ -123,7 +119,7 @@ function CollapseHeader({
       }}
       className="metrics-title"
     >
-      <span style={{ fontSize: 9 }}>{open ? "▼" : "▶"}</span>
+      <span style={{ fontSize: "calc(9px * var(--font-scale))" }}>{open ? "▼" : "▶"}</span>
       {children}
     </div>
   );
@@ -132,6 +128,7 @@ function CollapseHeader({
 // ── Component ─────────────────────────────────────────────────────────
 export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
+  const fontScale = useStore((s) => s.fontScale);
   const { cursorMs, setCursorMs, machines } = useStore();
 
   // ── Analysis settings ─────────────────────────────────────────────
@@ -150,6 +147,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const [energyFraction, setEnergyFraction] = useState("0.98");
   const [fitBasis, setFitBasis]         = useState("sinusoidal-integral");
   const [fitCond, setFitCond]           = useState("10.0");
+  const [cutoffLo, setCutoffLo]         = useState("5.0");
+  const [cutoffHi, setCutoffHi]         = useState("250.0");
 
   // ── Devices (for the Array dropdown's sensor-set list) ─────────────
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -162,8 +161,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // ── Section collapse state ────────────────────────────────────────
   const [fitQualityOpen, setFitQualityOpen] = useState(false);
+  const [svdOpen, setSvdOpen]               = useState(false);
   const [sensorMapOpen, setSensorMapOpen]   = useState(false);
-  const [advancedOpen, setAdvancedOpen]     = useState(false);
 
   // ── Deferred fetch: only compute when user clicks Plot ────────────
   const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
@@ -177,6 +176,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       energy: energyFraction,
       fit_basis: fitBasis,
       fit_cond: fitCond,
+      cutoff_lo: cutoffLo,
+      cutoff_hi: cutoffHi,
     };
     if (detrendLo && detrendHi) {
       p.detrend_lo = detrendLo;
@@ -187,7 +188,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     return p;
   }, [
     ns, ms, channelFilter, detrendType, detrendLo, detrendHi, tminMs, tmaxMs,
-    uncertainty, energyFraction, fitBasis, fitCond,
+    uncertainty, energyFraction, fitBasis, fitCond, cutoffLo, cutoffHi,
   ]);
 
   useEffect(() => {
@@ -197,6 +198,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // Linked time-axis zoom (declared here so the trim-window effect below can reset it).
   const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
+
+  // ── Typed y-axis zoom (client-side only — doesn't touch fetched data) ──
+  const [phiYMin, setPhiYMin] = useState("");  // "" = auto (0–360°)
+  const [phiYMax, setPhiYMax] = useState("");
 
   // When the trim window changes, clear any user zoom so the axis re-fits to the new data.
   useEffect(() => {
@@ -245,6 +250,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const { node: signalRaw }      = useNode(fetchMachine, "signal_conditioning",    committedParams ?? {});
   const { node: chiSqRaw }       = useNode(fetchMachine, "chi_sq_t",               committedParams ?? {});
   const { node: fitResRaw }      = useNode(fetchMachine, "fit_residuals",          committedParams ?? {});
+  const { node: svdEnergyRaw, error: svdEnergyError } = useNode(fetchMachine, "svd_energy",    committedParams ?? {});
+  const { node: svdCondRaw, error: svdCondError }     = useNode(fetchMachine, "svd_condition", committedParams ?? {});
 
   // No-data guard: 404 means the shot's HDF5 file hasn't been pulled yet.
   const noData = committedParams !== null && ampError?.includes("fetch failed (404)") === true;
@@ -259,6 +266,8 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const signalNode    = signalRaw?.kind    === "line" ? (signalRaw    as LineNode) : null;
   const chiSqNode     = chiSqRaw?.kind     === "line" ? (chiSqRaw     as LineNode) : null;
   const fitResNode    = fitResRaw?.kind    === "line" ? (fitResRaw    as LineNode) : null;
+  const svdEnergyNode = svdEnergyRaw?.kind === "line" ? (svdEnergyRaw as LineNode) : null;
+  const svdCondNode   = svdCondRaw?.kind   === "line" ? (svdCondRaw   as LineNode) : null;
 
   // ── Channel checkboxes for signal conditioning ────────────────────
   const [enabledChannels, setEnabledChannels] = useState<Set<string>>(new Set());
@@ -307,13 +316,61 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     }
   }, []);
 
+  // φ(t) contour: also keep the "y (θ°)" boxes in sync when the user zooms/pans/
+  // double-click-resets the plot directly (drag-box zoom, scroll, etc.), not just
+  // when they type into the boxes.
+  //
+  // A rubber-band drag inside the plot always reports both xaxis.* and yaxis.*
+  // at once, even though dragging a box on this contour is how a user scales
+  // the θ axis — so a plain box-zoom must NOT also shift the (linked) time
+  // window every other panel shares. Only a deliberate drag on the x-axis
+  // ruler itself (x fields with no y fields) — or a full double-click reset,
+  // which reports both axes autoranging together — touches the shared time range.
+  const handlePhiRelayout = useCallback((e: Record<string, unknown>) => {
+    const xAuto = e["xaxis.autorange"] === true;
+    const yAuto = e["yaxis.autorange"] === true;
+    const hasYRange = e["yaxis.range[0]"] != null;
+
+    if (xAuto && yAuto) {
+      setTimeRange(null);
+      setPhiYMin(""); setPhiYMax("");
+      return;
+    }
+    if (!hasYRange) {
+      if (xAuto) {
+        setTimeRange(null);
+      } else if (e["xaxis.range[0]"] != null) {
+        setTimeRange([Number(e["xaxis.range[0]"]), Number(e["xaxis.range[1]"])]);
+      }
+    }
+
+    if (yAuto) {
+      setPhiYMin(""); setPhiYMax("");
+    } else if (hasYRange) {
+      setPhiYMin(String(Math.round(Number(e["yaxis.range[0]"]) * 10) / 10));
+      setPhiYMax(String(Math.round(Number(e["yaxis.range[1]"]) * 10) / 10));
+    }
+  }, [setPhiYMin, setPhiYMax]);
+
   // ── Shared time axis ──────────────────────────────────────────────
-  const tMin = useMemo(() =>
-    ampNode?.kind === "line" ? Math.round((ampNode as LineNode).series[0]?.x[0] ?? 800) : 800,
-  [ampNode]);
-  const tMax = useMemo(() =>
-    ampNode?.kind === "line" ? Math.round((ampNode as LineNode).series[0]?.x.at(-1) ?? 6100) : 6100,
-  [ampNode]);
+  // Double-click resets to [tMin, tMax] — the union of every linked panel's real
+  // data extent, not just ampNode's, since panels like phi_rms/phi_t plot a
+  // different node (phiTimePlot) whose x-range can differ from ampNode's.
+  const { tMin, tMax } = useMemo(() => {
+    const ranges: [number, number][] = [];
+    const push = (xs?: number[]) => { if (xs && xs.length) ranges.push([xs[0], xs[xs.length - 1]]); };
+    push(phiTimePlot?.x);
+    push(ampNode?.kind === "line" ? (ampNode as LineNode).series[0]?.x : undefined);
+    push(phaseTimeNode?.kind === "line" ? (phaseTimeNode as LineNode).series[0]?.x : undefined);
+    push(signalNode?.series[0]?.x);
+    push(chiSqNode?.series[0]?.x);
+    push(fitResNode?.series[0]?.x);
+    if (!ranges.length) return { tMin: 800, tMax: 6100 };
+    return {
+      tMin: Math.round(Math.min(...ranges.map(r => r[0]))),
+      tMax: Math.round(Math.max(...ranges.map(r => r[1]))),
+    };
+  }, [phiTimePlot, ampNode, phaseTimeNode, signalNode, chiSqNode, fitResNode]);
   const timeXAxis = useMemo(
     () => ({ range: timeRange ?? [tMin, tMax] }),
     [timeRange, tMin, tMax],
@@ -340,13 +397,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [sensorRzNode, dark]);
 
   const sensorRzLayout = useMemo(() =>
-    themedLayout(dark, {
+    ({
       xaxis: { title: { text: sensorRzNode?.axes.x ?? "R (m)" }, scaleanchor: "y" as const },
       yaxis: { title: { text: sensorRzNode?.axes.y ?? "z (m)" } },
       showlegend: false,
       margin: { t: 4, b: 40, l: 48, r: 8 },
     } as Partial<Plotly.Layout>),
-  [dark, sensorRzNode]);
+  [sensorRzNode]);
 
   // Remap phi values from 0–360 to –180–180 for the unrolled plot.
   const sensorCylData = useMemo((): Partial<Plotly.PlotData>[] => {
@@ -361,13 +418,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [sensorCylNode]);
 
   const sensorCylLayout = useMemo(() =>
-    themedLayout(dark, {
+    ({
       xaxis: { title: { text: sensorCylNode?.axes.x ?? "φ (deg)" }, range: [-180, 180], dtick: 90 },
       yaxis: { title: { text: sensorCylNode?.axes.y ?? "θ (deg)" }, range: [-180, 180], dtick: 90 },
       showlegend: false,
       margin: { t: 4, b: 40, l: 48, r: 8 },
     } as Partial<Plotly.Layout>),
-  [dark, sensorCylNode]);
+  [sensorCylNode]);
 
   // ── Shared y-range: signal conditioning + residuals ───────────────
   const signalYRange = useMemo(() => {
@@ -422,7 +479,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [signalNode, enabledChannels]);
 
   const signalLayout = useMemo(() =>
-    signalNode ? themedLayout(dark, {
+    signalNode ? ({
       xaxis: { ...timeXAxis, title: { text: signalNode.axes.x }, showticklabels: false },
       yaxis: {
         title: { text: signalNode.axes.y },
@@ -431,7 +488,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       showlegend: false,
       margin: { t: 4, b: 4, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, signalNode, timeXAxis, sharedSigResRange]);
+  [signalNode, timeXAxis, sharedSigResRange]);
 
   // ── Dynamic chi² y-range ──────────────────────────────────────────
   const chiSqYRange = useMemo(() => {
@@ -453,7 +510,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [chiSqNode]);
 
   const chiSqLayout = useMemo(() =>
-    chiSqNode ? themedLayout(dark, {
+    chiSqNode ? ({
       xaxis: { ...timeXAxis, title: { text: chiSqNode.axes.x } },
       yaxis: {
         title: { text: "χ²" }, type: "log" as const,
@@ -468,6 +525,76 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       margin: { t: 4, b: 40, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
   [dark, chiSqNode, timeXAxis, chiSqYRange]);
+
+  // ── SVD conditioning (VISION §4.1 "≈98% energy") — data-matrix energy ──
+  const svdEnergyData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!svdEnergyNode) return [];
+    const s = svdEnergyNode.series[0];
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "scatter" as const, mode: "lines+markers" as const,
+      name: "energy fraction", x: s.x, y: s.y,
+      line: { color: LINE_PALETTE[0], width: 1.5 }, marker: { size: 8 },
+    } as Partial<Plotly.PlotData>];
+    if (s.markers) {
+      traces.push({
+        type: "scatter" as const, mode: "markers" as const,
+        name: "removed", x: s.markers.x, y: s.markers.y,
+        marker: { symbol: "x", size: 12, color: LINE_PALETTE[3] },
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [svdEnergyNode]);
+
+  const svdEnergyLayout = useMemo(() => {
+    if (!svdEnergyNode) return {};
+    const ref = svdEnergyNode.meta?.reference_line as number | undefined;
+    return {
+      xaxis: { title: { text: svdEnergyNode.axes.x }, dtick: 1 },
+      yaxis: { title: { text: svdEnergyNode.axes.y }, range: [0, 1.05] },
+      shapes: ref != null ? [
+        { type: "line" as const, x0: 0, x1: 1, xref: "paper" as const,
+          y0: ref, y1: ref, yref: "y" as const,
+          line: { color: dark ? "#aaa" : "#555", width: 1, dash: "dash" as const } },
+      ] : [],
+      showlegend: true, legend: { font: { size: 9 * fontScale }, orientation: "h" as const, y: 1.2 },
+      margin: { t: 30, b: 40, l: 50, r: 20 },
+    } as Partial<Plotly.Layout>;
+  }, [dark, fontScale, svdEnergyNode]);
+
+  // ── SVD conditioning — design-matrix condition number ────────────────
+  const svdCondData = useMemo((): Partial<Plotly.PlotData>[] => {
+    if (!svdCondNode) return [];
+    const s = svdCondNode.series[0];
+    const traces: Partial<Plotly.PlotData>[] = [{
+      type: "scatter" as const, mode: "lines+markers" as const,
+      name: "condition number", x: s.x, y: s.y,
+      line: { color: LINE_PALETTE[1], width: 1.5 }, marker: { size: 8 },
+    } as Partial<Plotly.PlotData>];
+    if (s.markers) {
+      traces.push({
+        type: "scatter" as const, mode: "markers" as const,
+        name: "removed", x: s.markers.x, y: s.markers.y,
+        marker: { symbol: "x", size: 12, color: LINE_PALETTE[3] },
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [svdCondNode]);
+
+  const svdCondLayout = useMemo(() => {
+    if (!svdCondNode) return {};
+    const ref = svdCondNode.meta?.reference_line as number | undefined;
+    return {
+      xaxis: { title: { text: svdCondNode.axes.x }, dtick: 1 },
+      yaxis: { title: { text: svdCondNode.axes.y } },
+      shapes: ref != null ? [
+        { type: "line" as const, x0: 0, x1: 1, xref: "paper" as const,
+          y0: ref, y1: ref, yref: "y" as const,
+          line: { color: dark ? "#aaa" : "#555", width: 1, dash: "dash" as const } },
+      ] : [],
+      showlegend: true, legend: { font: { size: 9 * fontScale }, orientation: "h" as const, y: 1.2 },
+      margin: { t: 30, b: 40, l: 50, r: 20 },
+    } as Partial<Plotly.Layout>;
+  }, [dark, fontScale, svdCondNode]);
 
   // ── Fit residuals plot ────────────────────────────────────────────
   const worstChannels = useMemo(() => {
@@ -497,7 +624,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [fitResNode, worstChannels]);
 
   const fitResLayout = useMemo(() =>
-    fitResNode ? themedLayout(dark, {
+    fitResNode ? ({
       xaxis: { ...timeXAxis, title: { text: fitResNode.axes.x }, showticklabels: false },
       yaxis: {
         title: { text: "residual (T)" },
@@ -506,7 +633,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       showlegend: false,
       margin: { t: 4, b: 4, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, fitResNode, sharedSigResRange, timeXAxis]);
+  [fitResNode, sharedSigResRange, timeXAxis]);
 
   // ── Section 8: phi_t waterfall ────────────────────────────────────
   const cmapProps = useMemo(() => {
@@ -538,13 +665,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     return traces;
   }, [phiTimePlot, phiPeak, cmapProps]);
 
+  const phiYRange = useMemo((): [number, number] =>
+    (phiYMin !== "" && phiYMax !== "") ? [Number(phiYMin), Number(phiYMax)] : [0, 360],
+  [phiYMin, phiYMax]);
+
   const phiTimeLayout = useMemo(() =>
-    phiTimePlot ? themedLayout(dark, {
+    phiTimePlot ? ({
       xaxis: { ...timeXAxis, title: { text: phiTimePlot.axes.x } },
-      yaxis: { title: { text: phiTimePlot.axes.y }, range: [0, 360], dtick: 90, tickvals: [0, 90, 180, 270, 360] },
+      yaxis: { title: { text: phiTimePlot.axes.y }, range: phiYRange, dtick: 90, tickvals: [0, 90, 180, 270, 360] },
       margin: { t: 4, b: 40, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, phiTimePlot, timeXAxis]);
+  [phiTimePlot, timeXAxis, phiYRange]);
 
   // ── Section 7: amplitude & phase ─────────────────────────────────
   const ampData = useMemo(() =>
@@ -552,17 +683,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   [ampNode]);
 
   const ampLayout = useMemo(() =>
-    ampNode?.kind === "line" ? themedLayout(dark, {
+    ampNode?.kind === "line" ? ({
       xaxis: { ...timeXAxis, title: { text: (ampNode as LineNode).axes.x } },
       yaxis: { title: { text: (ampNode as LineNode).axes.y }, rangemode: "tozero" as const },
       showlegend: true,
       legend: {
-        orientation: "h" as const, y: 1.18, font: { size: 10 },
-        title: { text: String((ampNode as LineNode).meta?.legend_title ?? "n"), font: { size: 10 } },
+        orientation: "h" as const, y: 1.18, font: { size: 10 * fontScale },
+        title: { text: String((ampNode as LineNode).meta?.legend_title ?? "n"), font: { size: 10 * fontScale } },
       },
       margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, ampNode, timeXAxis]);
+  [ampNode, fontScale, timeXAxis]);
 
   const phaseTimeData = useMemo(() => {
     if (phaseTimeNode?.kind !== "line") return [];
@@ -571,7 +702,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [phaseTimeNode]);
 
   const phaseTimeLayout = useMemo(() =>
-    phaseTimeNode?.kind === "line" ? themedLayout(dark, {
+    phaseTimeNode?.kind === "line" ? ({
       xaxis: { ...timeXAxis, title: { text: (phaseTimeNode as LineNode).axes.x } },
       yaxis: {
         title: { text: (phaseTimeNode as LineNode).axes.y },
@@ -579,10 +710,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         tickvals: [-180, -90, 0, 90, 180],
       },
       showlegend: true,
-      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 } },
+      legend: { orientation: "h" as const, y: 1.18, font: { size: 10 * fontScale } },
       margin: { t: 16, b: 48, l: 60, r: 80 },
     } as Partial<Plotly.Layout>) : {},
-  [dark, phaseTimeNode, timeXAxis]);
+  [fontScale, phaseTimeNode, timeXAxis]);
 
   // ── Signal conditioning channel pairs ─────────────────────────────
   const signalPairs = signalNode?.meta?.pairs as { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
@@ -594,73 +725,45 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         <p className="desc" style={{ margin: 0 }}>shot {machine}</p>
       </div>
 
-      {/* ── Settings bar ──────────────────────────────────────────────── */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      {/* ── Row 1: Basics — array, time trim, mode numbers ─────────────── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Select which sensor array is used for the fit. Choose from the options in the dropdown.">
           Array
           <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}
-            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
             {channelFilterOptions.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          n modes
-          <input value={ns} onChange={e => setNs(e.target.value)}
-            style={{ width: 60, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          m modes
-          <input value={ms} onChange={e => setMs(e.target.value)}
-            style={{ width: 40, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          Detrend
-          <select value={detrendType} onChange={e => setDetrendType(e.target.value)}
-            style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
-            <option value="baseline">baseline</option>
-            <option value="none">none</option>
-            <option value="linear">linear</option>
-            <option value="endpoints">endpoints</option>
-          </select>
-        </label>
-        {detrendType !== "none" && (
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            band (ms)
-            <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
-              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-            –
-            <input placeholder="auto" value={detrendHi} onChange={e => setDetrendHi(e.target.value)}
-              style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-        )}
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          t trim (ms)
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Prepared and fit data will be trimmed to be within these bounds.">
+          time (ms)
           <input placeholder="auto" value={tminMs} onChange={e => setTminMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           –
           <input placeholder="auto" value={tmaxMs} onChange={e => setTmaxMs(e.target.value)}
-            style={{ width: 52, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Toroidal mode numbers to include in the fit basis (comma-separated, e.g. &quot;1,2,3&quot;). Total number of modes must be less than half the number of channels.">
+          n modes
+          <input value={ns} onChange={e => setNs(e.target.value)}
+            style={{ width: 60, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Poloidal mode numbers to include in the fit basis (comma-separated). These do not correspond to internal or magnetic coordinate mode numbers — use &quot;0&quot; if fitting a single toroidal array.">
+          m modes
+          <input value={ms} onChange={e => setMs(e.target.value)}
+            style={{ width: 40, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
         </label>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {paramsDirty && (
-            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>settings changed</span>
+            <span style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>settings changed</span>
           )}
-          <button
-            onClick={() => setAdvancedOpen(o => !o)}
-            style={{
-              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
-              background: advancedOpen ? "var(--border)" : "var(--panel)",
-              color: "var(--text)",
-              border: "1px solid var(--border)",
-              fontWeight: 400,
-            }}
-          >
-            Advanced {advancedOpen ? "▲" : "▼"}
-          </button>
           <button
             onClick={() => setCommittedParams(qsParams)}
             style={{
-              fontSize: 11, padding: "2px 10px", borderRadius: 3, cursor: "pointer",
+              fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px", borderRadius: 3, cursor: "pointer",
               background: paramsDirty ? "var(--accent)" : "var(--panel)",
               color: paramsDirty ? "#fff" : "var(--text-dim)",
               border: "1px solid var(--border)",
@@ -672,52 +775,85 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         </div>
       </div>
 
-      {/* ── Advanced options — toggled by the "Advanced" button above, styled ──
-          like the settings bar it belongs to (not the collapsible plot sections) ── */}
-      {advancedOpen && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+      {/* ── Row 2: Data — detrend, bandpass, SVD filtering, uncertainty ── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Detrending must happen inside of the trimmed bounds. Baseline removes each channel's mean from within the band, linear removes a linear trend fit within the band, and endpoints removes a line connecting the endpoints of the band.">
+          Detrend
+          <select value={detrendType} onChange={e => setDetrendType(e.target.value)}
+            style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            <option value="baseline">baseline</option>
+            <option value="none">none</option>
+            <option value="linear">linear</option>
+            <option value="endpoints">endpoints</option>
+          </select>
+        </label>
+        {detrendType !== "none" && (
           <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Measurement uncertainty (σ, in T) applied uniformly to every sensor channel in the fit.">
-            uncertainty (σ)
-            <input value={uncertainty} onChange={e => setUncertainty(e.target.value)}
-              style={{ width: 70, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            title="Time window (within the trimmed bounds) used to estimate the detrend baseline, line, or endpoints.">
+            detrend band (ms)
+            <input placeholder="auto" value={detrendLo} onChange={e => setDetrendLo(e.target.value)}
+              style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+            –
+            <input placeholder="auto" value={detrendHi} onChange={e => setDetrendHi(e.target.value)}
+              style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Sets the minimum singular values kept in a SVD filter of the channel-by-time data matrix. This filters the data for the most coherent spatial-temporal combinations of sensors of the selected time window (use 1.0 if the time window includes disparate amplitude scales of interest).">
-            fraction of energy included
-            <input value={energyFraction} onChange={e => setEnergyFraction(e.target.value)}
-              style={{ width: 50, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            basis function
-            <select value={fitBasis} onChange={e => setFitBasis(e.target.value)}
-              style={{ fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
-              <option value="sinusoidal-integral">sinusoidal-integral</option>
-              <option value="sinusoidal-point">sinusoidal-point</option>
-              <option value="gaussian-integral">gaussian-integral</option>
-              <option value="gaussian-point">gaussian-point</option>
-            </select>
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}
-            title="Sets the condition number of the basis function matrix used for the lsq fitting. Smaller condition numbers will ignore mode combinations the chosen channels are relatively poor at constraining. Sufficiently larger numbers will blindly fit all modes chosen above.">
-            fit condition
-            <input value={fitCond} onChange={e => setFitCond(e.target.value)}
-              style={{ width: 50, fontSize: 11, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
-          </label>
-        </div>
-      )}
+        )}
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="High and low frequency cutoffs for band pass filtering the prepared data. 0/inf disables the low/high cutoff (full passthrough at 0, inf).">
+          bandpass (Hz)
+          <input value={cutoffLo} onChange={e => setCutoffLo(e.target.value)}
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+          –
+          <input value={cutoffHi} onChange={e => setCutoffHi(e.target.value)}
+            style={{ width: 52, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Sets the minimum singular values kept in a SVD filter of the channel-by-time data matrix. This filters the data for the most coherent spatial-temporal combinations of sensors of the selected time window (use 1.0 if the time window includes disparate amplitude scales of interest).">
+          fraction of energy included
+          <input value={energyFraction} onChange={e => setEnergyFraction(e.target.value)}
+            style={{ width: 50, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Measurement uncertainty (σ, in T) applied uniformly to every sensor channel in the fit.">
+          uncertainty (σ)
+          <input value={uncertainty} onChange={e => setUncertainty(e.target.value)}
+            style={{ width: 70, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+      </div>
+
+      {/* ── Row 3: Fitting — basis function, fit conditioning ──────────── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)", borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Type of basis function used in the design matrix. sinusoidal-point evaluates A·exp(i·m·θ + i·n·φ) at each sensor's center; sinusoidal-integral averages it over the sensor's extent (preferred for finite-size sensors). gaussian-point/gaussian-integral use localized radial basis functions instead of global sinusoids.">
+          basis function
+          <select value={fitBasis} onChange={e => setFitBasis(e.target.value)}
+            style={{ fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }}>
+            <option value="sinusoidal-integral">sinusoidal-integral</option>
+            <option value="sinusoidal-point">sinusoidal-point</option>
+            <option value="gaussian-integral">gaussian-integral</option>
+            <option value="gaussian-point">gaussian-point</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}
+          title="Sets the condition number of the basis function matrix used for the lsq fitting. Smaller condition numbers will ignore mode combinations the chosen channels are relatively poor at constraining. Sufficiently larger numbers will blindly fit all modes chosen above.">
+          fit condition
+          <input value={fitCond} onChange={e => setFitCond(e.target.value)}
+            style={{ width: 50, fontSize: "calc(11px * var(--font-scale))", background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 3, padding: "1px 4px" }} />
+        </label>
+      </div>
 
       {/* ── Plot content — show immediately; message only if data unavailable ── */}
       {noData ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
-                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>No data for shot {machine}.</strong><br />
           The HDF5 file for this shot has not been fetched yet.<br />
           Use the <strong>pull panel</strong> in the left sidebar to fetch the data, then click Plot.
         </div>
       ) : fitUnavailable ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
-                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>No quasi-stationary fit for shot {machine}.</strong><br />
           The SLCONTOUR fit needs the Bp LFS midplane array; this shot was most likely
           fetched for rotating-mode analysis only. Re-fetch it with the quasi-stationary
@@ -736,7 +872,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               {(["rdbu", "cividis", "viridis"] as const).map(cm => (
                 <button key={cm} onClick={() => setColormapChoice(cm)}
                   style={{
-                    fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
+                    fontSize: "calc(10px * var(--font-scale))", padding: "1px 6px", borderRadius: 3, cursor: "pointer",
                     background: colormapChoice === cm ? "var(--accent)" : "var(--panel)",
                     color: colormapChoice === cm ? "#fff" : "var(--text-dim)",
                     border: "1px solid var(--border)",
@@ -744,20 +880,24 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                   {cm === "rdbu" ? "default" : cm}
                 </button>
               ))}
+              <div style={{ marginLeft: "auto" }}>
+                <YRangeControl label="y (θ°)" lo={phiYMin} hi={phiYMax} onLo={setPhiYMin} onHi={setPhiYMax}
+                  title="Zoom the θ axis to a custom range (view only — doesn't affect the fit)." />
+              </div>
             </div>
             {phiRms && (
-              <Plot height={70} data={[{
+              <Plot height={100} data={[{
                 type: "scatter" as const, mode: "lines" as const,
                 x: phiTimePlot.x, y: phiRms,
                 line: { color: LINE_PALETTE[0], width: 1.5 },
                 showlegend: false,
-              } as Partial<Plotly.PlotData>]} layout={themedLayout(dark, {
+              } as Partial<Plotly.PlotData>]} layout={{
                 xaxis: { ...timeXAxis, showticklabels: false },
                 yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
                 margin: { t: 4, b: 4, l: 60, r: 80 },
-              } as Partial<Plotly.Layout>)} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_rms")} download={dl("phi_t")} />
+              } as Partial<Plotly.Layout>} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_rms")} download={dl("phi_t")} />
             )}
-            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
+            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handlePhiRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
           </div>
         )}
 
@@ -798,7 +938,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               {signalPairs && (
                 <div style={{
                   display: "flex", flexDirection: "column", gap: 3,
-                  fontSize: 10, color: "var(--text-dim)",
+                  fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)",
                   overflowY: "auto", maxHeight: 220,
                   paddingBottom: 4, borderBottom: "1px solid var(--border)",
                 }}>
@@ -821,6 +961,28 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         )}
       </div>
 
+      {/* ── Section: SVD conditioning (VISION §4.1 "≈98% energy") — collapsible,
+          open by default so it's visible without the user needing to expand
+          "fit quality" first — data-matrix energy fraction + design-matrix
+          condition number, per singular value ── */}
+      <div>
+        <CollapseHeader open={svdOpen} onToggle={() => setSvdOpen(o => !o)}>
+          SVD conditioning
+        </CollapseHeader>
+        {svdOpen && (
+          <div>
+            {svdEnergyNode
+              ? <Plot height={300} data={svdEnergyData} layout={svdEnergyLayout} />
+              : <div className="placeholder" style={{ height: 300 }}>{svdEnergyError ? `error: ${svdEnergyError}` : "loading SVD energy…"}</div>
+            }
+            {svdCondNode
+              ? <Plot height={300} data={svdCondData} layout={svdCondLayout} />
+              : <div className="placeholder" style={{ height: 300 }}>{svdCondError ? `error: ${svdCondError}` : "loading SVD condition…"}</div>
+            }
+          </div>
+        )}
+      </div>
+
       {/* ── Section A: Sensor Map — collapsible, at bottom ────────────── */}
       <div>
         <CollapseHeader open={sensorMapOpen} onToggle={() => setSensorMapOpen(o => !o)}>
@@ -829,14 +991,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         {sensorMapOpen && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
-              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
+              <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
               {sensorRzNode
                 ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} exportName={xn("sensor_map_rz")} download={dl("sensor_map_rz")} />
                 : <div className="placeholder">loading…</div>
               }
             </div>
             <div>
-              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
+              <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
               {sensorCylNode
                 ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
                 : <div className="placeholder">loading…</div>

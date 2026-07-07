@@ -31,6 +31,8 @@ _ADAPTERS = {
     "fit_to_fit_signals_node": "line",
     "fit_to_fit_residuals_node": "line",
     "fit_to_fit_quality_node": "metrics",
+    "fit_to_svd_energy_node": "line",
+    "fit_to_svd_condition_node": "line",
 }
 
 
@@ -50,6 +52,23 @@ def test_amplitude_sigma_is_finite(fit_ds):
     node = qs_bridge.fit_to_amplitude_node(fit_ds)
     sigma = np.asarray(node["meta"]["sigma"], dtype=float)
     assert np.all(np.isfinite(sigma))
+
+
+def test_svd_energy_node_is_monotonic_and_bounded(fit_ds):
+    node = qs_bridge.fit_to_svd_energy_node(fit_ds)
+    energy = np.asarray(node["series"][0]["y"], dtype=float)
+    assert np.all(np.isfinite(energy))
+    assert np.all(np.diff(energy) >= -1e-9)  # cumulative energy fraction is non-decreasing
+    assert energy[-1] == pytest.approx(1.0, abs=1e-6)
+    assert "rank" in node["meta"] and "reference_line" in node["meta"]
+
+
+def test_svd_condition_node_is_finite_and_positive(fit_ds):
+    node = qs_bridge.fit_to_svd_condition_node(fit_ds)
+    cond = np.asarray(node["series"][0]["y"], dtype=float)
+    assert np.all(np.isfinite(cond))
+    assert np.all(cond >= 1.0)  # condition number is a ratio against the largest singular value
+    assert node["meta"]["reference_line"] == fit_ds.attrs.get("fit_condition", 10.0)
 
 
 def test_sigma_override_changes_amplitude_uncertainty(synthetic_shot):

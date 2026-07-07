@@ -29,3 +29,16 @@ export function gatePosToPct(pos: number): number {
   const h = Math.exp(Math.log(GATE_H_LO) * (1 - t) + Math.log(GATE_H_HI) * t);
   return Math.round((100 - h) * 10) / 10; // 0.1%-resolution percentile
 }
+
+// Median spacing between successive samples of a monotone axis — the physical width of
+// one grid cell (e.g. one STFT time or frequency bin). Used to render the σ-in-cells
+// pre-smooth readout in the axis's own units. Returns NaN for a degenerate axis (<2
+// points), which the caller renders as an em dash.
+export function medianStep(axis: number[] | undefined): number {
+  if (!axis || axis.length < 2) return NaN;
+  const diffs: number[] = [];
+  for (let i = 1; i < axis.length; i++) diffs.push(Math.abs(axis[i] - axis[i - 1]));
+  diffs.sort((a, b) => a - b);
+  const mid = Math.floor(diffs.length / 2);
+  return diffs.length % 2 ? diffs[mid] : (diffs[mid - 1] + diffs[mid]) / 2;
+}
