@@ -148,11 +148,11 @@ def device_geometry(shot: int, name: str = "diiid") -> dict:
             )
         )
     device = dev.get("name", name)
-    fw = devices.feature_at(dev, "first_wall", shot) or {}
-    vv = (devices.feature_at(dev, "vacuum_vessel", shot) or {}).get("plates", [])
+    fw = devices.feature_nearest(dev, "first_wall", shot) or {}
+    vv = (devices.feature_nearest(dev, "vacuum_vessel", shot) or {}).get("plates", [])
     coils = [
         {k: c.get(k) for k in ("name", "count", "turns", "rz", "loops")}
-        for c in (devices.feature_at(dev, "coils", shot) or {}).get("sets", [])
+        for c in (devices.feature_nearest(dev, "coils", shot) or {}).get("sets", [])
     ]
     return {
         "device": device,

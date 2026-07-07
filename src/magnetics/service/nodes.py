@@ -1487,7 +1487,7 @@ def _sensor_map_rz(shot, params=None) -> dict:
 
     from ..core.qs_device import load_wall
 
-    r_wall, z_wall = load_wall(device, shot)
+    r_wall, z_wall = load_wall(device, int(shot))
 
     series = []
     for c in channels:
