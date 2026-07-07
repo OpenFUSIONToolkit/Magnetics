@@ -1,4 +1,4 @@
-// App shell: header · left rail (shot picker) · tabbed main · right rail (quality).
+// App shell: header · left rail (shot picker) · tabbed main.
 // The four tabs are independent files owned by different people — they read from
 // the store and render `kind`-nodes via <NodeView>. Adding a view = one file.
 //
@@ -8,7 +8,7 @@ import { useEffect } from "react";
 import "./theme.css";
 import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
-import ThemeToggle from "./components/ThemeToggle";
+import SettingsMenu from "./components/SettingsMenu";
 import PullControl from "./components/PullControl";
 import ErrorBoundary from "./components/ErrorBoundary";
 import SensorsTab from "./components/tabs/SensorsTab";
@@ -26,13 +26,31 @@ export default function App() {
   // shell on every cursor scrub (setCursorMs); App doesn't read cursorMs.
   const machines = useStore((s) => s.machines);
   const machine = useStore((s) => s.machine);
+  const devices = useStore((s) => s.devices);
+  const device = useStore((s) => s.device);
   const tab = useStore((s) => s.tab);
   const loadingMachines = useStore((s) => s.loadingMachines);
   const init = useStore((s) => s.init);
   const setMachine = useStore((s) => s.setMachine);
+  const setDevice = useStore((s) => s.setDevice);
   const setTab = useStore((s) => s.setTab);
+  const removeMachine = useStore((s) => s.removeMachine);
+  const clearMachines = useStore((s) => s.clearMachines);
 
   useEffect(() => { void init(); }, [init]);
+
+  // Filter the shot list to the selected device (by display name). If no device
+  // is resolved yet, show everything.
+  const selName = devices.find((d) => d.id === device)?.name;
+  const visibleMachines = selName ? machines.filter((m) => m.device === selName) : machines;
+
+  // When the device changes and the current shot isn't in its list, jump to the
+  // first shot for that device (keeps the main view consistent with the picker).
+  useEffect(() => {
+    if (visibleMachines.length && !visibleMachines.some((m) => m.id === machine)) {
+      setMachine(visibleMachines[0].id);
+    }
+  }, [device, machines, devices]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Honest data-source badge: a live backend with zero fetched shots still serves
   // the mock machines, so key off the SELECTED machine's `mock` flag (from the
@@ -45,6 +63,29 @@ export default function App() {
       ? "○ demo data (no shots fetched)"
       : "○ offline / demo";
 
+  // Deletable = real fetched shots (mock demo machines have nothing on disk), scoped
+  // to the visible device. Only offer delete controls against a live backend.
+  const deletable = usingLiveBackend() ? visibleMachines.filter((m) => !m.mock) : [];
+
+  async function onDelete(id: string, label: string) {
+    if (!window.confirm(`Delete ${label} and all its underlying data? This cannot be undone.`)) return;
+    try {
+      await removeMachine(id);
+    } catch (e) {
+      window.alert(`Delete failed: ${String(e)}`);
+    }
+  }
+
+  async function onClearAll() {
+    if (!window.confirm(`Delete ALL ${deletable.length} fetched shot(s) and their data? This cannot be undone.`))
+      return;
+    try {
+      await clearMachines();
+    } catch (e) {
+      window.alert(`Clear all failed: ${String(e)}`);
+    }
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -52,27 +93,67 @@ export default function App() {
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
         <span className="badge">{badgeText}</span>
-        <ThemeToggle />
+        <SettingsMenu />
       </header>
 
       <aside className="rail-left">
         <PullControl />
+        {devices.length > 0 && (
+          <div className="rail-section">
+            <h3>Device</h3>
+            <select
+              className="pull-input"
+              value={device}
+              aria-label="device"
+              onChange={(e) => setDevice(e.target.value)}
+            >
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="rail-section">
-          <h3 id="shot-list-label">Shot / machine</h3>
+          <div className="rail-head">
+            <h3 id="shot-list-label">Shot / machine</h3>
+            {deletable.length > 0 && (
+              <button className="rail-clear" title="Delete all fetched shots and their data"
+                onClick={() => void onClearAll()}>
+                Clear all
+              </button>
+            )}
+          </div>
           {loadingMachines && <div className="placeholder">loading…</div>}
           <div role="listbox" aria-labelledby="shot-list-label">
-            {machines.map((m) => (
-              <button
+            {visibleMachines.map((m) => (
+              // role=option row (not a <button>, so the delete <button> can nest); keyboard-
+              // reachable via tabIndex + Enter/Space so the a11y listbox pattern still holds.
+              <div
                 key={m.id}
-                type="button"
                 role="option"
                 aria-selected={m.id === machine}
+                tabIndex={0}
                 className={`machine-item${m.id === machine ? " active" : ""}`}
                 onClick={() => setMachine(m.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setMachine(m.id);
+                  }
+                }}
               >
-                <div className="id">{m.label}</div>
-                {m.note && <div className="note">{m.note}</div>}
-              </button>
+                <div className="machine-main">
+                  <div className="id">{m.label}</div>
+                  {m.note && <div className="note">{m.note}</div>}
+                </div>
+                {!m.mock && usingLiveBackend() && (
+                  <button className="machine-del" title={`Delete ${m.label} and its data`}
+                    aria-label={`Delete ${m.label}`}
+                    onClick={(e) => { e.stopPropagation(); void onDelete(m.id, m.label); }}>
+                    ×
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -107,15 +188,6 @@ export default function App() {
           </ErrorBoundary>
         )}
       </main>
-
-      <aside className="rail-right">
-        <div className="rail-section">
-          <h3>Quality</h3>
-          <div className="placeholder">
-            Condition number K, χ², and channel counts surface here once a fit is selected.
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }

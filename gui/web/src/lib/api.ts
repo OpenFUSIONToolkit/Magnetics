@@ -19,9 +19,10 @@ export interface MachineInfo {
   device: string; // "DIII-D" | "NSTX-U" | "synthetic"
   note?: string;
   synthetic?: boolean;
-  /** Backend-supplied: true when this entry is mock/demo data (no real shot file).
-   *  A live backend with zero fetched shots still serves mock machines, so the GUI
-   *  keys its "live vs demo" badge off this, not merely off having a backend URL. */
+  /** Backend-supplied: true when this entry is mock/demo data (no real shot file,
+   *  nothing on disk, not deletable). A live backend with zero fetched shots still
+   *  serves mock machines, so the GUI keys its "live vs demo" badge off this, not
+   *  merely off having a backend URL. */
   mock?: boolean;
 }
 
@@ -48,6 +49,18 @@ export async function fetchNode(
 }
 
 export const usingLiveBackend = (): boolean => !!API_BASE;
+
+/** URL for the per-node HDF5 data export (GET /api/node/.../download), or null
+ *  without a live backend (the static mock fixtures have no serializer). The same
+ *  `params` the plot was fetched with are forwarded so the file matches the view. */
+export function nodeDownloadUrl(
+  machine: string,
+  nodeId: string,
+  params?: Record<string, string | number>,
+): string | null {
+  if (!API_BASE) return null;
+  return `${API_BASE}/api/node/${machine}/${nodeId}/download${qs(params)}`;
+}
 
 /** Per-shot channel diagnostic: which fetched pointnames the analysis uses vs. idle. */
 export interface ChannelUsage {
@@ -78,6 +91,8 @@ export interface FetchBody {
   decimate?: number;
   device?: string; // data/device/<device>.json (default: diiid)
   sensor_set?: string; // a set under the device's sensor_sets; overrides analysis
+  ssh_user?: string; // SSH login for devices that gateway over ssh (e.g. KSTAR)
+  ssh_password?: string; // sent to the local backend only; not stored
 }
 
 /** A device config (data/device/<id>.json) the backend can fetch from. */
@@ -85,6 +100,11 @@ export interface DeviceInfo {
   id: string; // --device value, e.g. "diiid"
   name: string; // display name, e.g. "DIII-D"
   sensor_sets: string[]; // selectable as sensor_set (composites included)
+  access?: string; // "mdsplus_tree" (NSTX/KSTAR: mdsthin + sensor_set only) | "ptdata"
+  remote_capable?: boolean; // device has a network.cluster block (remote backend)
+  default_shot?: number | null; // per-device example shot (prefilled on select)
+  needs_ssh_creds?: boolean; // true → prompt for SSH user/password (e.g. KSTAR)
+  connect_note?: string | null; // short note/warning shown by the pull form
 }
 
 /** List available device configs + their sensor-set names (GET /api/devices).
@@ -114,6 +134,21 @@ export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
   });
   if (!res.ok) throw new Error(`pull failed (${res.status}): ${await res.text()}`);
   return res.json();
+}
+
+/** Delete one shot's underlying data files from the backend. Requires a live
+ * backend (there is nothing to delete against the static mock). */
+export async function deleteMachine(shot: string): Promise<void> {
+  if (!API_BASE) throw new Error("set VITE_API_BASE to manage live data");
+  const res = await fetch(`${API_BASE}/api/machines/${shot}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete failed (${res.status}): ${await res.text()}`);
+}
+
+/** Delete ALL fetched shot data (the "clear all"). Requires a live backend. */
+export async function deleteAllMachines(): Promise<void> {
+  if (!API_BASE) throw new Error("set VITE_API_BASE to manage live data");
+  const res = await fetch(`${API_BASE}/api/machines`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`clear failed (${res.status}): ${await res.text()}`);
 }
 
 // ── helpers ──

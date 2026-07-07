@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from magnetics.data.fetch import network
+from magnetics.data.fetch import network, remote
 
 
 # --- endpoint resolution from the `network` block -----------------------------
@@ -29,6 +29,34 @@ def test_nstx_endpoints_and_no_cluster():
     assert network.gateway_address("nstx") == "flux.pppl.gov:22"
     # NSTX has no cluster block → host resolves to None (remote backend unused)
     assert network.cluster_login("nstx")["host"] is None
+
+
+@pytest.mark.parametrize("safe", ["~/magnetics_fetch", "/scratch/u/fetch", "rel/dir", "~/a.b-c_d"])
+def test_remote_dir_accepts_safe_paths(safe):
+    assert remote._validate_remote_dir(safe) == safe
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["~/my fetch", "$(touch x)", "a;b", "a&&b", "`id`", "a|b", "a>b", "-tmp", "--help"],
+)
+def test_remote_dir_rejects_shell_metacharacters_and_options(bad):
+    with pytest.raises(ValueError):
+        remote._validate_remote_dir(bad)
+
+
+def test_run_remote_rejects_unsafe_remote_dir_before_commands(monkeypatch):
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("run_remote should validate remote_dir before subprocess")
+
+    monkeypatch.setattr(remote.subprocess, "run", fake_run)
+    with pytest.raises(ValueError):
+        remote.run_remote(184927, remote_dir="a;b")
+
+    assert calls == []
 
 
 # --- per-url duo / 2FA metadata -----------------------------------------------

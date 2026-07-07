@@ -1,5 +1,6 @@
 {
   "name": "DIII-D",
+  "default_shot": 184927,
   "R0": 1.69,
   "network": {
     "domain": "gat.com",

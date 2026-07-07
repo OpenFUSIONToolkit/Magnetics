@@ -41,6 +41,35 @@ def load_device(device: str) -> dict:
         return json.load(f)
 
 
+@lru_cache(maxsize=1)
+def _name_to_id() -> dict[str, str]:
+    """Map each device file's display ``name`` -> its config id (the file stem)."""
+    out: dict[str, str] = {}
+    for p in DEVICE_DIR.glob("*.json"):
+        try:
+            with open(p) as f:
+                name = json.load(f).get("name")
+        except Exception:
+            continue
+        if name:
+            out[name] = p.stem
+    return out
+
+
+def resolve_device_id(name_or_id: str | None) -> str | None:
+    """Resolve a device display name (``"NSTX/NSTX-U"``) OR config id (``"nstx"``) to
+    the config id (the device file stem). This is the bridge for shot files that store
+    the human ``device`` name but where ``load_device`` keys on the id. Returns None
+    if nothing matches.
+    """
+    if not name_or_id:
+        return None
+    key = str(name_or_id)
+    if (DEVICE_DIR / f"{key.lower()}.json").exists():
+        return key.lower()  # already an id
+    return _name_to_id().get(key)
+
+
 def _segments(item: dict | None) -> list[dict]:
     """The segment list of a hardware item, tolerating a legacy flat record
     (treated as one open-ended segment) so callers work pre/post migration."""
@@ -120,4 +149,28 @@ def feature_at(dev: dict, key: str, shot: int) -> dict | None:
             break
     if active is None:
         return None
+    return {k: v for k, v in active.items() if k != "since_shot"}
+
+
+def feature_nearest(dev: dict, key: str, shot: int | None) -> dict | None:
+    """Top-level geometry segment for layout/plotting at ``shot``.
+
+    Uses the active segment when available; for shots before the earliest modeled
+    segment, returns that earliest segment. Fetch validity remains strict via
+    ``feature_at`` / sensor-specific resolvers.
+    """
+    segs = _segments(dev.get(key))
+    if not segs:
+        return None
+    if shot is None:
+        active = segs[-1]
+    else:
+        active = None
+        for seg in segs:
+            if seg.get("since_shot", 0) <= shot:
+                active = seg
+            else:
+                break
+        if active is None:
+            active = segs[0]
     return {k: v for k, v in active.items() if k != "since_shot"}

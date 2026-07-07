@@ -61,7 +61,7 @@ from .. import signals as ms
 # analysis). `load_device` is the single source of truth for a machine's mdsip
 # addresses/geometry; `pointname_at` maps a canonical sensor id → the pointname
 # valid at a shot (None = out of range / decommissioned).
-from ..devices import load_device, pointname_at
+from ..devices import geometry_at, load_device, pointname_at, segment_at
 
 # Connection endpoints (mdsip / gateway) + automatic on-site detection, resolved
 # from the device file's `network` block so the hop count is picked for the user.
@@ -208,6 +208,25 @@ def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
     return t, y
 
 
+def _control_master_alive(host: str) -> bool:
+    """True if an SSH ControlMaster is already running for `host` (an ssh-config
+    alias with ``ControlMaster``/``ControlPersist``), so a forward can be added via
+    ``ssh -O forward`` without a new login/Duo. Cheap and non-interactive."""
+    try:
+        return (
+            subprocess.run(
+                ["ssh", "-O", "check", host],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+    except Exception:
+        return False
+
+
 @contextlib.contextmanager
 def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     """Open ONE authenticated SSH local-forward to the mdsip server.
@@ -233,6 +252,43 @@ def _ssh_tunnel(username, gateway, mds_host, mds_port, env=None):
     # ssh-config alias; only prepend user@ when an explicit --username is given.
     gw_host, _, gw_port = gateway.partition(":")
     target = f"{username}@{gw_host}" if username else gw_host
+
+    # Fast path: reuse a live ControlMaster (e.g. the user's `ssh flux` session) by
+    # asking it to add the forward with `ssh -O forward`. This returns immediately
+    # and relies on ControlPersist to keep the forward alive -- no long-running
+    # `ssh -N` (which a Host carrying `RemoteCommand`/`RequestTTY` in ssh-config,
+    # like PPPL's `flux`, would tear straight back down) and NO fresh Duo. We try it
+    # even when creds/askpass were supplied (`env`): riding an existing master needs
+    # no auth at all, so it beats spawning a fresh Duo login.
+    #
+    # A device `network` block gives a full hostname+port (flux.pppl.gov:22), but the
+    # user's persistent master is usually keyed by the ssh-config ALIAS (`ssh flux`,
+    # whose Host block carries the ControlPath); the full hostname matches a portless
+    # catchall with no ControlPath. So try the short first-label form too.
+    fwd_spec = ["-L", f"{lport}:{mds_host}:{mds_port}"]
+    cm_targets: list[str] = []
+    short = gw_host.split(".")[0]
+    if short and short != gw_host:
+        cm_targets.append(short)  # network hostname → alias (flux.pppl.gov → flux)
+    if not gw_port:
+        cm_targets.append(gw_host)  # an alias/host passed directly (no :port)
+    for cm in cm_targets:
+        if not _control_master_alive(cm):
+            continue
+        r = subprocess.run(["ssh", "-O", "forward", *fwd_spec, cm], capture_output=True, text=True)
+        if r.returncode == 0:
+            sys.stderr.write(
+                f"Reusing SSH ControlMaster '{cm}' -> {mds_host}:{mds_port} (local :{lport}).\n"
+            )
+            try:
+                yield lport
+            finally:
+                subprocess.run(
+                    ["ssh", "-O", "cancel", *fwd_spec, cm], capture_output=True, text=True
+                )
+            return
+        sys.stderr.write(f"-O forward via '{cm}' failed ({r.stderr.strip()[:80]}); trying next.\n")
+
     # -C (SSH compression): mdsip ships raw float, but PTDATA waveforms are ~4-5x
     # compressible, and this laptop->cybele->atlas tunnel is the slow off-network
     # path (the --tcp on-network path bypasses this function). Measured ~-26% wall
@@ -507,8 +563,226 @@ def _fetch_mdsthin(
         return results
 
 
+# --- mdsthin TREE backend (NSTX/NSTX-U fastmag; sensors are tree nodes) --------
+def _fetch_mdsthin_tree(
+    shot,
+    node_ids,
+    *,
+    dev,
+    canonical_of,
+    default_tree,
+    username,
+    gateway,
+    server,
+    tcp,
+    tmin,
+    tmax,
+    time_units,
+    progress,
+    tree_signals=None,
+    ssh_env=None,
+):
+    """Pull sensor channels from an MDSplus *tree* (not PTDATA), scaling each by its
+    per-shot gain/na -- for a device whose ``access`` is ``mdsplus_tree`` (NSTX/NSTX-U
+    ``fastmag``, where the sensor id *is* the tree node path / TDI expression).
+
+    One tunnel (or a reused ControlMaster) + one connection; the tree is opened once
+    and every node fetched with a server-side **value-window** subscript
+    ``node[lo:hi]`` -- the only reduction fastmag signals accept (index striding
+    ``[0:*:N]`` does not work, and the raw signals are ~20 M samples so an unwindowed
+    pull is impractical). ``time_units`` is the tree's native time unit (``"s"`` for
+    fastmag): windows are converted to it for the subscript and the returned time base
+    is converted to **ms** (the repo-wide h5 convention). signal = raw*gain/na, with
+    the gain sign carrying helicity. Plasma ``tree_signals`` (EFIT, ...) are fetched
+    on the same connection with the same unit handling.
+    """
+    try:
+        from mdsthin import Connection
+    except ImportError:
+        sys.exit("Missing dependency: pip/uv install mdsthin  (pure-python MDSplus thin client)")
+
+    mds = server.split("://", 1)[-1].split("@", 1)[-1]
+    mds_host, _, mds_port = mds.partition(":")
+    mds_port = int(mds_port or 8000)
+
+    s2ms = 1000.0 if str(time_units).lower() in ("s", "sec", "secs", "seconds") else 1.0
+    lo = None if tmin is None else float(tmin) / s2ms  # ms -> native window bounds
+    hi = None if tmax is None else float(tmax) / s2ms
+
+    def _sub(node):
+        if lo is None and hi is None:
+            return node
+        a = "*" if lo is None else repr(lo)
+        b = "*" if hi is None else repr(hi)
+        return f"{node}[{a} : {b}]"
+
+    shot_i = int(shot)
+    n = len(node_ids)
+    state = {"done": 0}
+
+    def tick(name):
+        state["done"] += 1
+        progress(state["done"] / max(n, 1), name)
+
+    def _segment(node):
+        # gain/na (and an optional per-era `tree` override) live on the sensor's
+        # shot-correct segment, keyed by canonical id.
+        cid = canonical_of.get(node, node)
+        g = geometry_at(dev, cid, shot_i) or {}
+        tree = g.get("tree") or default_tree
+        return float(g.get("gain", 1.0)), float(g.get("na", 1.0) or 1.0), tree
+
+    def _read(conn, expr):
+        y = np.atleast_1d(conn.get(expr).data())
+        t = np.atleast_1d(conn.get(f"dim_of({expr})").data())
+        return t, y
+
+    def fetch_all(conn):
+        out: list[Channel] = []
+        cur_tree = None
+        for node in node_ids:
+            gain, na, tree = _segment(node)
+            ch = Channel(node, ok=False, error="no data")
+            try:
+                # openTree is inside the try: a bad per-segment tree (e.g. a legacy
+                # era whose tree isn't on the server) must drop just this channel,
+                # not abort the whole pull.
+                if tree != cur_tree:
+                    conn.openTree(tree, shot_i)
+                    cur_tree = tree
+                t, y = _read(conn, _sub(node))
+                if y.size >= 1 and t.size == y.size and np.all(np.isfinite(t)):
+                    ch = Channel(
+                        node,
+                        (t.astype(np.float64) * s2ms),
+                        (y.astype(np.float64) * gain / na).astype(np.float32),
+                        ok=True,
+                    )
+                else:
+                    ch.error = f"degenerate (n={y.size}, t={t.size})"
+            except Exception as exc:
+                ch.error = str(exc)
+            out.append(ch)
+            tick(node)
+        # plasma / equilibrium tree signals (efit01, ...): first candidate that opens
+        # and returns a usable pair wins, same unit conversion as the sensors.
+        for name, candidates in (tree_signals or {}).items():
+            chp = Channel(name, ok=False, error="no data")
+            for tree, node in candidates:
+                try:
+                    if tree != cur_tree:
+                        conn.openTree(tree, shot_i)
+                        cur_tree = tree
+                    t, y = _read(conn, _sub(node))
+                    if y.size >= 1 and t.size == y.size and np.all(np.isfinite(t)):
+                        chp = Channel(
+                            name,
+                            (t.astype(np.float64) * s2ms),
+                            y.astype(np.float32, copy=False),
+                            ok=True,
+                        )
+                        break
+                    chp.error = f"{tree}{node}: degenerate"
+                except Exception as exc:
+                    chp.error = f"{tree}{node}: {exc}"
+            out.append(chp)
+            progress(1.0, f"tree:{name} ({'ok' if chp.ok else 'missing'})")
+        return out
+
+    progress(0.0, f"{n} tree channels from {default_tree}")
+    if tcp:
+        addr = f"{username}@{mds_host}:{mds_port}" if username else f"{mds_host}:{mds_port}"
+        return fetch_all(Connection(addr))
+    with _ssh_tunnel(username, gateway, mds_host, mds_port, env=ssh_env) as lport:
+        return fetch_all(Connection(f"127.0.0.1:{lport}"))
+
+
+# --- mds-tree device backend (KSTAR: per-signal openTree via a VPN transport) -
+def _node_tree_map(dev):
+    """Map each canonical sensor id -> its MDS tree, from the device's per-group
+    ``signal_groups[<set>].tree`` metadata (falling back to the device-level
+    ``tree``). KSTAR magnetics span several trees (Mirnov->'kstar',
+    locked-mode->'MAGNETIC', ...), so a single device tree is not enough."""
+    groups = dev.get("signal_groups", {})
+    default_tree = dev.get("tree")
+    node_tree: dict[str, str] = {}
+    for set_name, spec in dev.get("sensor_sets", {}).items():
+        if spec.get("type") != "list":
+            continue  # composites resolve to their member lists
+        tree = groups.get(set_name, {}).get("tree", default_tree)
+        for node in spec.get("sensors", []):
+            node_tree.setdefault(node, tree)
+    return node_tree, default_tree
+
+
+def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1e-6):
+    """Fetch tree nodes one-by-one over a single mdsthin connection.
+
+    ``items`` is a list of ``(canonical_id, node, tree, gain)``: open each node's
+    tree, pull data + DIM_OF(time), apply the shot-era polarity/scale ``gain`` so
+    values come out physical, and key the Channel by the canonical id. The window
+    (tmin/tmax, in the signal's own time units — SECONDS for KSTAR) is pushed
+    SERVER-SIDE via a TDI dimension slice ``(node)[lo : hi]`` so only the windowed
+    samples cross the tunnel (a full 2 MHz channel is otherwise ~10^7 points).
+    Per-node failures are recorded, not fatal.
+
+    KSTAR MDS loads the full channel to satisfy any window, so we push a server-side
+    ``resample(node, tmin, tmax, dt)`` when both bounds are given: it bounds the wire
+    transfer (a raw 2 MHz channel is ~10^7 pts) at a cadence far above rotating-mode
+    frequencies (kHz). ``resample_dt`` seconds sets that cadence (default 1 µs =
+    1 MHz). With an open/absent window it falls back to a raw dimension slice."""
+
+    def _slice(expr):
+        if tmin is None and tmax is None:
+            return expr
+        lo = "*" if tmin is None else repr(float(tmin))
+        hi = "*" if tmax is None else repr(float(tmax))
+        if tmin is not None and tmax is not None and resample_dt:
+            return f"resample({expr}, {lo}, {hi}, {float(resample_dt)!r})"
+        return f"({expr})[{lo} : {hi}]"
+
+    conn = connect()
+    out: list[Channel] = []
+    n = len(items) or 1
+    current_tree = None
+    for i, (canon, node, tree, gain) in enumerate(items, 1):
+        try:
+            if tree != current_tree:
+                conn.openTree(tree, int(shot))
+                current_tree = tree
+            sliced = _slice(node)
+            y = np.atleast_1d(np.asarray(conn.get(sliced).data(), dtype=np.float32))
+            t = np.atleast_1d(np.asarray(conn.get(f"DIM_OF({sliced})").data()))
+            # Reject degenerate results (e.g. a node with no data in the window can
+            # come back as a single garbage sample / non-monotonic time axis).
+            if y.size < 2 or t.size != y.size or not np.all(np.isfinite(t)) or not (t[-1] > t[0]):
+                out.append(Channel(canon, ok=False, error=f"degenerate result (n={y.size})"))
+                progress(i / n, canon)
+                continue
+            if gain not in (None, 1.0):
+                y = (y * np.float32(gain)).astype(np.float32, copy=False)
+            # KSTAR MDS time is in SECONDS, but the h5 writer labels time_units="ms" and
+            # the service nodes assume ms — scale the float time axis to ms before storing.
+            t = t * 1000.0
+            out.append(
+                Channel(
+                    canon,
+                    t.astype(np.float64, copy=False),
+                    y.astype(np.float32, copy=False),
+                    ok=True,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad node shouldn't sink the pull
+            current_tree = None  # a failed openTree/get can leave the conn unsure
+            out.append(Channel(canon, ok=False, error=str(exc)))
+        progress(i / n, canon)
+    return out
+
+
 # --- toksearch backend (cluster, native local PTDATA) -------------------------
-def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_signals=None):
+def _fetch_toksearch(
+    shot, pointnames, *, tmin, tmax, stride, progress, tree_signals=None, server=None
+):
     """Pull pointnames for a shot via a toksearch Pipeline.
 
     This is the on-cluster fast path: `toksearch_d3d.PtDataSignal` reads PTDATA
@@ -521,6 +795,13 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
     two backends write the SAME HDF5. toksearch parallelizes across *shots*, not
     signals, so a single shot uses `compute_serial`; reduction (window/decimate) is
     applied client-side after the fetch to stay version-agnostic.
+
+    EFIT-tree signals (elongation etc.) are NOT fetched via `MdsSignal`: the remote
+    backend runs the cluster interpreter directly (no conda activate / module load),
+    so the MDSplus tree-path env EFIT needs is unset and a local tree open fails for
+    every candidate. Instead they go over a DIRECT mdsip connection to `server` (the
+    device's atlas address) -- on-network from the cluster, no SSH tunnel -- reusing
+    the mdsthin path's proven openTree->get fetch.
 
     Requires `toksearch` + the `toksearch_d3d` plugin (PtDataSignal lives in the
     plugin, not core toksearch -- core is device-agnostic and omits PTDATA).
@@ -546,31 +827,11 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
             )
 
     tree_signals = tree_signals or {}
-    # EFIT-tree signals (e.g. elongation) come from MdsSignal(node, tree), not
-    # PtDataSignal. Each candidate is fetched under a temp key; we resolve to the
-    # first that returns data after the pipeline runs.
-    MdsSignal = None
-    tree_keys: dict[str, list[tuple[str, str, str]]] = {}
-    if tree_signals:
-        try:
-            from toksearch import MdsSignal  # type: ignore
-        except ImportError:
-            MdsSignal = None
-
+    # Only PTDATA pointnames go through the toksearch Pipeline; EFIT-tree signals are
+    # fetched separately over mdsip (see _toksearch_tree_channels) after this runs.
     pipe = Pipeline([shot])
     for pt in pointnames:
         pipe.fetch(pt, PtDataSignal(pt))  # ical=1 default == ptdata2()
-    if MdsSignal is not None:
-        for name, candidates in tree_signals.items():
-            keys = []
-            for k, (tree, node) in enumerate(candidates):
-                key = f"__tree_{name}_{k}"
-                try:
-                    pipe.fetch(key, MdsSignal(node, tree))
-                    keys.append((key, tree, node))
-                except Exception:
-                    pass
-            tree_keys[name] = keys
 
     progress(0.0, "running toksearch pipeline")
     # Single shot -> compute_serial (cross-shot parallelism is moot for one record);
@@ -624,28 +885,44 @@ def _fetch_toksearch(shot, pointnames, *, tmin, tmax, stride, progress, tree_sig
                 )
         progress(i / n, pt)
 
-    # Resolve EFIT-tree signals: first candidate key with usable data wins. No
-    # decimation (EFIT time bases are already coarse), window-trim only.
-    for name, keys in tree_keys.items():
-        ch = Channel(name, ok=False, error="no data")
-        for key, tree, node in keys:
-            sig = None if key in errors else (rec[key] if key in rec.keys() else None)
-            if not sig or "data" not in sig:
-                continue
-            y = np.atleast_1d(np.asarray(sig["data"]))
-            t = np.atleast_1d(np.asarray(sig["times"]))
-            if y.size >= 1 and t.size == y.size:
-                t, y = _reduce(t, y, tmin, tmax, 1)
-                ch = Channel(
-                    name,
-                    t.astype(np.float64, copy=False),
-                    y.astype(np.float32, copy=False),
-                    ok=True,
-                )
-                break
-        results.append(ch)
-        progress(1.0, f"tree:{name} ({'ok' if ch.ok else 'missing'})")
+    # EFIT-tree signals: fetch over a direct mdsip connection to the device server
+    # (not MdsSignal — see the docstring). Window-trim only, no decimation.
+    results += _toksearch_tree_channels(shot, tree_signals, server, tmin, tmax, progress)
     return results
+
+
+def _toksearch_tree_channels(shot, tree_signals, server, tmin, tmax, progress):
+    """Fetch EFIT/tree signals for the toksearch backend via a DIRECT mdsip
+    connection to the device's MDSplus `server` (atlas), reusing the mdsthin path's
+    openTree->get fetch.
+
+    Why not toksearch's `MdsSignal`: the remote backend runs the cluster interpreter
+    directly (no conda activate / module load), so the MDSplus tree-path env EFIT
+    needs is unset and a local tree open fails for every candidate. The cluster is
+    on-network, so we reach the same mdsip server the mdsthin backend uses -- no SSH
+    tunnel -- and the trees resolve there. Any connection failure degrades to
+    not-ok Channels so the PTDATA pull still succeeds.
+    """
+    if not tree_signals:
+        return []
+    if not server:
+        return [Channel(n, ok=False, error="no tree server configured") for n in tree_signals]
+
+    def connect():
+        host = server.split("://", 1)[-1].split("@", 1)[-1]  # normalize to host:port
+        try:
+            import MDSplus  # ty: ignore[unresolved-import]  # present wherever toksearch runs
+
+            return MDSplus.Connection(host)
+        except ImportError:
+            from mdsthin import Connection
+
+            return Connection(host)
+
+    try:
+        return _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress)
+    except Exception as exc:
+        return [Channel(n, ok=False, error=f"tree server {server}: {exc}") for n in tree_signals]
 
 
 # --- HDF5 writer (lzf + chunked + deduped time bases) -------------------------
@@ -669,12 +946,16 @@ def _write_h5(
     tmax,
     stride,
     device="DIII-D",
+    device_id=None,
+    source=None,
+    channel_geometry=None,
     query_names=None,
     merge=False,
 ):
     import h5py
 
     query_names = query_names or {}
+    channel_geometry = channel_geometry or {}
 
     comp = None if compression in (None, "none") else compression
     missing = [c for c in channels if not c.ok]
@@ -706,7 +987,11 @@ def _write_h5(
         if not append:
             h5.attrs["shot"] = shot
             h5.attrs["device"] = device
-            h5.attrs["source"] = "PTDATA via ptdata2()"
+            # device_id is the config id (nstx/kstar/diiid) the display `device` name
+            # maps to -- lets node code re-resolve the device file without a name->id
+            # guess.
+            h5.attrs["device_id"] = device_id or str(device).lower()
+            h5.attrs["source"] = source or "PTDATA via ptdata2()"
             h5.attrs["analysis"] = analysis
             h5.attrs["backend"] = backend
             h5.attrs["tmin"] = "*" if tmin is None else float(tmin)
@@ -757,6 +1042,11 @@ def _write_h5(
             g.attrs["time_units"] = "ms"
             if c.name in query_names:  # fetched under a legacy pointname
                 g.attrs["pointname"] = query_names[c.name]
+            # Per-channel shot-correct geometry (NSTX carries explicit phi/theta and
+            # gain/na baked into the signal); non-breaking metadata for downstream.
+            for k, v in channel_geometry.get(c.name, {}).items():
+                if v is not None:
+                    g.attrs[k] = float(v)
 
         # Union new channels with whatever the file already recorded; a name that
         # is now fetched is removed from the missing list.
@@ -812,6 +1102,8 @@ def fetch_shot(
     username: str | None = None,
     password: str | None = None,
     duo: str | None = None,
+    ssh_user: str | None = None,
+    ssh_password: str | None = None,
     gateway: str | None = None,
     server: str | None = None,
     tcp: bool = False,
@@ -862,7 +1154,26 @@ def fetch_shot(
         raise ValueError(f"unknown analysis {analysis!r}; choose from {', '.join(ms.ANALYSES)}")
     progress = progress or _default_progress
 
-    if backend == "remote":
+    # Load the device up front so we can route by its access type before the backend
+    # dispatch. Sensors that live in an MDSplus tree (access="mdsplus_tree") have no
+    # DIII-D PTDATA/cluster path, and split two ways:
+    #   * KSTAR carries its OWN transport (a `connection` block: KFE VPN + nkstar
+    #     tunnel) and must ALWAYS use it — never the remote/cluster or mdsthin-gateway
+    #     path. Routed by `_tree_transport` at the dispatch below, regardless of backend.
+    #   * NSTX/NSTX-U (`fastmag`, a `network` block) has no cluster at all, so a
+    #     `remote`/`toksearch`/`auto` request would SSH to a nonexistent cluster —
+    #     coerce it to the mdsthin tree fetch BEFORE the remote branch runs.
+    dev = load_device(device)
+    device_name = dev.get("name", device)
+    tree_access = dev.get("access") == "mdsplus_tree"
+    _tree_transport = tree_access and bool(dev.get("connection"))
+
+    if tree_access and not _tree_transport and backend in ("remote", "toksearch", "auto"):
+        if backend != "mdsthin":
+            progress(0.0, f"{backend}→mdsthin (tree device)")
+        backend = "mdsthin"
+
+    if backend == "remote" and not _tree_transport:
         # Orchestrate a pull on the cluster from here; remote side runs this same
         # script with --backend toksearch and writes the file we copy back.
         from . import remote as remote_run
@@ -888,9 +1199,22 @@ def fetch_shot(
         )
 
     # Device config is the source of truth for mdsip addresses; an explicit
-    # gateway/server (CLI or caller) overrides the device file.
-    dev = load_device(device)
-    device_name = dev.get("name", device)
+    # gateway/server (CLI or caller) overrides the device file. (`dev`, `device_name`,
+    # `tree_access`, and `_tree_transport` were resolved above, before the backend
+    # dispatch.)
+    # A tree device has no DIII-D-style analysis→signal map (`ms.signals_for`), so a
+    # pull MUST resolve to real sensor names: a named sensor_set, or (for a device that
+    # declares an `arrays` block, e.g. KSTAR) its default toroidal+poloidal arrays. A
+    # tree device with neither would query DIII-D pointnames against the tree and every
+    # one would be "Node Not Found" — so require a sensor_set there (NSTX).
+    if tree_access and not sensor_set and not dev.get("arrays"):
+        sets = ", ".join(dev.get("sensor_sets", {})) or "none"
+        raise ValueError(
+            f"device {device!r} needs a sensor_set (its sensors live in an MDSplus "
+            f"tree, with no analysis groups). Available sets: {sets}"
+        )
+    # Connection endpoints come from the device file's `network` block (machine-
+    # agnostic); an explicit gateway/server still overrides.
     gateway = gateway or gateway_address(device)
     server = server or mdsip_address(device)
     # Pick the hop count for the user: inside the device's site network the data
@@ -902,7 +1226,7 @@ def fetch_shot(
         tcp = True
     if per_channel is None:
         per_channel = not on_site
-    if backend == "mdsthin":
+    if backend == "mdsthin" and not _tree_transport:
         if not server:
             raise ValueError(f"device {device!r} has no 'server'; pass --server")
         if not tcp and not gateway:
@@ -912,10 +1236,22 @@ def fetch_shot(
             )
 
     # Signal selection. A device sensor set (preferred) overrides the analysis
-    # sensor groups: pull the set's signals plus the device's plasma params.
+    # sensor groups: pull the set's signals plus the device's plasma params. When
+    # no set is named, a device that drives selection through its own sensor sets
+    # (it declares an `arrays` block -- e.g. KSTAR, which has no DIII-D PTDATA
+    # analysis groups) defaults to its toroidal+poloidal arrays; otherwise fall
+    # back to the per-analysis groups (DIII-D).
     stride = max(1, int(decimate))
     if sensor_set:
-        sensors = resolve_sensor_set(dev, sensor_set)
+        set_names = [sensor_set]
+    elif dev.get("arrays"):
+        arr = dev["arrays"]
+        set_names = _dedup([s for s in (arr.get("toroidal"), arr.get("poloidal")) if s])
+    else:
+        set_names = []
+
+    if set_names:
+        sensors = _dedup([s for name in set_names for s in resolve_sensor_set(dev, name)])
         # Always add the device's plasma params (current, toroidal field,
         # elongation). Each entry is {"name": ..., "tree": <optional>}: a "tree"
         # means the quantity lives in an MDSplus tree (e.g. EFIT elongation), so
@@ -929,7 +1265,7 @@ def fetch_shot(
             else:
                 extras.append(name)
         pointnames = _dedup(sensors + extras)
-        label = sensor_set
+        label = "+".join(set_names)
         # Never decimate a set carrying raw bdot (dB/dt) probes -- corrupts FFTs.
         if stride > 1 and any(p.endswith("D") for p in pointnames):
             progress(0.0, "decimation disabled (set has bdot signals)")
@@ -951,12 +1287,15 @@ def fetch_shot(
         progress(0.0, f"{len(skipped)} sensors not valid at shot {shot_i}")
 
     if backend == "auto":
-        try:
-            import toksearch  # noqa: F401  # ty: ignore[unresolved-import]
+        if tree_access:
+            backend = "mdsthin"  # tree fetch has no cluster/toksearch variant
+        else:
+            try:
+                import toksearch  # noqa: F401  # ty: ignore[unresolved-import]
 
-            backend = "toksearch"
-        except ImportError:
-            backend = "mdsthin"
+                backend = "toksearch"
+            except ImportError:
+                backend = "mdsthin"
 
     # Default output lives under data/datafile/; honor an explicit --out as given.
     out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
@@ -986,7 +1325,80 @@ def fetch_shot(
         return out
 
     t0 = time.perf_counter()
-    if backend == "toksearch":
+    if _tree_transport:
+        # Tree device reached via its own transport (KSTAR: KFE VPN + nkstar tunnel).
+        # Ignores backend (no PTDATA); fetches each node from its per-signal tree.
+        from . import kstar_transport
+
+        try:
+            from mdsthin import Connection
+        except ImportError:
+            sys.exit("Missing dependency: mdsthin (pure-python MDSplus thin client)")
+        node_tree, default_tree = _node_tree_map(dev)
+        items = []  # (canonical_id, node_to_fetch, tree, gain)
+        for p in pointnames:
+            canon = canonical_of.get(p, p)
+            seg = segment_at(dev, canon, shot_i)
+            items.append((canon, p, node_tree.get(canon, default_tree), (seg or {}).get("gain")))
+        import os as _os
+
+        _dbg = _os.environ.get("KSTAR_DEBUG") not in (None, "", "0")
+        with kstar_transport.session(
+            vpn_username=username,
+            vpn_password=password,
+            ssh_username=ssh_user,
+            ssh_password=ssh_password,
+            duo=duo,
+            conn=dev["connection"],
+            debug=_dbg,
+        ) as (ssh_user_resolved, lport):
+
+            def _connect():
+                return Connection(f"{ssh_user_resolved}@127.0.0.1:{lport}")
+
+            # The GUI/CLI window is in milliseconds (DIII-D convention), but KSTAR
+            # MDS time is in SECONDS (see the t*1000 rescale in _fetch_mds_tree), so
+            # the resample window must be converted to seconds -- otherwise a ms
+            # window lands far past the shot and every node collapses to a single
+            # sample ("degenerate result (n=1)").
+            tmin_s = None if tmin is None else float(tmin) / 1000.0
+            tmax_s = None if tmax is None else float(tmax) / 1000.0
+            channels = _fetch_mds_tree(
+                shot_i, items, connect=_connect, tmin=tmin_s, tmax=tmax_s, progress=progress
+            )
+    elif tree_access:
+        # NSTX/NSTX-U: sensors are fastmag tree nodes fetched with a value-window
+        # subscript + per-sensor gain/na scaling (see _fetch_mdsthin_tree).
+        ssh_env, _ssh_cleanup = (None, lambda: None)
+        # Set up the SSH_ASKPASS helper whenever we have EITHER a password OR a Duo
+        # answer -- key-based logins that still require an interactive Duo (PPPL flux)
+        # have no password, so gating on password alone left the tunnel prompting on
+        # the service's tty. `duo` defaults to "1" (push) from the GUI.
+        if (password or duo) and not tcp:
+            from .. import sshauth
+
+            ssh_env, _ssh_cleanup = sshauth.askpass_env(password, duo)
+        try:
+            channels = _fetch_mdsthin_tree(
+                shot,
+                pointnames,
+                dev=dev,
+                canonical_of=canonical_of,
+                default_tree=dev.get("tree"),
+                username=username,
+                gateway=gateway,
+                server=server,
+                tcp=tcp,
+                tmin=tmin,
+                tmax=tmax,
+                time_units=dev.get("time_units", "s"),
+                progress=progress,
+                tree_signals=tree_signals,
+                ssh_env=ssh_env,
+            )
+        finally:
+            _ssh_cleanup()
+    elif backend == "toksearch":
         channels = _fetch_toksearch(
             shot,
             pointnames,
@@ -995,6 +1407,7 @@ def fetch_shot(
             stride=stride,
             progress=progress,
             tree_signals=tree_signals,
+            server=server,
         )
     elif backend == "mdsthin":
         # username is optional: with an ssh-config Host alias as the gateway (the
@@ -1002,7 +1415,11 @@ def fetch_shot(
         # GUI-supplied password → answer the SSH tunnel's auth via askpass (no
         # terminal prompt); without it ssh prompts on the tty as before.
         ssh_env, _ssh_cleanup = (None, lambda: None)
-        if password and not tcp:
+        # Set up the SSH_ASKPASS helper whenever we have EITHER a password OR a Duo
+        # answer -- key-based logins that still require an interactive Duo (PPPL flux)
+        # have no password, so gating on password alone left the tunnel prompting on
+        # the service's tty. `duo` defaults to "1" (push) from the GUI.
+        if (password or duo) and not tcp:
             from .. import sshauth
 
             ssh_env, _ssh_cleanup = sshauth.askpass_env(password, duo)
@@ -1041,6 +1458,19 @@ def fetch_shot(
             query_names[cid] = c.name
             c.name = cid
 
+    # For a tree device, record each sensor's shot-correct geometry as h5 attrs and
+    # note the tree source (the signal already has gain/na baked in at fetch time).
+    channel_geometry: dict[str, dict] = {}
+    source = None
+    if tree_access:
+        source = f"MDSplus tree {dev.get('tree')} (raw*gain/na)"
+        for c in channels:
+            g = geometry_at(dev, c.name, shot_i)
+            if g:
+                channel_geometry[c.name] = {
+                    k: g[k] for k in ("phi", "theta", "gain", "na") if g.get(k) is not None
+                }
+
     # out_path was resolved before the (possibly incremental) fetch above.
     n_fetch = len(pointnames) + len(tree_signals)
     got, missing = _write_h5(
@@ -1054,6 +1484,9 @@ def fetch_shot(
         tmax=tmax,
         stride=stride,
         device=device_name,
+        device_id=device,
+        source=source,
+        channel_geometry=channel_geometry,
         query_names=query_names,
         merge=merge,
     )
@@ -1073,6 +1506,16 @@ def fetch_shot(
     if skipped:
         shown = ", ".join(skipped[:12]) + (" ..." if len(skipped) > 12 else "")
         sys.stderr.write(f"  skipped [not valid at shot {shot_i}] x{len(skipped)}: {shown}\n")
+    # Fail loudly on a fresh pull that resolved zero usable channels: the file is a
+    # dead shot (every analysis node would 422 on it), so remove it and surface the
+    # failure instead of reporting success. A merge is spared -- the existing file
+    # may already hold channels from an earlier pull.
+    if not got and not merge:
+        Path(out).unlink(missing_ok=True)
+        raise ValueError(
+            f"no channels fetched for device {device_name!r} shot {shot} "
+            f"({len(missing)} unavailable) -- check the sensor set / MDS tree"
+        )
     return out
 
 
@@ -1099,6 +1542,9 @@ def main(argv=None) -> int:
         "--tmin", type=float, default=None, help="window start (ms); reduces data moved"
     )
     ap.add_argument("--tmax", type=float, default=None, help="window end (ms)")
+    ap.add_argument(
+        "--duo", default=None, help="KSTAR 2FA: 'push' (default; sends a Duo push) or a passcode"
+    )
     ap.add_argument(
         "--decimate", type=int, default=1, help="keep every Nth sample (quasi-stationary only)"
     )
@@ -1201,6 +1647,7 @@ def main(argv=None) -> int:
         device=args.device,
         sensor_set=args.sensor_set,
         username=args.username,
+        duo=args.duo,
         gateway=args.gateway,
         server=args.server,
         tcp=args.tcp,

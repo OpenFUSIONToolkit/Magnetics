@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { getJSON, qs } from "./api";
+import { getJSON, nodeDownloadUrl, qs } from "./api";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,4 +33,9 @@ test("getJSON surfaces the FastAPI detail + status on error", async () => {
 test("getJSON keeps the 422 reason (the QS banners depend on this)", async () => {
   mockFetch(422, { detail: "no valid channels" });
   await expect(getJSON("/x")).rejects.toThrow(/fetch failed \(422\).*no valid channels/);
+});
+
+test("nodeDownloadUrl returns null without a live backend (mock fixtures can't export)", () => {
+  // VITE_API_BASE is unset in the test env, so there is no serializer to hit.
+  expect(nodeDownloadUrl("190000", "amplitude", { time: 3140 })).toBeNull();
 });

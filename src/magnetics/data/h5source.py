@@ -54,6 +54,50 @@ def refresh() -> None:
     _shot_index.cache_clear()
 
 
+def _shot_of(path: Path) -> str | None:
+    """The shot id (str) a file belongs to, or None if it isn't a shot file."""
+    try:
+        with h5py.File(path, "r") as h5:
+            shot = str(int(np.asarray(h5.attrs.get("shot", 0))))
+    except Exception:
+        return None
+    return shot if shot != "0" else None
+
+
+def delete_shot(shot: str | int) -> list[str]:
+    """Delete EVERY HDF5 file backing `shot` from the data dir; return the paths
+    removed. A shot can span more than one file (different windows/fmax, or a
+    bench artifact), so we match on the stored ``shot`` attr rather than a single
+    indexed path. Refreshes the index afterward. Empty list = nothing matched."""
+    target = str(shot)
+    removed: list[str] = []
+    for path in sorted(data_dir().rglob("*.h5")):
+        if _shot_of(path) == target:
+            try:
+                path.unlink()
+                removed.append(str(path))
+            except OSError:
+                pass  # e.g. already gone / permission — skip, keep clearing the rest
+    refresh()
+    return removed
+
+
+def delete_all_shots() -> list[str]:
+    """Delete every shot HDF5 file in the data dir (the "clear all"); return the
+    paths removed. Only files that parse as shot files (a non-zero ``shot`` attr)
+    are touched, so unrelated .h5 are left alone. Refreshes the index afterward."""
+    removed: list[str] = []
+    for path in sorted(data_dir().rglob("*.h5")):
+        if _shot_of(path) is not None:
+            try:
+                path.unlink()
+                removed.append(str(path))
+            except OSError:
+                pass
+    refresh()
+    return removed
+
+
 def shot_file(shot: str | int) -> Path:
     path = _shot_index().get(str(shot))
     if path is None:
@@ -91,11 +135,17 @@ def list_shots() -> list[dict]:
 
 
 def meta(shot: str | int) -> dict:
+    from . import devices
+
     with h5py.File(shot_file(shot), "r") as h5:
         fetched = h5.attrs.get("channels_fetched")
         return {
             "shot": int(np.asarray(h5.attrs.get("shot", shot))),
             "device": _attr_str(h5.attrs.get("device"), "DIII-D"),
+            # Prefer the stored config id; else resolve the display name -> id (a bare
+            # .lower() would yield an invalid "diii-d" that load_device can't open).
+            "device_id": _attr_str(h5.attrs.get("device_id"), "")
+            or (devices.resolve_device_id(_attr_str(h5.attrs.get("device"), "DIII-D")) or "diiid"),
             "analysis": _attr_str(h5.attrs.get("analysis"), "both"),
             "backend": _attr_str(h5.attrs.get("backend"), "?"),
             "n_channels": len([k for k in h5.keys() if k != "_timebases"]),
@@ -104,6 +154,20 @@ def meta(shot: str | int) -> dict:
                 for c in (fetched if fetched is not None else [])
             ],
         }
+
+
+def device_id(shot: str | int) -> str:
+    """The device *config id* (``nstx``/``diiid``) for a shot file. Prefers the
+    ``device_id`` attr written at fetch time; falls back to resolving the display
+    ``device`` name -> id (older files), defaulting to ``diiid``."""
+    from . import devices
+
+    with h5py.File(shot_file(shot), "r") as h5:
+        did = h5.attrs.get("device_id")
+        if did is not None:
+            return _attr_str(did, "diiid")
+        name = _attr_str(h5.attrs.get("device"), "DIII-D")
+    return devices.resolve_device_id(name) or "diiid"
 
 
 def channel_names(shot: str | int) -> list[str]:
