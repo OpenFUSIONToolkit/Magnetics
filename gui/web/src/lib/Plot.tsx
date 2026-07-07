@@ -28,7 +28,7 @@ export interface PlotProps {
   download?: { machine: string; nodeId: string; params?: Record<string, string | number> };
 }
 
-function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
+function baseLayout(theme: "dark" | "light", fontScale: number): Partial<Plotly.Layout> {
   const c = plotChrome(theme);
   const axis = {
     gridcolor: c.gridcolor,
@@ -36,11 +36,14 @@ function baseLayout(theme: "dark" | "light"): Partial<Plotly.Layout> {
     linecolor: c.linecolor,
     ticks: "outside" as const,
     tickcolor: c.tickcolor,
+    // Grow the margin to fit tick labels + axis title as fontScale changes,
+    // instead of overlapping them under a fixed margin.
+    automargin: true,
   };
   return {
     paper_bgcolor: c.paper_bgcolor,
     plot_bgcolor: c.plot_bgcolor,
-    font: c.font,
+    font: { ...c.font, size: c.font.size * fontScale },
     margin: { l: 60, r: 20, t: 16, b: 48 },
     showlegend: false,
     xaxis: axis,
@@ -54,11 +57,12 @@ export default function Plot({
   const ref = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState(false);
   const theme = useStore((s) => s.theme);
+  const fontScale = useStore((s) => s.fontScale);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const base = baseLayout(theme);
+    const base = baseLayout(theme, fontScale);
     const merged: Partial<Plotly.Layout> = {
       ...base,
       ...layout,
@@ -87,7 +91,7 @@ export default function Plot({
         /* noop */
       }
     };
-  }, [data, layout, height, onClick, onRelayout, theme, config]);
+  }, [data, layout, height, onClick, onRelayout, theme, fontScale, config]);
 
   useEffect(() => {
     const el = ref.current;
@@ -167,7 +171,7 @@ export default function Plot({
 // Small toolbar button/link, styled to match the app chrome (CSS vars) and stay
 // unobtrusive until the plot is hovered.
 const TOOLBTN: CSSProperties = {
-  fontSize: 10,
+  fontSize: "calc(10px * var(--font-scale))",
   lineHeight: 1.4,
   padding: "1px 6px",
   borderRadius: 3,

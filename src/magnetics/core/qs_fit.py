@@ -1,4 +1,4 @@
-"""Port of ``SCRIPTS/fit_magnetics.py`` — the SLCONTOUR-style spatial fit.
+"""A port of the OMFIT magnetics *fit* script — the QS pipeline's fit step.
 
 This is the heart of the quasi-stationary analysis (VISION.md S4.1).  At each
 time slice it fits the spatial field pattern with either a cylindrical-Fourier
@@ -27,12 +27,27 @@ Supported geometries: ``cylindrical`` (phi, theta) and ``vertical`` (phi, z).
 
 from __future__ import annotations
 
+import logging
 import re
 
 import numpy as np
 import xarray as xr
 
-from .omfit_compat import OMFITexception, delta_degrees, is_device, printe, printv, printw
+logger = logging.getLogger(__name__)
+
+
+def _delta_degrees_scalar(theta1, theta2):
+    """Angular width from theta1 to theta2 in degrees, wrapping once through 0."""
+    dt = theta2 - theta1
+    if dt > 180:
+        dt -= 360
+    if dt < -180:
+        dt += 360
+    return dt
+
+
+#: Vectorised signed angular width in degrees (ported from omfit_compat.delta_degrees).
+delta_degrees = np.vectorize(_delta_degrees_scalar)
 
 
 def form_basis_function(
@@ -142,7 +157,7 @@ def form_basis_function(
                     )
         return fmn
 
-    raise OMFITexception(
+    raise ValueError(
         "fit_basis must be 'sinusoidal-point', 'sinusoidal-integral', "
         "'gaussian-point', or 'gaussian-integral'."
     )
@@ -157,6 +172,7 @@ def fit(
     fit_basis="sinusoidal-integral",
     fit_geometry="cylindrical",
     fit_cond=10.0,
+    sigma_override=None,
     ncenters=6,
     mcenters=1,
     nepsilon=None,
@@ -175,6 +191,9 @@ def fit(
         ``'gaussian-point'``, or ``'gaussian-integral'``.
     :param fit_geometry: ``'cylindrical'`` (phi, theta) or ``'vertical'`` (phi, z).
     :param fit_cond: condition-number cutoff for the lstsq inversion (= 1/rcond).
+    :param sigma_override: when given, use this uniform measurement uncertainty
+        for every channel instead of the per-channel ``signal_sigma`` baked into
+        the dataset at load time.
     :param ncenters: **Gaussian only** — number of phi RBF centres.
     :param mcenters: **Gaussian only** — number of theta/z RBF centres.
     :param nepsilon: **Gaussian only** — phi RBF width in degrees; ``None`` =
@@ -187,7 +206,7 @@ def fit(
 
     def _printv(*a):
         if verbose:
-            printv(*a)
+            logger.info(" ".join(str(x) for x in a))
 
     _printv("Fitting the prepared data")
 
@@ -212,7 +231,7 @@ def fit(
     elif fit_geometry == "vertical":
         xkey, ykey = "phi", "z"
     else:
-        raise OMFITexception("fit_geometry must be 'cylindrical' or 'vertical'.")
+        raise ValueError("fit_geometry must be 'cylindrical' or 'vertical'.")
 
     x1 = ds[f"{xkey}_end1"].values
     x2 = ds[f"{xkey}_end2"].values
@@ -220,12 +239,32 @@ def fit(
     y2 = ds[f"{ykey}_end2"].values
 
     sigma = ds["signal_sigma"].values.astype(float)
-    bad = ~np.isfinite(sigma)
-    if bad.any():
-        fill = ds.attrs.get("sigma_type", np.nan)
-        if not np.isfinite(fill):
-            fill = np.nanmean(sigma) if np.isfinite(np.nanmean(sigma)) else 1.0
-        sigma[bad] = fill
+    if sigma_override is not None:
+        sigma = np.full_like(sigma, float(sigma_override))
+    else:
+        bad = ~np.isfinite(sigma)
+        if bad.any():
+            fill = ds.attrs.get("sigma_type", np.nan)
+            if not np.isfinite(fill):
+                fill = np.nanmean(sigma) if np.isfinite(np.nanmean(sigma)) else 1.0
+            sigma[bad] = fill
+
+    # ── paired-sensor differencing (SLCONTOUR pairwise-difference basis) ────────
+    # A differential sensor (pair != "None") reports field(X) - field(pair), so the
+    # design-matrix column is differenced at X and at its pair. The pair ends ride in
+    # on the geometry (qs_device.sensor_geometry); NaN marks an unpaired channel.
+    if f"pair_{xkey}_end1" in ds:
+        px1 = ds[f"pair_{xkey}_end1"].values
+        px2 = ds[f"pair_{xkey}_end2"].values
+        py1 = ds[f"pair_{ykey}_end1"].values
+        py2 = ds[f"pair_{ykey}_end2"].values
+    else:
+        px1 = px2 = py1 = py2 = np.full_like(x1, np.nan)
+    has_pair = np.isfinite(px1)
+    # OMFIT sources the pair's signal_sigma (fit_magnetics.py:136-141: all-NaN -> own
+    # sigma, then NaN -> nanmean). Our sigma is the constant per-shot value for every
+    # channel, so pair sigma == own sigma; revisit when real per-sensor sigma lands.
+    psigma = sigma
 
     # ── basis-specific mode / centre setup ────────────────────────────────────
     is_sinusoidal = fit_basis.startswith("sinusoidal")
@@ -234,9 +273,8 @@ def fit(
     if is_sinusoidal:
         ms = np.atleast_1d(ms)
         ns = np.atleast_1d(ns)
-        dp = None  # paired sensors not present in this dataset
-        if dp is None and 0 not in ns:
-            _printv("WARNING: Sensors are not paired! Consider including n=0.")
+        if (~has_pair).any() and 0 not in ns:
+            _printv("WARNING: Some sensors are not paired! Consider including n=0.")
         if not np.all(ms == 0) and not np.any(np.sign(ms) == helicity):
             ms = ms * -1
             _printv(f"WARNING: Flipping sign of m to conform to helicity {helicity:+}")
@@ -246,11 +284,6 @@ def fit(
         nms_arr = np.array(nms)
         _ncycle = _mcycle = 0
         _nepsilon = _mepsilon = np.inf
-
-        if is_device(ds.attrs.get("device", ""), "DIII-D"):
-            if any(re.match(k, c) for k in ("C.*", "IL.*", "IU.*") for c in channels):
-                if fit_basis != "sinusoidal-point":
-                    printe("WARNING: sinusoidal-point basis is used by DIII-D 3D coil operators")
 
     elif is_gaussian:
         # Derive RBF centres from sensor extent (mirrors OMFIT gaussian setup block)
@@ -290,7 +323,7 @@ def fit(
             f"ncycle={_ncycle}"
         )
     else:
-        raise OMFITexception(
+        raise ValueError(
             f"fit_basis must start with 'sinusoidal' or 'gaussian', got {fit_basis!r}."
         )
 
@@ -301,6 +334,9 @@ def fit(
     if is_sinusoidal:
         for n, m in nms:
             fmn = form_basis_function(n, m, x1, x2, y1, y2, fit_basis) / sigma
+            if has_pair.any():
+                fmn_pair = form_basis_function(n, m, px1, px2, py1, py2, fit_basis) / psigma
+                fmn = np.where(has_pair, (fmn - fmn_pair) / 2.0, fmn)
             if np.allclose(fmn.imag, 0):
                 A_cols.append(fmn.real)
                 ncomp.append(1)
@@ -313,26 +349,66 @@ def fit(
                     wtest = np.linalg.svd(np.array(A_cols).T, compute_uv=False)
                     if np.abs(wtest[0] / wtest[-1]) > 1e19:
                         raise ValueError("Bad sensor distribution")
-                except (ValueError, np.linalg.LinAlgError):
-                    printe(f" - Ill-conditioned mode ({n},{m}); fitting single component")
+                except ValueError, np.linalg.LinAlgError:
+                    logger.error(" - Ill-conditioned mode (%s,%s); fitting single component", n, m)
                     x0 = x1[0] + delta_degrees(x1[0], x2[0]) / 2.0
                     y0 = y1[0] + delta_degrees(y1[0], y2[0]) / 2.0
-                    fmn = form_basis_function(n, m, x1 + x0, x2 + x0, y1 + y0, y2 + y0, fit_basis) / sigma
+                    fmn = (
+                        form_basis_function(n, m, x1 + x0, x2 + x0, y1 + y0, y2 + y0, fit_basis)
+                        / sigma
+                    )
+                    if has_pair.any():
+                        fmn_pair = (
+                            form_basis_function(
+                                n, m, px1 + x0, px2 + x0, py1 + y0, py2 + y0, fit_basis
+                            )
+                            / psigma
+                        )
+                        fmn = np.where(has_pair, (fmn - fmn_pair) / 2.0, fmn)
                     A_cols = A_cols[:-2] + [fmn.real]
                     ncomp[-1] = 1
     else:  # gaussian — basis functions are always real
         for n, m in nms:
-            fmn = form_basis_function(
-                n, m, x1, x2, y1, y2, fit_basis,
-                ncycle=_ncycle, mcycle=_mcycle,
-                nepsilon=_nepsilon, mepsilon=_mepsilon,
-            ) / sigma
+            fmn = (
+                form_basis_function(
+                    n,
+                    m,
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    fit_basis,
+                    ncycle=_ncycle,
+                    mcycle=_mcycle,
+                    nepsilon=_nepsilon,
+                    mepsilon=_mepsilon,
+                )
+                / sigma
+            )
+            if has_pair.any():
+                fmn_pair = (
+                    form_basis_function(
+                        n,
+                        m,
+                        px1,
+                        px2,
+                        py1,
+                        py2,
+                        fit_basis,
+                        ncycle=_ncycle,
+                        mcycle=_mcycle,
+                        nepsilon=_nepsilon,
+                        mepsilon=_mepsilon,
+                    )
+                    / psigma
+                )
+                fmn = np.where(has_pair, (fmn - fmn_pair) / 2.0, fmn)
             A_cols.append(fmn)
             ncomp.append(1)
 
     A = np.array(A_cols).T  # (n_sensors, n_columns)
     if A.shape[1] > A.shape[0]:
-        printw(f"Fitting {A.shape[1]} basis functions with {A.shape[0]} sensors")
+        logger.warning("Fitting %d basis functions with %d sensors", A.shape[1], A.shape[0])
 
     # ── SVD of A (condition number + per-coefficient error bars) ──────────────
     U_a, w_a, Vh_a = np.linalg.svd(A)
@@ -343,7 +419,9 @@ def fit(
 
     # ── least-squares fit at every time slice ─────────────────────────────────
     _printv(" - Fitting signal")
-    b = (ds["signal"] / xr.DataArray(sigma, coords={"channel": ds["channel"]}, dims=("channel",))).values
+    b = (
+        ds["signal"] / xr.DataArray(sigma, coords={"channel": ds["channel"]}, dims=("channel",))
+    ).values
     x, residual, rank_fit, s_a = np.linalg.lstsq(A, b, rcond=1.0 / fit_cond)
     _printv(f" - Raw / effective condition number = {raw_cn:.3g} / {eff_cn:.3g}")
     fit_coeffs = np.asarray(x)  # (n_columns, n_time)
@@ -408,6 +486,7 @@ def fit(
         fit_mcycle=_mcycle,
         fit_neps=_nepsilon,
         fit_meps=_mepsilon,
+        n_paired=int(has_pair.sum()),
     )
     _condition_warning(raw_cn)
     return ds
@@ -416,6 +495,8 @@ def fit(
 def _condition_warning(K):
     """SLCONTOUR's K-thresholds (VISION S4.1): warn > 10, error > 20."""
     if K > 20:
-        printe(f"Condition number K = {K:.1f} > 20: fit is untrustworthy (under-resolved array).")
+        logger.error(
+            "Condition number K = %.1f > 20: fit is untrustworthy (under-resolved array).", K
+        )
     elif K > 10:
-        printw(f"Condition number K = {K:.1f} > 10: fit may be poorly resolved.")
+        logger.warning("Condition number K = %.1f > 10: fit may be poorly resolved.", K)

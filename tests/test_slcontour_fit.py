@@ -1,8 +1,8 @@
-"""SLCONTOUR basis-function corners (`_slcontour/fit.form_basis_function`).
+"""SLCONTOUR basis-function corners (`core/qs_fit.form_basis_function`).
 
 The `sinusoidal-integral` basis has hand-coded n=0 / m=0 special cases (division by
 deg2rad(dx)·in etc.) — exactly where a wrong limit hides. Pin them against the
-point basis. `_slcontour` is excluded from lint/typecheck but pytest still runs it.
+point basis.
 """
 
 from __future__ import annotations
@@ -11,8 +11,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from magnetics._slcontour.fit import fit, form_basis_function
-from magnetics._slcontour.omfit_compat import OMFITexception
+from magnetics.core.qs_fit import fit, form_basis_function
 
 
 def test_dc_basis_is_unity():
@@ -86,5 +85,5 @@ def test_fit_reports_covariance_diagonal_sigmas():
 
 
 def test_bad_basis_raises():
-    with pytest.raises(OMFITexception):
+    with pytest.raises(ValueError):
         form_basis_function(1, 0, 0.0, 1.0, 0.0, 1.0, fit_basis="not-a-basis")
