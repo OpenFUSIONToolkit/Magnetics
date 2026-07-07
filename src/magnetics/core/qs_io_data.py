@@ -82,8 +82,10 @@ def load_shot(shot, data_root=DATAFILE_ROOT, helicity=-1):
 
     :param shot: shot number (int/str) or a path to a ``shot_<n>.h5`` file.
     :param data_root: directory holding the ``shot_<n>.h5`` files.
-    :param helicity: field/current helicity convention used to orient mode signs
-        (default ``-1``; the new data files do not store it).
+    :param helicity: **fallback** helicity only. The real value (sign of Bt·Ip, used
+        to orient the poloidal-mode sign) is computed from the shot's own ``ip``/``bt``
+        traces; the default ``-1`` is used only when those are missing (the data files
+        do not store helicity directly).
     :return: :class:`ShotData` (``coupling`` is ``None`` — the new files carry no
         DC vacuum-coupling matrix).
     """
@@ -160,11 +162,27 @@ def _build_raw(names, sigs, times, geo, shot_no, device):
     return raw
 
 
+def _compute_helicity(sigs, fallback=-1):
+    """Field/current helicity = sign(median Bt) / sign(median Ip) (±1), from the shot's
+    own ``bt``/``ip`` traces (matches OMFIT ``init_magnetics``) — it orients the fitted
+    poloidal-mode sign. Returns ``fallback`` when either trace is absent or its median
+    sign is 0 (indeterminate)."""
+    if "bt" in sigs and "ip" in sigs:
+        sbt = np.sign(np.nanmedian(np.asarray(sigs["bt"], dtype=float)))
+        sip = np.sign(np.nanmedian(np.asarray(sigs["ip"], dtype=float)))
+        if sbt != 0 and sip != 0:
+            return int(sbt / sip)
+    return int(fallback)
+
+
 def _build_plasma(sigs, times, helicity):
-    """Assemble the ``plasma`` Dataset (Ip/Bt on a shared ms time base)."""
+    """Assemble the ``plasma`` Dataset (Ip/Bt on a shared ms time base).
+
+    The ``helicity`` attr is computed from the ``ip``/``bt`` medians
+    (:func:`_compute_helicity`); the ``helicity`` argument is only the fallback."""
     if not sigs:
         plasma = xr.Dataset(coords={"time": np.array([], dtype=float)})
-        plasma.attrs["helicity"] = int(helicity)
+        plasma.attrs["helicity"] = _compute_helicity(sigs, helicity)
         return plasma
 
     base = "ip" if "ip" in times else next(iter(times))
@@ -181,7 +199,7 @@ def _build_plasma(sigs, times, helicity):
         data_vars[var] = ("time", y)
 
     plasma = xr.Dataset(data_vars, coords={"time": t_ms})
-    plasma.attrs["helicity"] = int(helicity)
+    plasma.attrs["helicity"] = _compute_helicity(sigs, helicity)
     return plasma
 
 

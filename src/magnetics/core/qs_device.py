@@ -32,22 +32,16 @@ import xarray as xr
 from ..data import devices as _devices
 from ..data import diiid_geometry as _diiid_geo
 
-# ``data.devices.load_device`` resolves ``<name>.json`` by lowercasing the name; a few
-# display names don't slugify by lowercasing alone (``"DIII-D"`` → ``diiid.json``, not
-# ``diii-d.json``). Preserve the alias the old shim carried.
-_DEVICE_ALIAS = {"DIII-D": "diiid"}
-
-
-def _device_key(device: str) -> str:
-    """Map a device display name to its ``data/device/<key>.json`` stem."""
-    if device in _DEVICE_ALIAS:
-        return _DEVICE_ALIAS[device]
-    return re.sub(r"[^a-z0-9]", "", str(device).lower())
-
 
 def load_device(device: str = "DIII-D") -> dict:
-    """The parsed device JSON dict, via the data layer (with QS name aliasing)."""
-    return _devices.load_device(_device_key(device))
+    """The parsed device JSON dict, via the data layer's name/id resolver.
+
+    ``devices.resolve_device_id`` maps a display name (e.g. ``"DIII-D"``) or a config
+    id to the JSON file stem using each device file's ``name`` field — so no device
+    alias is hardcoded here. Falls back to a slugified name if it can't be resolved.
+    """
+    dev_id = _devices.resolve_device_id(device) or re.sub(r"[^a-z0-9]", "", str(device).lower())
+    return _devices.load_device(dev_id)
 
 
 # ── device-name comparison ─────────────────────────────────────────────────────
@@ -132,7 +126,9 @@ def sensor_geometry(device="DIII-D", shot=None):
     Base fields (``r, z, phi, tilt, length, delta_phi, na``, plus ``pair``) come from
     the data layer's shot-aware resolver (:func:`devices.geometry_nearest`); this
     function adds the derived poloidal angle ``theta`` and the sensor-end coordinates
-    ``{r,z,phi,theta}_end1/2`` that the SLCONTOUR fit needs. A sensor is modelled as a
+    ``{r,z,phi,theta}_end1/2`` that the SLCONTOUR fit needs, plus the paired sensor's
+    ``pair_{phi,theta,z}_end1/2`` (for the pairwise-difference basis; NaN when unpaired).
+    A sensor is modelled as a
     straight segment of physical ``length`` centred at ``(r, z)`` tilted by ``tilt``
     (degrees) in the poloidal plane and spanning ``delta_phi`` (degrees) toroidally;
     angles are measured about the magnetic axis at ``(R0, 0)``.
@@ -169,6 +165,20 @@ def sensor_geometry(device="DIII-D", shot=None):
     theta_end1 = np.degrees(np.arctan2(z_end1, r_end1 - R0))
     theta_end2 = np.degrees(np.arctan2(z_end2, r_end2 - R0))
 
+    # ── paired-sensor ends (for the SLCONTOUR pairwise-difference basis) ──────────
+    # A differential sensor (pair != "None") reports field(X) - field(pair); the fit
+    # differences the basis at X and at its pair. Resolve each channel's pair to its
+    # row and gather the pair's *_end1/2 here (NaN when unpaired/unresolved) so the
+    # pair geometry rides the normal geometry-attach path into the fit.
+    name_to_row = {c: i for i, c in enumerate(channels)}
+    pair_row = np.array([name_to_row.get(str(p), -1) if str(p) != "None" else -1 for p in pairs])
+
+    def _by_pair(arr):
+        out = np.full(len(channels), np.nan)
+        valid = pair_row >= 0
+        out[valid] = arr[pair_row[valid]]
+        return out
+
     ds = xr.Dataset(
         {
             **{k: ("channel", cols[k]) for k in base},
@@ -181,6 +191,12 @@ def sensor_geometry(device="DIII-D", shot=None):
             "phi_end2": ("channel", phi_end2),
             "theta_end1": ("channel", theta_end1),
             "theta_end2": ("channel", theta_end2),
+            "pair_phi_end1": ("channel", _by_pair(phi_end1)),
+            "pair_phi_end2": ("channel", _by_pair(phi_end2)),
+            "pair_theta_end1": ("channel", _by_pair(theta_end1)),
+            "pair_theta_end2": ("channel", _by_pair(theta_end2)),
+            "pair_z_end1": ("channel", _by_pair(z_end1)),
+            "pair_z_end2": ("channel", _by_pair(z_end2)),
         },
         coords={"channel": channels},
     )
