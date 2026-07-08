@@ -1,0 +1,101 @@
+name: Release
+
+# Build the wheel + sdist (GUI bundled), smoke-test the install, and publish to
+# PyPI on a version tag. `workflow_dispatch` runs the build + smoke test only
+# (no publish) so the pipeline can be exercised before a real release.
+#
+# Publishing uses PyPI Trusted Publishing (OIDC) — no API token. See
+# docs/RELEASING.md for the one-time publisher setup.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build + smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: gui/web/package-lock.json
+
+      - name: Build GUI (production, same-origin)
+        working-directory: gui/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Stage built GUI into the package
+        run: |
+          rm -rf src/magnetics/service/webapp
+          cp -r gui/web/dist src/magnetics/service/webapp
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Check tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          ver="$(uv version --short)"
+          if [ "v$ver" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match project version v$ver"
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Verify GUI + device data are bundled
+        run: |
+          set -euo pipefail
+          unzip -l dist/*.whl | grep -q "magnetics/service/webapp/index.html"
+          unzip -l dist/*.whl | grep -q "magnetics/data/device/diiid.json"
+          # uv builds the wheel from the sdist, so the sdist must carry the GUI too.
+          tar -tzf dist/*.tar.gz | grep -q "src/magnetics/service/webapp/index.html"
+
+      - name: Smoke test the wheel (fresh 3.12 venv, non-checkout cwd)
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 /tmp/smoke
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          /tmp/smoke/bin/python -c "import magnetics; print(magnetics.__version__)"
+          # Launch from /tmp so data_dir() uses the per-user fallback, not the checkout.
+          ( cd /tmp && /tmp/smoke/bin/magnetics --no-browser --port 8123 ) &
+          svc=$!
+          curl -fsS --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:8123/api/machines >/dev/null
+          curl -fsS http://127.0.0.1:8123/ | grep -qi "<title"
+          kill "$svc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing (OIDC)
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes
