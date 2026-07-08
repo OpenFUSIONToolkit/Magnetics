@@ -22,8 +22,18 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 export default function App() {
-  const { machines, machine, devices, device, tab, loadingMachines, init, setMachine, setDevice, setTab } =
-    useStore();
+  // Per-field selectors: subscribing to the whole store re-rendered the entire
+  // shell on every cursor scrub (setCursorMs); App doesn't read cursorMs.
+  const machines = useStore((s) => s.machines);
+  const machine = useStore((s) => s.machine);
+  const devices = useStore((s) => s.devices);
+  const device = useStore((s) => s.device);
+  const tab = useStore((s) => s.tab);
+  const loadingMachines = useStore((s) => s.loadingMachines);
+  const init = useStore((s) => s.init);
+  const setMachine = useStore((s) => s.setMachine);
+  const setDevice = useStore((s) => s.setDevice);
+  const setTab = useStore((s) => s.setTab);
   const removeMachine = useStore((s) => s.removeMachine);
   const clearMachines = useStore((s) => s.clearMachines);
 
@@ -41,6 +51,17 @@ export default function App() {
       setMachine(visibleMachines[0].id);
     }
   }, [device, machines, devices]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Honest data-source badge: a live backend with zero fetched shots still serves
+  // the mock machines, so key off the SELECTED machine's `mock` flag (from the
+  // backend), falling back to usingLiveBackend only when the flag is absent.
+  const selected = machines.find((m) => m.id === machine);
+  const mock = selected?.mock ?? !usingLiveBackend();
+  const badgeText = !mock
+    ? "● live backend"
+    : usingLiveBackend()
+      ? "○ demo data (no shots fetched)"
+      : "○ offline / demo";
 
   // Deletable = real fetched shots (mock demo machines have nothing on disk), scoped
   // to the visible device. Only offer delete controls against a live backend.
@@ -71,7 +92,7 @@ export default function App() {
         <span className="title">Magnetics</span>
         <span className="sub">3D magnetic-sensor analysis</span>
         <span className="spacer" />
-        <span className="badge">{usingLiveBackend() ? "● live backend" : "○ offline / demo"}</span>
+        <span className="badge">{badgeText}</span>
         <SettingsMenu />
       </header>
 
@@ -94,7 +115,7 @@ export default function App() {
         )}
         <div className="rail-section">
           <div className="rail-head">
-            <h3>Shot / machine</h3>
+            <h3 id="shot-list-label">Shot / machine</h3>
             {deletable.length > 0 && (
               <button className="rail-clear" title="Delete all fetched shots and their data"
                 onClick={() => void onClearAll()}>
@@ -103,34 +124,54 @@ export default function App() {
             )}
           </div>
           {loadingMachines && <div className="placeholder">loading…</div>}
-          {visibleMachines.map((m) => (
-            <div
-              key={m.id}
-              className={`machine-item${m.id === machine ? " active" : ""}`}
-              onClick={() => setMachine(m.id)}
-            >
-              <div className="machine-main">
-                <div className="id">{m.label}</div>
-                {m.note && <div className="note">{m.note}</div>}
+          <div role="listbox" aria-labelledby="shot-list-label">
+            {visibleMachines.map((m) => (
+              // role=option row (not a <button>, so the delete <button> can nest); keyboard-
+              // reachable via tabIndex + Enter/Space so the a11y listbox pattern still holds.
+              <div
+                key={m.id}
+                role="option"
+                aria-selected={m.id === machine}
+                tabIndex={0}
+                className={`machine-item${m.id === machine ? " active" : ""}`}
+                onClick={() => setMachine(m.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setMachine(m.id);
+                  }
+                }}
+              >
+                <div className="machine-main">
+                  <div className="id">{m.label}</div>
+                  {m.note && <div className="note">{m.note}</div>}
+                </div>
+                {!m.mock && usingLiveBackend() && (
+                  <button className="machine-del" title={`Delete ${m.label} and its data`}
+                    aria-label={`Delete ${m.label}`}
+                    onClick={(e) => { e.stopPropagation(); void onDelete(m.id, m.label); }}>
+                    ×
+                  </button>
+                )}
               </div>
-              {!m.mock && usingLiveBackend() && (
-                <button className="machine-del" title={`Delete ${m.label} and its data`}
-                  aria-label={`Delete ${m.label}`}
-                  onClick={(e) => { e.stopPropagation(); void onDelete(m.id, m.label); }}>
-                  ×
-                </button>
-              )}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </aside>
 
       <main className="main">
-        <div className="tabbar">
+        <div className="tabbar" role="tablist" aria-label="Analysis views">
           {TABS.map((t) => (
-            <div key={t.id} className={`tab${t.id === tab ? " active" : ""}`} onClick={() => setTab(t.id)}>
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={t.id === tab}
+              className={`tab${t.id === tab ? " active" : ""}`}
+              onClick={() => setTab(t.id)}
+            >
               {t.label}
-            </div>
+            </button>
           ))}
         </div>
         {!machine ? (

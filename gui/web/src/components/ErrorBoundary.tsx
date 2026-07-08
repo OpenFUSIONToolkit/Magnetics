@@ -48,6 +48,19 @@ export default class ErrorBoundary extends Component<Props, State> {
           <span style={{ opacity: 0.7 }}>
             Try a different shot or reload; other tabs are unaffected.
           </span>
+          <br />
+          <button
+            type="button"
+            onClick={() => this.setState({ error: null })}
+            style={{
+              marginTop: 10, padding: "4px 12px", cursor: "pointer",
+              background: "var(--panel-2)", color: "var(--text)",
+              border: "1px solid var(--border-2)", borderRadius: 4,
+              fontFamily: "inherit", fontSize: "inherit",
+            }}
+          >
+            Retry
+          </button>
         </div>
       );
     }

@@ -153,3 +153,16 @@ export const useStore = create<State>((set) => ({
     set({ fontScale: n });
   },
 }));
+
+// Keep the theme in sync across browser tabs: toggleTheme writes localStorage, so a
+// `storage` event fires in every OTHER tab — mirror it into the store + the DOM.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== THEME_KEY) return;
+    const next = e.newValue;
+    if (next === "light" || next === "dark") {
+      applyTheme(next);
+      useStore.setState({ theme: next });
+    }
+  });
+}

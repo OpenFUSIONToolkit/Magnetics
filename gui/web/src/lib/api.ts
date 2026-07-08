@@ -19,7 +19,11 @@ export interface MachineInfo {
   device: string; // "DIII-D" | "NSTX-U" | "synthetic"
   note?: string;
   synthetic?: boolean;
-  mock?: boolean; // true = built-in demo machine (no data on disk, not deletable)
+  /** Backend-supplied: true when this entry is mock/demo data (no real shot file,
+   *  nothing on disk, not deletable). A live backend with zero fetched shots still
+   *  serves mock machines, so the GUI keys its "live vs demo" badge off this, not
+   *  merely off having a backend URL. */
+  mock?: boolean;
 }
 
 /** List available machines/shots. */

@@ -2,7 +2,9 @@
 // QuasiStationaryTab so the index math is unit-testable (and can't throw and blank
 // the app on an empty/ragged grid).
 
-/** φ of peak |δBp| at each time column → one value per time. `y` is the φ axis. */
+/** φ of the maximum (signed) δBp at each time column → one value per time. `y` is
+ *  the φ axis. Signed (not |·|) argmax is intentional: it's the stable phase tracker
+ *  for a signed δBp contour. */
 export function phiPeak(z: number[][], y: number[]): number[] {
   const nCol = z[0]?.length ?? 0;
   if (!nCol || !y.length) return [];
