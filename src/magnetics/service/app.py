@@ -74,6 +74,28 @@ def machines():
     return real if real else mock.MACHINES
 
 
+@app.delete("/api/machines/{shot}")
+def delete_machine(shot: str) -> dict:
+    """Delete one shot's underlying HDF5 data and drop its cached analysis state.
+    Returns the removed file paths + the refreshed machine list. 404 if the shot
+    has no data files (e.g. a mock machine, which has nothing on disk)."""
+    removed = h5source.delete_shot(shot)
+    if not removed:
+        raise HTTPException(404, f"no data files for shot {shot}")
+    nodes.refresh()  # forget the shot's cached STFT / QS state now its data is gone
+    return {"shot": shot, "removed": removed, "machines": nodes.machines()}
+
+
+@app.delete("/api/machines")
+def delete_all_machines() -> dict:
+    """Delete ALL fetched shot data (the "clear all") and drop cached state.
+    Returns the removed paths + the (now real-shot-free) machine list."""
+    removed = h5source.delete_all_shots()
+    nodes.refresh()
+    real = nodes.machines()
+    return {"removed": removed, "machines": real if real else mock.MACHINES}
+
+
 @app.get("/api/devices")
 def devices():
     """List device configs (data/device/*.json) + their sensor-set names, so the GUI
@@ -87,19 +109,26 @@ def devices():
             d = json.loads(path.read_text())
         except Exception:  # noqa: BLE001 — skip an unparseable device file
             continue
+        if "name" not in d or "sensor_sets" not in d:
+            continue  # not a device file (e.g. kstar_mirnov_config.json)
+        conn = d.get("connection") or {}
         out.append(
             {
                 "id": path.stem,  # e.g. "diiid" → --device diiid
                 "name": d.get("name", path.stem),  # e.g. "DIII-D"
                 "default_shot": d.get("default_shot"),  # per-device example shot
                 "sensor_sets": list(d.get("sensor_sets", {}).keys()),
-                # `access` = "mdsplus_tree" for NSTX-style devices whose sensors live
-                # in an MDSplus tree: those pull ONLY via mdsthin + a named sensor_set
-                # (no cluster/remote path, no analysis→signal map). Lets the GUI adapt.
+                # `access` = "mdsplus_tree" for NSTX/KSTAR-style devices whose sensors
+                # live in an MDSplus tree: those pull ONLY via mdsthin + a named
+                # sensor_set (no cluster/remote path, no analysis→signal map).
                 "access": d.get("access", "ptdata"),
                 # remote (cluster) backend is available only when the device file has
-                # a network.cluster block (DIII-D omega); NSTX has none.
+                # a network.cluster block (DIII-D omega); NSTX/KSTAR have none.
                 "remote_capable": bool((d.get("network", {}) or {}).get("cluster")),
+                # a `connection` block means a device-specific VPN+SSH transport
+                # (KSTAR): the GUI collects creds + shows the site note.
+                "needs_ssh_creds": bool(d.get("connection")),
+                "connect_note": conn.get("note"),
             }
         )
     return out
@@ -134,9 +163,9 @@ def node_download(shot: str, node_id: str, request: Request):
     # raw stack trace — the HDF5 writer sits outside the block above, so guard it too.
     try:
         payload = export.node_to_hdf5(shot, node_id, n, params)
-    except Exception as e:  # noqa: BLE001 — serializer failure → clean 500, logged server-side
+    except Exception:  # noqa: BLE001 — serializer failure → clean 500, logged server-side
         logger.exception("HDF5 export failed for shot %s node %s", shot, node_id)
-        raise HTTPException(500, f"could not serialize node '{node_id}' to HDF5: {e}")
+        raise HTTPException(500, f"could not serialize node '{node_id}' to HDF5")
     filename = f"shot_{shot}_{node_id}.h5"
     return StreamingResponse(
         io.BytesIO(payload),
@@ -167,6 +196,10 @@ class FetchRequest(BaseModel):
     username: str | None = None
     password: str | None = None  # fed to ssh via askpass; localhost only, not stored
     duo: str | None = None  # Duo passcode, or "1" for push (default)
+    # KSTAR two-step auth: VPN login (username/password above) + a separate nkstar
+    # SSH login here. localhost only, not stored.
+    ssh_user: str | None = None
+    ssh_password: str | None = None
     # signal selection (None → fetcher defaults: device "diiid", analysis groups)
     device: str | None = None  # data/device/<device>.json
     sensor_set: str | None = None  # a set under the device's sensor_sets; overrides analysis
@@ -246,6 +279,8 @@ def post_fetch(req: FetchRequest) -> dict:
                 username=req.username,
                 password=req.password,
                 duo=req.duo,
+                ssh_user=req.ssh_user,
+                ssh_password=req.ssh_password,
                 tmin=req.tmin,
                 tmax=req.tmax,
                 decimate=req.decimate,
@@ -377,10 +412,18 @@ if _DIST is not None:
 
 
 def main() -> None:
-    """Console entry point: `uv run --extra service magnetics-service`."""
+    """Console entry point: `uv run --extra service magnetics-service`.
+
+    Honors ``HOST``/``PORT`` env vars (default 127.0.0.1:8000) so several checkouts
+    can run at once — ``run.sh`` auto-picks a free ``PORT`` and wires the GUI to it.
+    """
+    import os
+
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

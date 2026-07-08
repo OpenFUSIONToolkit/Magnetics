@@ -10,6 +10,16 @@ test("phiPeak picks the φ of the max |δBp| per time column", () => {
   expect(phiPeak(z, [10, 20])).toEqual([10, 20]);
 });
 
+test("phiPeak uses the SIGNED argmax, not |δBp| (negative-dominant column)", () => {
+  // z[φ][t]: column t=0 is all-negative — signed argmax picks the least-negative
+  // (-1 at φ=20), whereas an |·| argmax would wrongly pick -5 at φ=10.
+  const z = [
+    [-5, 0],
+    [-1, 0],
+  ];
+  expect(phiPeak(z, [10, 20])).toEqual([20, 10]);
+});
+
 test("phiRms computes RMS over φ per time column", () => {
   const z = [
     [3, 0],

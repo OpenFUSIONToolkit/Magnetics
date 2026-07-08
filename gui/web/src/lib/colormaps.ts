@@ -64,13 +64,15 @@ export const POWER_SEQUENTIAL: [number, string][] = [
 // Discrete palette for toroidal mode-number magnitude |n| = 0 … 6 (7 bins).
 // Folding the sign to |n| halves the categories, so the hues stay well-separated
 // (rotation direction lives in the signed phase fit, not this map). Index with |n|.
+// Warm → cool rainbow so the lowest coherent modes read hottest: 1 = red,
+// 2 = orange, 3 = yellow, then green/blue/purple. (0 = grey is "no mode".)
 export const MODE_PALETTE = [
   "#6b7785", // 0 — slate grey (no coherent mode)
-  "#4c9be8", // 1 — blue
-  "#3fb56b", // 2 — green
-  "#e8c84a", // 3 — gold
-  "#f08a3c", // 4 — orange
-  "#e0533d", // 5 — red
+  "#e0533d", // 1 — red
+  "#f08a3c", // 2 — orange
+  "#e8c84a", // 3 — gold / yellow
+  "#3fb56b", // 4 — green
+  "#4c9be8", // 5 — blue
   "#a86bd1", // 6 — purple
 ];
 

@@ -132,7 +132,27 @@ The rotating-mode view: spectrogram + toroidal-n coloring + a mode-number phase
 fit.
 
 **Params:** `array` (probe set), `fmin`,`fmax` (kHz), `tmin`,`tmax` (ms),
-`window` (FFT length), `t0` (slice for the phase fit).
+`window` (FFT length), `t0` (slice for the phase fit), `slice_duration` (s, FFT
+window → freq resolution), `smoothing`/`coherence_smooth` (coherence-estimation
+window, bins).
+
+**Denoise params** (spectrogram / 2-point n-map / n-spectrum — all share `_prep_spec`,
+so one gate thresholds every derived view on the same (t,f) grid; applied server-side
+via `core.spectral.denoise_spectrogram`):
+`denoise` (1/0 master flag), `coherence_min` (drop cells with γ² below this, 0 = off),
+`power_floor_k` (drop cells below k × the per-frequency floor; 0/absent = skip),
+`floor_percentile` (percentile over time defining that floor; 50 = median). The GUI's
+Power Gate slider maps to a percentile floor (`power_floor_k=1`, `floor_percentile=p`).
+Gated cells are returned as `null` in `power` so the heatmap renders them transparent.
+
+**Pre-smoothing params** (optional 2-D Gaussian applied *before* the gates, via
+`core.spectral.smooth_spectrogram` / `smooth_mode_spectrogram`, so contiguous coherent
+structure survives aggressive gating; feeds both the gate decision and the display):
+`smooth` (1/0 master flag), `smooth_t_cells` (σ along time, in grid cells), `smooth_f_cells`
+(σ along frequency, in grid cells). Off by default; `smooth=0` (or σ=0) is an exact no-op.
+σ is expressed directly in STFT grid cells (one cell = one (t, f) bin), so the blur spans the
+same number of neighbours at any resolution and can't collapse to a sub-bin no-op; the GUI
+shows the physical (ms/kHz) equivalent for the live grid.
 
 **`data`:**
 ```jsonc

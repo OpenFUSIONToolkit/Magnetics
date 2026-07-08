@@ -1,6 +1,6 @@
 """Quasi-stationary pipeline end-to-end, against the synthetic shot.
 
-Spans io_data → omfit_compat.sensor_geometry → prep → fit → qs_bridge → contracts
+Spans qs_io_data → qs_device.sensor_geometry → qs_prep → qs_fit → qs_bridge → contracts
 — the full SLCONTOUR path. This is the coverage that was missing when the
 segmented-schema geometry bug shipped: the geometry resolved to all-NaN, the fit's
 SVD never converged, but the only test touching the pipeline (`_fit_quality`)
@@ -20,13 +20,37 @@ def _all_finite_grid(node):
     return np.all(np.isfinite(z))
 
 
+def test_compute_helicity_from_ip_bt():
+    """Helicity = sign(median Bt)/sign(median Ip); fallback when a trace is missing or
+    its median sign is indeterminate."""
+    from magnetics.core.qs_io_data import _compute_helicity
+
+    assert _compute_helicity({"bt": np.array([-2.0, -2.1]), "ip": np.array([1e6, 1.1e6])}) == -1
+    assert _compute_helicity({"bt": np.array([2.0]), "ip": np.array([1e6])}) == 1
+    assert _compute_helicity({"bt": np.array([-2.0]), "ip": np.array([-1e6])}) == 1
+    assert _compute_helicity({}, fallback=-1) == -1
+    assert _compute_helicity({"ip": np.array([1e6])}, fallback=-1) == -1
+    assert _compute_helicity({"bt": np.array([0.0]), "ip": np.array([1e6])}, fallback=-1) == -1
+
+
+def test_pipeline_helicity_is_computed_not_defaulted(synthetic_shot):
+    """The synthetic shot has +Bt / +Ip, so the loaded plasma helicity is the computed
+    +1 — not the -1 fallback."""
+    from magnetics.core.qs_io_data import load_shot
+
+    sd = load_shot(synthetic_shot)
+    assert sd.plasma.attrs["helicity"] == 1
+
+
 def test_qs_fit_returns_a_finite_contour(synthetic_shot):
     node = nodes.build_node(synthetic_shot, "qs_fit")
     assert node["kind"] == "contour"
     assert _all_finite_grid(node), "qs_fit contour has non-finite cells (NaN geometry?)"
 
 
-@pytest.mark.parametrize("node_id", ["phi_t", "chi_sq_t", "amplitude", "phase_t"])
+@pytest.mark.parametrize(
+    "node_id", ["phi_t", "chi_sq_t", "amplitude", "phase_t", "svd_energy", "svd_condition"]
+)
 def test_qs_timeseries_are_finite(synthetic_shot, node_id):
     node = nodes.build_node(synthetic_shot, node_id)
     assert node["kind"] in ("contour", "line")
@@ -41,7 +65,7 @@ def test_sensor_geometry_extents_finite_for_synthetic_shot(synthetic_shot):
     """The direct regression guard: the QS geometry must not be NaN. Reverting
     omfit_compat.sensor_geometry to the flat `sensors[c]["r"]` read makes every
     extent NaN and this fails (as the fit's SVD then does)."""
-    from magnetics._slcontour import omfit_compat as oc
+    from magnetics.core import qs_device as oc
 
     geo = oc.sensor_geometry("DIII-D", shot=int(synthetic_shot))
     for coord in ("r_end1", "z_end1", "phi_end1", "theta_end1"):
@@ -55,6 +79,18 @@ def test_fit_quality_reports_a_real_fit_not_the_fallback(synthetic_shot):
     node = nodes.build_node(synthetic_shot, "fit_quality")
     labels = {f["label"] for f in node["fields"]}
     assert any("χ²" in lab or "chi" in lab.lower() for lab in labels), labels
+
+
+def test_bandpass_cutoff_changes_the_prepared_signal(synthetic_shot):
+    """cutoff_lo/cutoff_hi are already wired end to end (nodes.py -> qs_prep.prepare's
+    cutoff_hz); a narrower band should visibly change the filtered signal, not just be
+    accepted and ignored."""
+    wide = nodes._prep_qs_ds(synthetic_shot, {"cutoff_lo": "5.0", "cutoff_hi": "250.0"})
+    narrow = nodes._prep_qs_ds(synthetic_shot, {"cutoff_lo": "5.0", "cutoff_hi": "20.0"})
+    wide_signal = wide.prepared["signal"].values
+    narrow_signal = narrow.prepared["signal"].values
+    assert wide_signal.shape == narrow_signal.shape
+    assert not np.allclose(wide_signal, narrow_signal)
 
 
 def test_qs_fit_recovers_injected_mode_amplitudes(synthetic_shot):

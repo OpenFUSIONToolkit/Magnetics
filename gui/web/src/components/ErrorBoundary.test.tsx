@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import ErrorBoundary from "./ErrorBoundary";
 
@@ -27,4 +27,24 @@ test("renders children unchanged when nothing throws", () => {
     </ErrorBoundary>,
   );
   expect(screen.getByText("healthy panel")).toBeInTheDocument();
+});
+
+test("Retry clears the error and recovers in place when the child stops throwing", () => {
+  let shouldThrow = true;
+  function Flaky(): React.ReactElement {
+    if (shouldThrow) throw new Error("transient payload");
+    return <div>recovered panel</div>;
+  }
+  render(
+    <ErrorBoundary label="The test view">
+      <Flaky />
+    </ErrorBoundary>,
+  );
+  expect(screen.getByText(/failed to render/i)).toBeInTheDocument();
+
+  // The underlying condition is fixed; Retry should re-render children in place.
+  shouldThrow = false;
+  fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+  expect(screen.getByText("recovered panel")).toBeInTheDocument();
+  expect(screen.queryByText(/failed to render/i)).not.toBeInTheDocument();
 });

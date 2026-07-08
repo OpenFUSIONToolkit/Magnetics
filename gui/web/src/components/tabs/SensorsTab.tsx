@@ -107,7 +107,10 @@ export default function SensorsTab({ machine }: { machine: string }) {
   const wallSurface = dark ? "rgb(225,232,245)" : "rgb(70,90,110)";
   const wallSurfaceOpacity = dark ? 0.22 : 0.16;
 
-  const [showEq, setShowEq] = useState(true);
+  // Don't default the equilibrium overlay ON while its backend node doesn't exist
+  // (EQUILIBRIUM_BACKEND=false) — a checked box with a swatch that draws nothing reads
+  // as broken. Seed from the flag so it lights up automatically when the node lands.
+  const [showEq, setShowEq] = useState(EQUILIBRIUM_BACKEND);
   const [showVV, setShowVV] = useState(true);
   // Perturbation-coil overlay — device-agnostic, driven entirely by meta.coils
   // (whatever coil sets the device config supplies); on by default.
@@ -366,19 +369,21 @@ export default function SensorsTab({ machine }: { machine: string }) {
       {loading && <div className="placeholder">loading geometry…</div>}
       {noData ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
-                      color: "var(--text-dim)", fontSize: 12, lineHeight: 1.6 }}>
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>Sensor visualization unavailable.</strong><br />
           The HDF5 file for this shot has not been fetched yet.<br />
           Use the <strong>pull panel</strong> in the left sidebar to fetch the data.
         </div>
       ) : error ? (
         <div className="placeholder">geometry unavailable: {error}</div>
+      ) : !loading && !meta ? (
+        <div className="placeholder">No sensor layout for this shot&rsquo;s geometry.</div>
       ) : null}
 
       {meta && (
         <>
           {/* Sensor-set selection, grouped by kind. Check any sets to show them. */}
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: 13 }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", margin: "0 0 12px", fontSize: "calc(13px * var(--font-scale))" }}>
             {KINDS.map((kind) => {
               const ks = sets.filter((s) => s.kind === kind);
               if (!ks.length) return null;
@@ -401,10 +406,15 @@ export default function SensorsTab({ machine }: { machine: string }) {
             })}
             <div style={{ minWidth: 150 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Overlays</div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input type="checkbox" checked={showEq} onChange={() => setShowEq((v) => !v)} />
+              <label style={{
+                display: "flex", alignItems: "center", gap: 6,
+                cursor: EQUILIBRIUM_BACKEND ? "pointer" : "not-allowed",
+                opacity: EQUILIBRIUM_BACKEND ? 1 : 0.5,
+              }}>
+                <input type="checkbox" checked={showEq} disabled={!EQUILIBRIUM_BACKEND}
+                  onChange={() => setShowEq((v) => !v)} />
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: "#2ee6cf", display: "inline-block" }} />
-                equilibrium
+                {EQUILIBRIUM_BACKEND ? "equilibrium" : "equilibrium (coming soon)"}
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={showVV} onChange={() => setShowVV((v) => !v)} />

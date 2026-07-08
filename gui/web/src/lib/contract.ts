@@ -40,7 +40,7 @@ export interface HeatmapNode {
   kind: "heatmap";
   x: number[];
   y: number[];
-  z: number[][];
+  z: (number | null)[][]; // gated cells (denoise) are null → rendered as gaps
   axes: Axes;
   discrete?: boolean; // true → mode-number palette; false → continuous (log power)
   zrange?: [number, number];
