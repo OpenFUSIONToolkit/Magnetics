@@ -82,7 +82,7 @@ frontend (its `dist/` is staged into `service/webapp/` for the wheel).
 - **Verify GUI behavior changes with Playwright.** When a change affects the frontend's *behavior*
   (control state/defaults, data flow, what renders, error handling) — not just styling — drive the
   running app with Playwright and assert the actual DOM/behavior, rather than relying on `tsc` or
-  unit tests alone. Start the app (`./run.sh`), then script the interaction (e.g. select a device,
+  unit tests alone. Start the app (`./run-dev.sh`), then script the interaction (e.g. select a device,
   read back the control values / node responses). This is how the NSTX device-aware `PullControl`
   and the live pull were validated.
 - **Run the CI gates locally before committing frontend/typing changes:** `uv run ty check src/magnetics`

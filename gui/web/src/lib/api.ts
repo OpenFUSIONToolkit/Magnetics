@@ -2,8 +2,10 @@
 // from a mock fixture or a live Python/FastAPI service — it asks for a named node
 // on a machine and gets a `kind`-tagged result back.
 //
-//   VITE_API_BASE unset  → static MOCK JSON in public/mock/  (default; no backend)
-//   VITE_API_BASE=http://127.0.0.1:8000 → live FastAPI service (the real source)
+//   VITE_API_BASE=http://127.0.0.1:8000 → explicit live FastAPI service (run-dev.sh live)
+//   unset, production build (`vite build`) → same-origin: "" → relative /api/… URLs
+//       (the service serves the GUI on one port; this is the packaged/`magnetics` app)
+//   unset, dev server (`vite`)            → static MOCK JSON in public/mock/ (run-dev.sh static)
 //
 // IMPORTANT: the files in public/mock/ are TEST FIXTURES ONLY — fake data so we
 // can build and test the GUI before the Python module + data connectors exist.
@@ -11,7 +13,14 @@
 // from disk. The mock path is purely a stand-in until those connectors are wired.
 import type { Node } from "./contract";
 
-const API_BASE = import.meta.env.VITE_API_BASE as string | undefined;
+// An explicit VITE_API_BASE wins (trailing slashes trimmed so we never build
+// `//api/…`). Otherwise a production build defaults to same-origin ("" → relative
+// URLs), while the dev server stays in mock mode (undefined). Note "" is a valid
+// LIVE base, so every live-vs-mock check below tests `LIVE`, never truthiness.
+const explicit = import.meta.env.VITE_API_BASE as string | undefined;
+const API_BASE: string | undefined =
+  explicit !== undefined ? explicit.replace(/\/+$/, "") : import.meta.env.PROD ? "" : undefined;
+const LIVE = API_BASE !== undefined;
 
 export interface MachineInfo {
   id: string; // shot number or synthetic id, as a string
@@ -28,7 +37,7 @@ export interface MachineInfo {
 
 /** List available machines/shots. */
 export async function fetchMachines(): Promise<MachineInfo[]> {
-  const url = API_BASE ? `${API_BASE}/api/machines` : `${base()}mock/machines.json`;
+  const url = LIVE ? `${API_BASE}/api/machines` : `${base()}mock/machines.json`;
   return getJSON<MachineInfo[]>(url);
 }
 
@@ -42,13 +51,13 @@ export async function fetchNode(
   nodeId: string,
   params?: Record<string, string | number>,
 ): Promise<Node> {
-  const url = API_BASE
+  const url = LIVE
     ? `${API_BASE}/api/node/${machine}/${nodeId}${qs(params)}`
     : `${base()}mock/${machine}/${nodeId}.json`;
   return getJSON<Node>(url);
 }
 
-export const usingLiveBackend = (): boolean => !!API_BASE;
+export const usingLiveBackend = (): boolean => LIVE;
 
 /** URL for the per-node HDF5 data export (GET /api/node/.../download), or null
  *  without a live backend (the static mock fixtures have no serializer). The same
@@ -58,7 +67,7 @@ export function nodeDownloadUrl(
   nodeId: string,
   params?: Record<string, string | number>,
 ): string | null {
-  if (!API_BASE) return null;
+  if (!LIVE) return null;
   return `${API_BASE}/api/node/${machine}/${nodeId}/download${qs(params)}`;
 }
 
@@ -74,7 +83,7 @@ export interface ChannelUsage {
 /** Which pointnames each analysis consumes for a shot; null without a live backend
  *  (the static mock has no channel introspection). */
 export async function fetchChannelUsage(shot: string): Promise<ChannelUsage | null> {
-  if (!API_BASE) return null;
+  if (!LIVE) return null;
   return getJSON<ChannelUsage>(`${API_BASE}/api/channels/${shot}`);
 }
 
@@ -111,7 +120,7 @@ export interface DeviceInfo {
 /** List available device configs + their sensor-set names (GET /api/devices).
  * Empty when no live backend or no device files. */
 export async function fetchDevices(): Promise<DeviceInfo[]> {
-  if (!API_BASE) return [];
+  if (!LIVE) return [];
   try {
     return await getJSON<DeviceInfo[]>(`${API_BASE}/api/devices`);
   } catch {
@@ -119,7 +128,10 @@ export async function fetchDevices(): Promise<DeviceInfo[]> {
   }
 }
 
-/** The live backend's base URL (for building an EventSource), or undefined. */
+/** The live backend's base URL for building request/EventSource URLs: "" means
+ *  same-origin (relative URLs), a full URL means an explicit backend, and
+ *  undefined means no live backend (mock mode). Prefer `usingLiveBackend()` for
+ *  a live-vs-mock check — "" is a valid live base and would fail a truthiness test. */
 export function apiBase(): string | undefined {
   return API_BASE;
 }
@@ -127,7 +139,7 @@ export function apiBase(): string | undefined {
 /** Start a live pull in the background; returns a job_id. Stream its progress at
  * `${apiBase()}/api/fetch/{job_id}/stream`. Requires a live backend. */
 export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
-  if (!API_BASE) throw new Error("set VITE_API_BASE to pull live data");
+  if (!LIVE) throw new Error("no live backend (run the packaged app or set VITE_API_BASE)");
   const res = await fetch(`${API_BASE}/api/fetch`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -140,14 +152,14 @@ export async function startFetch(body: FetchBody): Promise<{ job_id: string }> {
 /** Delete one shot's underlying data files from the backend. Requires a live
  * backend (there is nothing to delete against the static mock). */
 export async function deleteMachine(shot: string): Promise<void> {
-  if (!API_BASE) throw new Error("set VITE_API_BASE to manage live data");
+  if (!LIVE) throw new Error("no live backend (run the packaged app or set VITE_API_BASE)");
   const res = await fetch(`${API_BASE}/api/machines/${shot}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete failed (${res.status}): ${await res.text()}`);
 }
 
 /** Delete ALL fetched shot data (the "clear all"). Requires a live backend. */
 export async function deleteAllMachines(): Promise<void> {
-  if (!API_BASE) throw new Error("set VITE_API_BASE to manage live data");
+  if (!LIVE) throw new Error("no live backend (run the packaged app or set VITE_API_BASE)");
   const res = await fetch(`${API_BASE}/api/machines`, { method: "DELETE" });
   if (!res.ok) throw new Error(`clear failed (${res.status}): ${await res.text()}`);
 }

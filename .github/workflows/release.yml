@@ -1,0 +1,71 @@
+name: Release
+
+# Build the wheel + sdist (GUI bundled), smoke-test the install, and publish to
+# PyPI on a version tag. `workflow_dispatch` runs the build + smoke test only
+# (no publish) so the pipeline can be exercised before a real release.
+#
+# Publishing uses PyPI Trusted Publishing (OIDC) — no API token. See
+# docs/RELEASING.md for the one-time publisher setup.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build + smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: gui/web/package-lock.json
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Check tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          ver="$(uv version --short)"
+          if [ "v$ver" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match project version v$ver"
+            exit 1
+          fi
+
+      # Build GUI → stage → sdist+wheel → verify bundle → smoke-test the wheel.
+      # Same script developers run locally, so the two can't drift.
+      - name: Build + smoke test the distribution
+        run: scripts/build-dist.sh --smoke
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing (OIDC)
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes

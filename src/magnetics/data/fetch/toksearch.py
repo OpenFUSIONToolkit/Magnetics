@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import os
 import socket
 import subprocess
 import sys
@@ -1337,8 +1338,10 @@ def fetch_shot(
             except ImportError:
                 backend = "mdsthin"
 
-    # Default output lives under data/datafile/; honor an explicit --out as given.
-    out_path = Path(out) if out else DATA_DIR / f"shot_{shot}.h5"
+    # Default output lives under <data dir>/datafile/; honor an explicit --out as
+    # given. Recomputed here (not the import-time DATA_DIR) so a late
+    # $MAGNETICS_DATA_DIR / --data-dir override still lands in the right place.
+    out_path = Path(out) if out else h5source.data_dir() / "datafile" / f"shot_{shot}.h5"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out = str(out_path)
 
@@ -1654,6 +1657,12 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--out", default=None, help="output .h5 (default shot_<n>.h5)")
     ap.add_argument(
+        "--data-dir",
+        default=None,
+        help="shot data directory (sets MAGNETICS_DATA_DIR for this run; overrides "
+        "the per-user default). On a cluster, point this at scratch/project space.",
+    )
+    ap.add_argument(
         "--force",
         action="store_true",
         help="re-pull every signal even if an existing shot file "
@@ -1685,6 +1694,11 @@ def main(argv=None) -> int:
         "toksearch_env's python; no module load / conda activate)",
     )
     args = ap.parse_args(argv)
+
+    # --data-dir wins over the environment for this run; set it before any code
+    # resolves h5source.data_dir() so the shot lands in the requested directory.
+    if args.data_dir:
+        os.environ["MAGNETICS_DATA_DIR"] = str(Path(args.data_dir).expanduser().resolve())
 
     fetch_shot(
         args.shot,
