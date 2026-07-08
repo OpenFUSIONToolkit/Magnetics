@@ -14,10 +14,12 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import threading
 import time
 import webbrowser
+from pathlib import Path
 
 
 def _free_port(host: str, start: int = 8000, tries: int = 100) -> int:
@@ -52,7 +54,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not open a web browser (e.g. headless server)",
     )
+    ap.add_argument(
+        "--data-dir",
+        default=None,
+        help="shot data directory (sets MAGNETICS_DATA_DIR for this run; overrides "
+        "the per-user default). On a cluster, point this at scratch/project space.",
+    )
     args = ap.parse_args(argv)
+
+    # --data-dir wins over the environment for this run. Set it before importing
+    # the service, which resolves h5source.data_dir() during import.
+    if args.data_dir:
+        os.environ["MAGNETICS_DATA_DIR"] = str(Path(args.data_dir).expanduser().resolve())
 
     # Deferred so `magnetics --help` stays fast and needs no heavy imports.
     import uvicorn

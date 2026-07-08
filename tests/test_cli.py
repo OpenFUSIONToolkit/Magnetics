@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 
 import pytest
@@ -40,6 +41,23 @@ def test_help_exits_clean(capsys):
 def test_data_dir_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("MAGNETICS_DATA_DIR", str(tmp_path / "shots"))
     assert h5source.data_dir() == (tmp_path / "shots").resolve()
+
+
+def test_fetch_cli_data_dir_sets_env(tmp_path, monkeypatch):
+    # `magnetics-fetch --data-dir X` must set MAGNETICS_DATA_DIR before fetching so
+    # the shot lands in X. Stub fetch_shot so we assert the env without a real pull.
+    from magnetics.data.fetch import toksearch
+
+    monkeypatch.delenv("MAGNETICS_DATA_DIR", raising=False)
+    seen = {}
+
+    def fake_fetch_shot(*args, **kwargs):
+        seen["data_dir"] = os.environ.get("MAGNETICS_DATA_DIR")
+
+    monkeypatch.setattr(toksearch, "fetch_shot", fake_fetch_shot)
+    toksearch.main(["--shot", "1", "--data-dir", str(tmp_path / "scratch")])
+    assert seen["data_dir"] == str((tmp_path / "scratch").resolve())
+    assert h5source.data_dir() == (tmp_path / "scratch").resolve()
 
 
 def test_data_dir_source_checkout(monkeypatch):
