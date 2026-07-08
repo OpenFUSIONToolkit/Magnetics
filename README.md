@@ -62,6 +62,19 @@ scripts/build-dist.sh         # build the distributable wheel + sdist (GUI bundl
 scripts/build-dist.sh --smoke # …and smoke-test the wheel in a clean venv
 ```
 
+### Running a built wheel in isolation
+
+To try a freshly built wheel the way an end user would — in a throwaway
+environment that touches neither your `.venv` nor the repo's `data/` — run it with
+`uvx --from` (the installed package lives in uv's cache, so it uses the per-user
+data dir, not this checkout):
+
+```sh
+uvx --from ./dist/magnetics-*.whl magnetics
+uvx --from ./dist/magnetics-*.whl magnetics --data-dir "$(mktemp -d)"  # touch nothing persistent
+uvx --reinstall --from ./dist/magnetics-*.whl magnetics                # after a rebuild at the same version
+```
+
 ### Layout
 
 - `src/magnetics/core/` — pure, device-agnostic analysis (e.g. `spectral.py`).
