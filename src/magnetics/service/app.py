@@ -412,7 +412,7 @@ if _DIST is not None:
 
 
 def main() -> None:
-    """Console entry point: `uv run --extra service magnetics-service`.
+    """Console entry point: `uv run magnetics-service` (or `magnetics-service`).
 
     Honors ``HOST``/``PORT`` env vars (default 127.0.0.1:8000) so several checkouts
     can run at once — ``run.sh`` auto-picks a free ``PORT`` and wires the GUI to it.

@@ -31,7 +31,7 @@ case "$MODE" in
 
   --live|live|"")
     echo "▶ syncing Python deps (uv)…"
-    uv sync --extra service --quiet
+    uv sync --quiet
     # Auto-pick a free backend port (prefer 8000) so several checkouts can run at
     # once without colliding. Vite already auto-picks a free GUI port; we just wire
     # the GUI to whichever backend port we grabbed. Override with `PORT=NNNN ./run.sh`.
@@ -60,7 +60,7 @@ else:  # everything 8000-8099 busy — let the OS pick any free port
 PY
 )}"
     echo "▶ starting service (:$PORT) + GUI dev server (Vite auto-port)…"
-    PORT="$PORT" uv run --extra service magnetics-service &
+    PORT="$PORT" uv run magnetics-service &
     SERVICE_PID=$!
     ( cd gui/web && VITE_API_BASE="http://127.0.0.1:$PORT" npm run dev ) &
     GUI_PID=$!
@@ -73,7 +73,7 @@ PY
 
   --prod|prod)
     echo "▶ syncing Python deps (uv)…"
-    uv sync --extra service --quiet
+    uv sync --quiet
     echo "▶ building GUI…"
     ( cd gui/web && npm run build )
     echo "▶ staging built GUI into the package (magnetics/service/webapp)…"
@@ -82,7 +82,7 @@ PY
     echo ""
     echo "  ✓ open  http://127.0.0.1:8000   (single origin — GUI served on one port)"
     echo ""
-    exec uv run --extra service magnetics-service
+    exec uv run magnetics-service
     ;;
 
   *)

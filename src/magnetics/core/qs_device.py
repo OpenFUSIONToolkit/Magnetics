@@ -116,7 +116,7 @@ def resolve_channel_filter(channel_filter, device="DIII-D"):
 def _to_float(s):
     try:
         return float(s)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return float("nan")
 
 
@@ -219,7 +219,7 @@ def load_wall(device="DIII-D", shot=None):
     """
     try:
         dev = load_device(device)
-    except FileNotFoundError, OSError, ValueError:
+    except (FileNotFoundError, OSError, ValueError):
         return None, None
     fw = _devices.feature_at(dev, "first_wall", 0 if shot is None else int(shot))
     if not fw or "r" not in fw or "z" not in fw:

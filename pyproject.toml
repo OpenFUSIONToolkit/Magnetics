@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Matthew Pharr", email = "m.pharr@protonmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     # data-reading (Slow Rollers' shot loaders / Data layer)
     "h5netcdf>=1.8.1",
@@ -16,13 +16,12 @@ dependencies = [
     "matplotlib>=3.11.0",
     "numpy>=2.4.6",
     "scipy>=1.18.0",
-]
-
-# Web deps stay optional so the library imports cleanly for notebook users.
-[project.optional-dependencies]
-service = [
+    # web service + one-command launcher (bundled GUI). Core deps so a plain
+    # `pip install magnetics` can run the GUI with no extras.
     "fastapi>=0.138.0",
     "uvicorn[standard]>=0.49.0",
+    # per-user data dir for installed (non-checkout) runs; see data/h5source.py
+    "platformdirs>=4",
 ]
 
 [build-system]
@@ -42,9 +41,13 @@ dev = [
     "httpx>=0.28.1",
 ]
 
-# Run the mock service:  uv run --extra service magnetics-service
 [project.scripts]
+# One-command launcher: start the service and open the bundled GUI in a browser.
+magnetics = "magnetics.cli:main"
+# Start just the service (honors HOST/PORT env vars); kept for compatibility.
 magnetics-service = "magnetics.service.app:main"
+# Fetch a shot to the local data dir (the toksearch/mdsthin CLI).
+magnetics-fetch = "magnetics.data.fetch.toksearch:main"
 
 [tool.ruff]
 line-length = 100  # target version is inferred from requires-python

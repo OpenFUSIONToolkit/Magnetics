@@ -349,7 +349,7 @@ def fit(
                     wtest = np.linalg.svd(np.array(A_cols).T, compute_uv=False)
                     if np.abs(wtest[0] / wtest[-1]) > 1e19:
                         raise ValueError("Bad sensor distribution")
-                except ValueError, np.linalg.LinAlgError:
+                except (ValueError, np.linalg.LinAlgError):
                     logger.error(" - Ill-conditioned mode (%s,%s); fitting single component", n, m)
                     x0 = x1[0] + delta_degrees(x1[0], x2[0]) / 2.0
                     y0 = y1[0] + delta_degrees(y1[0], y2[0]) / 2.0

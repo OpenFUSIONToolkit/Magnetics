@@ -38,7 +38,7 @@ def _num_array(values) -> np.ndarray:
 
     try:
         return np.asarray(np.vectorize(_f, otypes=[float])(arr), dtype=float)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return arr  # ragged / non-numeric — let h5py store what it can
 
 
@@ -153,7 +153,7 @@ def node_to_hdf5(shot: str, node_id: str, node: dict, params: dict | None = None
         with h5py.File(buf, "w") as h5:
             _fill(h5)
         return buf.getvalue()
-    except ValueError, OSError:
+    except (ValueError, OSError):
         with tempfile.NamedTemporaryFile(suffix=".h5") as tmp:
             with h5py.File(tmp.name, "w") as h5:
                 _fill(h5)

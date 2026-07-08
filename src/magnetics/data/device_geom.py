@@ -53,7 +53,7 @@ _THETA_BY_ARRAY = {
 def _shot_int(shot) -> int | None:
     try:
         return int(shot)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 
