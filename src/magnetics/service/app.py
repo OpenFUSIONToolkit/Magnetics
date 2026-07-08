@@ -395,7 +395,7 @@ def _webapp_dir() -> Path | None:
 
     Prefers the copy bundled as package data (``magnetics/service/webapp/``,
     staged from gui/web/dist at build time) so an installed wheel serves the app;
-    falls back to the repo's gui/web/dist for a source checkout (run.sh --prod).
+    falls back to the repo's gui/web/dist for a source checkout (run-dev.sh --prod).
     """
     bundled = resources.files("magnetics.service") / "webapp"
     if (bundled / "index.html").is_file():
@@ -415,7 +415,7 @@ def main() -> None:
     """Console entry point: `uv run magnetics-service` (or `magnetics-service`).
 
     Honors ``HOST``/``PORT`` env vars (default 127.0.0.1:8000) so several checkouts
-    can run at once — ``run.sh`` auto-picks a free ``PORT`` and wires the GUI to it.
+    can run at once — ``run-dev.sh`` auto-picks a free ``PORT`` and wires the GUI to it.
     """
     import os
 

@@ -24,17 +24,6 @@ jobs:
           cache: npm
           cache-dependency-path: gui/web/package-lock.json
 
-      - name: Build GUI (production, same-origin)
-        working-directory: gui/web
-        run: |
-          npm ci
-          npm run build
-
-      - name: Stage built GUI into the package
-        run: |
-          rm -rf src/magnetics/service/webapp
-          cp -r gui/web/dist src/magnetics/service/webapp
-
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -48,29 +37,10 @@ jobs:
             exit 1
           fi
 
-      - name: Build sdist + wheel
-        run: uv build
-
-      - name: Verify GUI + device data are bundled
-        run: |
-          set -euo pipefail
-          unzip -l dist/*.whl | grep -q "magnetics/service/webapp/index.html"
-          unzip -l dist/*.whl | grep -q "magnetics/data/device/diiid.json"
-          # uv builds the wheel from the sdist, so the sdist must carry the GUI too.
-          tar -tzf dist/*.tar.gz | grep -q "src/magnetics/service/webapp/index.html"
-
-      - name: Smoke test the wheel (fresh 3.12 venv, non-checkout cwd)
-        run: |
-          set -euo pipefail
-          uv venv --python 3.12 /tmp/smoke
-          uv pip install --python /tmp/smoke/bin/python dist/*.whl
-          /tmp/smoke/bin/python -c "import magnetics; print(magnetics.__version__)"
-          # Launch from /tmp so data_dir() uses the per-user fallback, not the checkout.
-          ( cd /tmp && /tmp/smoke/bin/magnetics --no-browser --port 8123 ) &
-          svc=$!
-          curl -fsS --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:8123/api/machines >/dev/null
-          curl -fsS http://127.0.0.1:8123/ | grep -qi "<title"
-          kill "$svc"
+      # Build GUI → stage → sdist+wheel → verify bundle → smoke-test the wheel.
+      # Same script developers run locally, so the two can't drift.
+      - name: Build + smoke test the distribution
+        run: scripts/build-dist.sh --smoke
 
       - uses: actions/upload-artifact@v4
         with:

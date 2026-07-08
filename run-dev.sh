@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# One command to run the GUI.
+# One command to run the GUI for DEVELOPMENT.
 #
 # DEFAULT is LIVE: the GUI talks to the real FastAPI service, and NO mock data is
 # served or renderable in this mode. The rotating-mode (MODESPEC) path serves real
 # analysis from fetched shots; the quasi-stationary fit stream is still a stub. Use
 # `static` only for offline frontend work against the demo fixtures.
 #
-#   ./run.sh           live    — FastAPI service (:8000) + GUI (:5173) against it (default)
-#   ./run.sh static    demo    — GUI on :5173 only, STATIC mock fixtures (no backend)
-#   ./run.sh --prod    deploy  — build the GUI and serve it on one port (:8000)
+#   ./run-dev.sh           live    — FastAPI service (:8000) + GUI (:5173) against it (default)
+#   ./run-dev.sh static    demo    — GUI on :5173 only, STATIC mock fixtures (no backend)
+#   ./run-dev.sh --prod    deploy  — build the GUI and serve it on one port (:8000)
+#
+# To build a distributable wheel/sdist (not just preview it), use scripts/build-dist.sh.
 #
 # Press Ctrl-C to stop. Prereqs: Node.js 22 + uv (uv only needed for live/--prod).
 
@@ -34,7 +36,7 @@ case "$MODE" in
     uv sync --quiet
     # Auto-pick a free backend port (prefer 8000) so several checkouts can run at
     # once without colliding. Vite already auto-picks a free GUI port; we just wire
-    # the GUI to whichever backend port we grabbed. Override with `PORT=NNNN ./run.sh`.
+    # the GUI to whichever backend port we grabbed. Override with `PORT=NNNN ./run-dev.sh`.
     PORT="${PORT:-$(python3 - <<'PY'
 import socket
 
@@ -86,7 +88,7 @@ PY
     ;;
 
   *)
-    echo "usage: ./run.sh [live | static | --prod]" >&2
+    echo "usage: ./run-dev.sh [live | static | --prod]" >&2
     exit 2
     ;;
 esac

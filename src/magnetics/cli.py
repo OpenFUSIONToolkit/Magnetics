@@ -2,7 +2,7 @@
 
 `magnetics` starts the FastAPI service (which serves the bundled GUI on a single
 origin) and opens it in the default web browser. This is the counterpart to the
-developer `run.sh` flow, but needs no Node/dev stack — the GUI is shipped inside
+developer `run-dev.sh` flow, but needs no Node/dev stack — the GUI is shipped inside
 the wheel (see ``service.app._webapp_dir``).
 
 Examples:
@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 def _free_port(host: str, start: int = 8000, tries: int = 100) -> int:
-    """First free TCP port at/above ``start`` on ``host`` (matches run.sh)."""
+    """First free TCP port at/above ``start`` on ``host`` (matches run-dev.sh)."""
     for port in range(start, start + tries):
         with socket.socket() as s:
             try:

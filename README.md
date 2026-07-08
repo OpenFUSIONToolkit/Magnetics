@@ -54,9 +54,12 @@ The Python project is the repo root (a uv project); the React GUI is in `gui/web
 ```sh
 uv sync --group dev
 uv run nbstripout --install   # strip notebook outputs on commit (run once per clone)
-./run.sh                      # live: FastAPI service + GUI dev server (hot reload)
-./run.sh static               # GUI only, static mock fixtures (offline frontend work)
-./run.sh --prod               # build the GUI and serve it on one port (like the wheel)
+./run-dev.sh                  # live: FastAPI service + GUI dev server (hot reload)
+./run-dev.sh static           # GUI only, static mock fixtures (offline frontend work)
+./run-dev.sh --prod           # build the GUI and serve it on one port (preview the wheel)
+
+scripts/build-dist.sh         # build the distributable wheel + sdist (GUI bundled) into dist/
+scripts/build-dist.sh --smoke # …and smoke-test the wheel in a clean venv
 ```
 
 ### Layout

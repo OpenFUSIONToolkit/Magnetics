@@ -2,10 +2,10 @@
 // from a mock fixture or a live Python/FastAPI service — it asks for a named node
 // on a machine and gets a `kind`-tagged result back.
 //
-//   VITE_API_BASE=http://127.0.0.1:8000 → explicit live FastAPI service (run.sh live)
+//   VITE_API_BASE=http://127.0.0.1:8000 → explicit live FastAPI service (run-dev.sh live)
 //   unset, production build (`vite build`) → same-origin: "" → relative /api/… URLs
 //       (the service serves the GUI on one port; this is the packaged/`magnetics` app)
-//   unset, dev server (`vite`)            → static MOCK JSON in public/mock/ (run.sh static)
+//   unset, dev server (`vite`)            → static MOCK JSON in public/mock/ (run-dev.sh static)
 //
 // IMPORTANT: the files in public/mock/ are TEST FIXTURES ONLY — fake data so we
 // can build and test the GUI before the Python module + data connectors exist.
