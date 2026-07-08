@@ -20,17 +20,20 @@ export default function PullControl() {
   const setDevice = useStore((s) => s.setDevice);
   const [shot, setShot] = useState("184927");
   const [analysis, setAnalysis] = useState("rotating");
-  // Default to the fast cluster path. `mdsthin` (laptop tunnel) streams raw float
-  // over the SSH tunnel — minutes; `remote` fetches on the cluster and ships back a
-  // compressed h5 — tens of seconds. Users without cluster access pick mdsthin.
-  const [backend, setBackend] = useState("remote");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  // Duo two-factor for the flux gateway (DIII-D / NSTX): either a push (sends "1")
-  // or a typed passcode — offered as a dropdown. A KSTAR/KFE VPN pull has no push, so
-  // its 2FA is always a typed passcode (the dropdown is hidden for that device).
-  const [duoMode, setDuoMode] = useState<"push" | "passcode">("push");
-  const [duoPasscode, setDuoPasscode] = useState("");
+  // Backend + creds live in the store so the QS custom-signal panel reuses them
+  // (entered once). `mdsthin` (laptop tunnel) streams raw float over the SSH tunnel
+  // — minutes; `remote` fetches on the cluster and ships back a compressed h5 — tens
+  // of seconds. Users without cluster access pick mdsthin. Duo two-factor for the flux
+  // gateway (DIII-D/NSTX): a push (sends "1") or a typed passcode; KSTAR/KFE VPN has no
+  // push, so its 2FA is always a typed passcode (the dropdown hides for that device).
+  const fetchCreds = useStore((s) => s.fetchCreds);
+  const setFetchCreds = useStore((s) => s.setFetchCreds);
+  const { backend, username, password, duoMode, duoPasscode } = fetchCreds;
+  const setBackend = (v: string) => setFetchCreds({ backend: v });
+  const setUsername = (v: string) => setFetchCreds({ username: v });
+  const setPassword = (v: string) => setFetchCreds({ password: v });
+  const setDuoMode = (v: "push" | "passcode") => setFetchCreds({ duoMode: v });
+  const setDuoPasscode = (v: string) => setFetchCreds({ duoPasscode: v });
   // Prefill a sensible DIII-D flat-top window (ms): transfer time is linear in the
   // samples pulled, so cropping the default ~5 s shot to its active window roughly
   // halves the wire payload. Visible + editable (not a silent backend crop, which

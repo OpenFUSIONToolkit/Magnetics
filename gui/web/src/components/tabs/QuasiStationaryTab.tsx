@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Plotly from "plotly.js-dist-min";
 import { useStore } from "../../store";
+import { apiBase, startFetch } from "../../lib/api";
 import { useNode } from "../../lib/useNode";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
@@ -14,6 +15,19 @@ import { fetchDevices, type DeviceInfo } from "../../lib/api";
 // ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
 const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
 
+// Excluded sensors are drawn on the maps but de-emphasised (thin grey dashes) so
+// the user can still see where the deselected/broken probes sit.
+const EXCLUDED_LINE = { color: "#888", width: 1, dash: "dot" as const };
+
+// A valid PTDATA pointname (DIII-D custom-signal entry): letters/digits/underscore,
+// e.g. `Ip`, `betan`, `bt`, `MPI66M020D`. Anything else is rejected before fetch.
+const POINTNAME_RE = /^[A-Za-z0-9_]+$/;
+
+// Shown when a fetch is attempted (or would stall) without the left-rail credentials.
+const CREDS_HINT =
+  "Enter your username in the left “Pull a shot” panel (plus password/Duo if your "
+  + "account needs them) to fetch new signals.";
+
 // ── Mode-number palette — green/purple/red for n=1,2,3,… ─────────────
 // Clearly distinct hues so each mode reads immediately, not blue/orange.
 const MODE_PALETTE = ["#2ca02c", "#9467bd", "#d62728", "#8c564b", "#e377c2", "#bcbd22", "#17becf"];
@@ -23,6 +37,13 @@ const MODE_PALETTE = ["#2ca02c", "#9467bd", "#d62728", "#8c564b", "#e377c2", "#b
 // <Plot> wrapper's baseLayout() — no need to duplicate it here.
 function useDarkMode(): boolean {
   return useStore((s) => s.theme === "dark");
+}
+
+// The shared <Plot> wrapper's baseLayout() themes axis colors + base font for both
+// light and dark, so themedLayout is a thin passthrough kept for the QS plot call
+// sites (returns the caller's overrides; the wrapper applies the theme).
+function themedLayout(_dark: boolean, overrides: Partial<Plotly.Layout>): Partial<Plotly.Layout> {
+  return overrides;
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -165,8 +186,25 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // ── Section collapse state ────────────────────────────────────────
   const [fitQualityOpen, setFitQualityOpen] = useState(false);
+  const [channelsMapOpen, setChannelsMapOpen] = useState(false);  // fit-channel excludes + φ-θ map
+  const [customOpen, setCustomOpen]         = useState(false);    // custom-signal panel
   const [svdOpen, setSvdOpen]               = useState(false);
   const [sensorMapOpen, setSensorMapOpen]   = useState(false);
+
+  // ── Sensor-signals view: overlay (default) or one axes per sensor ──
+  const [signalStacked, setSignalStacked] = useState(false);
+
+  // ── Channels the user has deselected from the fit (checkbox panel). These are
+  // dropped from the quasi-stationary fit (fit_exclude) but stay drawn — greyed — on the
+  // sensor maps and signal plots. Reset when the array (channelFilter) changes.
+  const [excludedChannels, setExcludedChannels] = useState<Set<string>>(new Set());
+  const toggleExcluded = useCallback((ch: string) => {
+    setExcludedChannels(prev => {
+      const next = new Set(prev);
+      if (next.has(ch)) next.delete(ch); else next.add(ch);
+      return next;
+    });
+  }, []);
 
   // ── Deferred fetch: only compute when user clicks Plot ────────────
   const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
@@ -189,10 +227,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     }
     if (tminMs) p.tmin_ms = tminMs;
     if (tmaxMs) p.tmax_ms = tmaxMs;
+    // Sorted so the param string is stable (identical exclusion set → same fetch key).
+    const excl = Array.from(excludedChannels).sort().join(",");
+    if (excl) p.fit_exclude = excl;
     return p;
   }, [
     ns, ms, channelFilter, detrendType, detrendLo, detrendHi, tminMs, tmaxMs,
-    uncertainty, energyFraction, fitBasis, fitCond, cutoffLo, cutoffHi,
+    uncertainty, energyFraction, fitBasis, fitCond, cutoffLo, cutoffHi, excludedChannels,
   ]);
 
   useEffect(() => {
@@ -212,6 +253,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom to refit the axis on a new trim window
     setTimeRange(null);
   }, [tminMs, tmaxMs]);
+
+  // A different array has different channels, so stale exclusions don't apply.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear exclusions on array change
+    setExcludedChannels(new Set());
+  }, [channelFilter]);
 
   // Auto-commit on mount so plots load immediately without requiring a click.
   useEffect(() => {
@@ -248,8 +295,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const { node: ampNode, error: ampError }       = useNode(fetchMachine, "amplitude",   committedParams ?? {});
   const { node: phaseTimeNode }                 = useNode(fetchMachine, "phase_t",     committedParams ?? {});
 
-  // Sensor maps, signal conditioning, fit quality time series
-  const { node: sensorRzRaw }    = useNode(fetchMachine, "sensor_map_rz",         committedParams ?? {});
+  // Sensor maps (R-Z cross-section + unrolled φ-θ), signal conditioning, fit quality
+  // time series.
+  const { node: sensorRzRaw }    = useNode(fetchMachine, "sensor_map_rz",           committedParams ?? {});
   const { node: sensorCylRaw }   = useNode(fetchMachine, "sensor_map_cylindrical", committedParams ?? {});
   const { node: signalRaw }      = useNode(fetchMachine, "signal_conditioning",    committedParams ?? {});
   const { node: chiSqRaw }       = useNode(fetchMachine, "chi_sq_t",               committedParams ?? {});
@@ -259,7 +307,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // No-data guard: 404 means the shot's HDF5 file hasn't been pulled yet.
   const noData = committedParams !== null && ampError?.includes("fetch failed (404)") === true;
-  // Fit-unavailable guard: a non-404 error means the SLCONTOUR fit couldn't run
+  // Fit-unavailable guard: a non-404 error means the quasi-stationary fit couldn't run
   // (most often the shot was pulled for rotating-mode analysis and lacks the Bp
   // LFS midplane array). Show the reason instead of a perpetual "loading…".
   const fitUnavailable = committedParams !== null && !noData && ampError != null;
@@ -272,6 +320,17 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const fitResNode    = fitResRaw?.kind    === "line" ? (fitResRaw    as LineNode) : null;
   const svdEnergyNode = svdEnergyRaw?.kind === "line" ? (svdEnergyRaw as LineNode) : null;
   const svdCondNode   = svdCondRaw?.kind   === "line" ? (svdCondRaw   as LineNode) : null;
+
+  // ── Custom user signals (Ip, Dα, …): fetch → merge into the h5 → plot ─────
+  const fetchCreds = useStore((s) => s.fetchCreds);
+  const device = useStore((s) => s.device);
+  const [customText, setCustomText]     = useState("");            // entry box (persisted)
+  const [committedSignals, setCommittedSignals] = useState("");    // comma list, drives the node
+  const [customBusy, setCustomBusy]     = useState(false);
+  const [customFrac, setCustomFrac]     = useState(0);
+  const [customMsg, setCustomMsg]       = useState<string | null>(null);
+  const customEsRef = useRef<EventSource | null>(null);
+  useEffect(() => () => customEsRef.current?.close(), []);  // close stream on unmount
 
   // ── Channel checkboxes for signal conditioning ────────────────────
   const [enabledChannels, setEnabledChannels] = useState<Set<string>>(new Set());
@@ -290,7 +349,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       setEnabledChannels(new Set(pairs.map(p => p.channel)));
     }
   }, [signalNode]);
-
   const toggleChannel = useCallback((ch: string) => {
     setEnabledChannels(prev => {
       const next = new Set(prev);
@@ -298,6 +356,96 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       return next;
     });
   }, []);
+
+  const { node: extraRaw } = useNode(
+    committedSignals ? machine : null, "extra_signals", { signals: committedSignals },
+  );
+  const extraNode = extraRaw?.kind === "line" ? (extraRaw as LineNode) : null;
+  const extraMissing = (extraNode?.meta?.missing as string[] | undefined) ?? [];
+
+  // Tokenise the entry box (comma- or space-separated) and validate each name as a
+  // PTDATA pointname before we spend a network round-trip. Invalid tokens block the
+  // fetch and are surfaced to the user; "not found" (a valid but absent pointname)
+  // is a separate, server-side signal reported via extraMissing.
+  const customTokens = useMemo(
+    () => customText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
+    [customText],
+  );
+  const invalidTokens = useMemo(
+    () => customTokens.filter(t => !POINTNAME_RE.test(t)),
+    [customTokens],
+  );
+  const customValid = customTokens.length > 0 && invalidTokens.length === 0;
+
+  // Fetching new data needs the same backend + credentials as the left-rail pull.
+  // remote/mdsthin both require a GA username (password/Duo too unless key auth) —
+  // without it the cluster job hangs at 0%, so we block up-front with a clear hint.
+  const needsCreds = fetchCreds.backend === "remote" || fetchCreds.backend === "mdsthin";
+  const credsMissing = needsCreds && !fetchCreds.username.trim();
+
+  const plotCustomSignals = useCallback(() => {
+    const names = customText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+    if (!names.length || names.some(n => !POINTNAME_RE.test(n))) return;
+    if (!apiBase()) { setCustomMsg("✗ no live backend configured — set VITE_API_BASE to fetch data"); return; }
+    if (credsMissing) { setCustomMsg(`✗ ${CREDS_HINT}`); return; }
+    setCustomBusy(true); setCustomFrac(0); setCustomMsg("fetching…");
+    void (async () => {
+      try {
+        const { job_id } = await startFetch({
+          shot: Number(machine),
+          signals: names,
+          backend: fetchCreds.backend,
+          username: fetchCreds.username || undefined,
+          password: fetchCreds.password || undefined,
+          duo: fetchCreds.duoMode === "push" ? "1" : fetchCreds.duoPasscode || undefined,
+          device: device || undefined,
+        });
+        customEsRef.current?.close();
+        const es = new EventSource(`${apiBase()}/api/fetch/${job_id}/stream`);
+        customEsRef.current = es;
+        // Watchdog: if the job never moves off 0% it is almost always a stuck
+        // login (missing/incorrect password or an unanswered Duo push). Surface a
+        // credentials hint instead of an eternal 0% spinner. Held in a const box so
+        // `close` can clear it without a use-before-assign dance.
+        const timer: { id?: ReturnType<typeof setTimeout> } = {};
+        const close = () => {
+          clearTimeout(timer.id);
+          es.close();
+          if (customEsRef.current === es) customEsRef.current = null;
+        };
+        let moved = false;
+        timer.id = setTimeout(() => {
+          close();
+          setCustomMsg(`✗ no progress after 30s — likely a login issue. ${CREDS_HINT}`);
+          setCustomBusy(false);
+        }, 30000);
+        es.onmessage = (e: MessageEvent) => {
+          const f = JSON.parse(e.data as string);
+          setCustomFrac(f.progress ?? 0);
+          setCustomMsg(f.msg ?? null);
+          if (!moved && (f.progress ?? 0) > 0) { moved = true; clearTimeout(timer.id); }
+          if (f.status === "done") {
+            close();
+            setCommittedSignals(names.join(","));  // triggers the extra_signals node fetch
+            setCustomMsg(`✓ fetched ${names.length} signal(s)`);
+            setCustomBusy(false);
+          } else if (f.status === "error") {
+            close();
+            setCustomMsg(`✗ ${f.error}`);
+            setCustomBusy(false);
+          }
+        };
+        es.onerror = () => {
+          close();
+          setCustomMsg("✗ progress stream lost (the pull may still be running)");
+          setCustomBusy(false);
+        };
+      } catch (e) {
+        setCustomMsg(String(e));
+        setCustomBusy(false);
+      }
+    })();
+  }, [customText, machine, device, fetchCreds, credsMissing]);
 
   const phiTimePlot = phiTimeNode?.kind === "contour" ? (phiTimeNode as ContourNode) : null;
 
@@ -422,9 +570,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       name: s.name,
       x: (s.x as number[]).map(v => v > 180 ? v - 360 : v),
       y: s.y,
-      line: { color: LINE_PALETTE[i % LINE_PALETTE.length], width: 2 },
+      line: excludedChannels.has(s.name)
+        ? EXCLUDED_LINE
+        : { color: LINE_PALETTE[i % LINE_PALETTE.length], width: 2 },
     } as Partial<Plotly.PlotData>));
-  }, [sensorCylNode]);
+  }, [sensorCylNode, excludedChannels]);
 
   const sensorCylLayout = useMemo(() =>
     ({
@@ -454,50 +604,61 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [signalYRange, fitResNode]);
 
   // ── Signal conditioning plots ─────────────────────────────────────
+  // Channel raw/prepared pairs: the master channel list for this array (fit_exclude
+  // does not drop channels from prep, so every array channel appears here).
+  const signalPairs = signalNode?.meta?.pairs as
+    { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
+
+  // Build the two traces (prepared + raw) for one sensor pair. Reused by the overlay
+  // plot and the stacked one-axes-per-sensor view. Excluded sensors are greyed.
+  const pairTraces = useCallback((
+    pair: { channel: string; prepared_idx: number; raw_idx: number }, pIdx: number,
+  ): Partial<Plotly.PlotData>[] => {
+    if (!signalNode) return [];
+    const excluded = excludedChannels.has(pair.channel);       // dropped from the fit → grey + dotted
+    // conditioning checkbox (enabledChannels): unchecked → hide from the plot (legendonly)
+    const visible: boolean | "legendonly" = enabledChannels.has(pair.channel) ? true : "legendonly";
+    const color = excluded ? "#888" : LINE_PALETTE[pIdx % LINE_PALETTE.length];
+    const prep = signalNode.series[pair.prepared_idx];
+    const raw  = signalNode.series[pair.raw_idx];
+    const traces: Partial<Plotly.PlotData>[] = [];
+    if (prep) {
+      traces.push({
+        type: "scatter" as const, mode: "lines" as const,
+        name: prep.name, x: prep.x, y: prep.y,
+        line: { color, width: 1.5, ...(excluded ? { dash: "dot" as const } : {}) },
+        visible,
+      } as Partial<Plotly.PlotData>);
+    }
+    if (raw) {
+      traces.push({
+        type: "scatter" as const, mode: "lines" as const,
+        name: raw.name, x: raw.x, y: raw.y,
+        line: { color, width: 1, dash: "dot" as const },
+        opacity: 0.55, showlegend: false,
+        visible,
+      } as Partial<Plotly.PlotData>);
+    }
+    return traces;
+  }, [signalNode, excludedChannels, enabledChannels]);
+
   const signalData = useMemo((): Partial<Plotly.PlotData>[] => {
     if (!signalNode) return [];
-    const pairs = signalNode.meta?.pairs as { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
-    if (!pairs) return lineTraces(signalNode);
-
-    const traces: Partial<Plotly.PlotData>[] = [];
-    pairs.forEach((pair, pIdx) => {
-      const isEnabled = enabledChannels.has(pair.channel);
-      const color = LINE_PALETTE[pIdx % LINE_PALETTE.length];
-      const prep = signalNode.series[pair.prepared_idx];
-      const raw  = signalNode.series[pair.raw_idx];
-      if (prep) {
-        traces.push({
-          type: "scatter" as const, mode: "lines" as const,
-          name: prep.name, x: prep.x, y: prep.y,
-          line: { color, width: 1.5 },
-          visible: isEnabled ? true : "legendonly",
-        } as Partial<Plotly.PlotData>);
-      }
-      if (raw) {
-        traces.push({
-          type: "scatter" as const, mode: "lines" as const,
-          name: raw.name, x: raw.x, y: raw.y,
-          line: { color, width: 1, dash: "dot" as const },
-          opacity: 0.55,
-          visible: isEnabled ? true : "legendonly",
-          showlegend: false,
-        } as Partial<Plotly.PlotData>);
-      }
-    });
-    return traces;
-  }, [signalNode, enabledChannels]);
+    if (!signalPairs) return lineTraces(signalNode);
+    return signalPairs.flatMap((pair, pIdx) => pairTraces(pair, pIdx));
+  }, [signalNode, signalPairs, pairTraces]);
 
   const signalLayout = useMemo(() =>
-    signalNode ? ({
+    signalNode ? themedLayout(dark, {
       xaxis: { ...timeXAxis, title: { text: signalNode.axes.x }, showticklabels: false },
       yaxis: {
         title: { text: signalNode.axes.y },
         ...(sharedSigResRange ? { range: sharedSigResRange } : {}),
       },
       showlegend: false,
-      margin: { t: 4, b: 4, l: 60, r: 20 },
+      margin: { t: 4, b: 34, l: 60, r: 20 },
     } as Partial<Plotly.Layout>) : {},
-  [signalNode, timeXAxis, sharedSigResRange]);
+  [signalNode, timeXAxis, sharedSigResRange, dark]);
 
   // ── Dynamic chi² y-range ──────────────────────────────────────────
   const chiSqYRange = useMemo(() => {
@@ -724,9 +885,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     } as Partial<Plotly.Layout>) : {},
   [fontScale, phaseTimeNode, timeXAxis]);
 
-  // ── Signal conditioning channel pairs ─────────────────────────────
-  const signalPairs = signalNode?.meta?.pairs as { channel: string; prepared_idx: number; raw_idx: number }[] | undefined;
-
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
@@ -864,12 +1022,55 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
                       color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>No quasi-stationary fit for shot {machine}.</strong><br />
-          The SLCONTOUR fit needs the Bp LFS midplane array; this shot was most likely
+          The quasi-stationary fit needs the Bp LFS midplane array; this shot was most likely
           fetched for rotating-mode analysis only. Re-fetch it with the quasi-stationary
           channels, or choose a QS-capable shot.<br />
           <span style={{ opacity: 0.7 }}>reason: {fitError}</span>
         </div>
       ) : (<>
+
+      {/* ── Fit channels + sensor map (φ-θ) — collapsed by default, above the main plots ── */}
+      <div>
+        <CollapseHeader open={channelsMapOpen} onToggle={() => setChannelsMapOpen(o => !o)}>
+          fit channels &amp; sensor map{excludedChannels.size > 0 ? ` · ${excludedChannels.size} excluded` : ""}
+        </CollapseHeader>
+        {channelsMapOpen && (
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            {/* left — checkbox grid: deselect sensors from the fit */}
+            <div style={{ flex: "0 0 300px" }}>
+              <div style={{ fontSize: 10, opacity: 0.7, marginBottom: 4 }}>
+                unchecked sensors are dropped from the fit (they stay drawn, greyed, on the map) — click Plot to apply
+              </div>
+              {signalPairs ? (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 10px", fontSize: 10, color: "var(--text-dim)" }}>
+                  {signalPairs.map((pair, i) => {
+                    const included = !excludedChannels.has(pair.channel);
+                    return (
+                      <label key={pair.channel} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                        <input type="checkbox" checked={included}
+                          onChange={() => toggleExcluded(pair.channel)}
+                          style={{ accentColor: LINE_PALETTE[i % LINE_PALETTE.length] }} />
+                        <span style={{ color: included ? LINE_PALETTE[i % LINE_PALETTE.length] : "#888",
+                          textDecoration: included ? "none" : "line-through" }}>
+                          {pair.channel}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : <div className="placeholder">loading channels…</div>}
+            </div>
+            {/* right — φ-θ unrolled sensor map (R-Z lives in the Sensors tab) */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ · {channelFilter}</div>
+              {sensorCylNode
+                ? <Plot height={300} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
+                : <div className="placeholder" style={{ height: 300 }}>loading…</div>
+              }
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Section D+E: Time-series results — PRIMARY, at top ────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -920,7 +1121,135 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         )}
       </div>
 
-      {/* ── Section C: Fit Quality — collapsible, collapsed by default ── */}
+      {/* ── Custom user signals (Ip, Dα, …) — collapsible, above the sensor signals ── */}
+      <div>
+        <CollapseHeader open={customOpen} onToggle={() => setCustomOpen(o => !o)}>
+          custom signals
+        </CollapseHeader>
+        {customOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div className="note" style={{ fontSize: 10, opacity: 0.75 }}>
+              Enter one or more <strong>signal names</strong> — PTDATA pointnames or
+              EFIT scalars — comma- or space-separated (e.g. <code>Ip, betan, bt</code>).
+              Names are letters, digits and underscores only; each is fetched via the
+              same backend/credentials as the left-rail pull and merged into this shot.
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <input value={customText} onChange={e => setCustomText(e.target.value)}
+                placeholder="Ip, betan, bt"
+                title="Comma- or space-separated signal names — PTDATA pointnames or EFIT scalars (letters, digits, underscore). Example: Ip, betan, bt"
+                aria-label="custom PTDATA pointnames"
+                aria-invalid={invalidTokens.length > 0}
+                onKeyDown={e => { if (e.key === "Enter") plotCustomSignals(); }}
+                style={{ flex: 1, minWidth: 200, fontSize: 11, background: "var(--panel)", color: "var(--text)",
+                  border: `1px solid ${invalidTokens.length > 0 ? "var(--danger, #d64550)" : "var(--border)"}`,
+                  borderRadius: 3, padding: "2px 6px" }} />
+              <button onClick={plotCustomSignals} disabled={customBusy || !customValid}
+                title={
+                  customTokens.length === 0 ? "Enter at least one pointname"
+                    : invalidTokens.length > 0 ? `Invalid: ${invalidTokens.join(", ")}`
+                    : credsMissing ? CREDS_HINT
+                    : "Fetch these signals and plot them"
+                }
+                style={{ fontSize: 11, padding: "2px 10px", borderRadius: 3,
+                  cursor: (customBusy || !customValid) ? "not-allowed" : "pointer",
+                  opacity: (customBusy || !customValid) ? 0.5 : 1,
+                  background: "var(--accent)", color: "#fff", border: "1px solid var(--border)" }}>
+                {customBusy ? `fetching… ${Math.round(customFrac * 100)}%` : "Fetch & plot"}
+              </button>
+            </div>
+            {invalidTokens.length > 0 && (
+              <div className="note" style={{ fontSize: 10, color: "var(--danger, #d64550)" }}>
+                not a valid pointname: {invalidTokens.join(", ")} — use letters, digits and underscores only
+              </div>
+            )}
+            {credsMissing && invalidTokens.length === 0 && (
+              <div className="note" style={{ fontSize: 10, color: "var(--warn, #d0972e)" }}>
+                ⚠ {CREDS_HINT}
+              </div>
+            )}
+            {customBusy && (
+              <div className="pull-bar"><div className="pull-bar-fill" style={{ width: `${customFrac * 100}%` }} /></div>
+            )}
+            {customMsg && <div className="note" style={{ fontSize: 10 }}>{customMsg}</div>}
+            {extraMissing.length > 0 && (
+              <div className="note" style={{ fontSize: 10 }}>not found: {extraMissing.join(", ")}</div>
+            )}
+            {extraNode?.series.map((s, i) => (
+              <Plot key={s.name} height={130}
+                data={[{
+                  type: "scatter" as const, mode: "lines" as const,
+                  name: s.name, x: s.x, y: s.y,
+                  line: { color: LINE_PALETTE[i % LINE_PALETTE.length], width: 1.5 },
+                  showlegend: false,
+                } as Partial<Plotly.PlotData>]}
+                layout={themedLayout(dark, {
+                  xaxis: { ...timeXAxis, title: { text: "time (ms)" } },
+                  yaxis: { title: { text: s.name, font: { size: 9 } } },
+                  showlegend: false,
+                  margin: { t: 4, b: 34, l: 64, r: 20 },
+                } as Partial<Plotly.Layout>)}
+                onClick={seekTo} onRelayout={handleTimeRelayout}
+                exportName={xn(`custom_${s.name}`)} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Sensor signals (raw + prepared) — PRIMARY; overlay by default, stackable ── */}
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+          <div className="metrics-title">sensor signals · raw + prepared</div>
+          <button onClick={() => setSignalStacked(s => !s)}
+            style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, cursor: "pointer",
+              background: signalStacked ? "var(--accent)" : "var(--panel)",
+              color: signalStacked ? "#fff" : "var(--text-dim)", border: "1px solid var(--border)" }}>
+            {signalStacked ? "overlay" : "stack per sensor"}
+          </button>
+          {/* One style legend for the whole section: solid = prepared, dotted = raw. */}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 10, fontSize: 10, color: "var(--text-dim)" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <svg width={20} height={8} aria-hidden="true">
+                <line x1={0} y1={4} x2={20} y2={4} stroke="currentColor" strokeWidth={1.5} />
+              </svg>
+              prepared
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <svg width={20} height={8} aria-hidden="true">
+                <line x1={0} y1={4} x2={20} y2={4} stroke="currentColor" strokeWidth={1} strokeDasharray="2 2" />
+              </svg>
+              raw
+            </span>
+          </span>
+        </div>
+        {!signalNode ? (
+          <div className="placeholder" style={{ height: 240 }}>loading signals…</div>
+        ) : signalStacked && signalPairs ? (
+          <div>
+            {signalPairs.map((pair, i) => {
+              const isLast = i === signalPairs.length - 1;
+              return (
+                <Plot key={pair.channel} height={isLast ? 96 : 74}
+                  data={pairTraces(pair, i)}
+                  layout={themedLayout(dark, {
+                    xaxis: { ...timeXAxis, showticklabels: isLast,
+                      ...(isLast ? { title: { text: signalNode.axes.x } } : {}) },
+                    yaxis: { title: { text: pair.channel, font: { size: 8 } }, showticklabels: false },
+                    showlegend: false,
+                    margin: { t: 2, b: isLast ? 34 : 2, l: 92, r: 20 },
+                  } as Partial<Plotly.Layout>)}
+                  onClick={seekTo} onRelayout={handleTimeRelayout}
+                  exportName={xn(`signal_${pair.channel}`)} />
+              );
+            })}
+          </div>
+        ) : (
+          <Plot height={240} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout}
+            exportName={xn("signal_conditioning")} download={dl("signal_conditioning")} />
+        )}
+      </div>
+
+      {/* ── Section C: Fit Quality — collapsible (residuals + χ² + metrics) ── */}
       <div>
         <CollapseHeader open={fitQualityOpen} onToggle={() => setFitQualityOpen(o => !o)}>
           fit quality
@@ -928,12 +1257,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
         {fitQualityOpen && (
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              {/* Signal conditioning — top of stack, full width */}
-              {signalNode
-                ? <Plot height={200} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("signal_conditioning")} download={dl("signal_conditioning")} />
-                : <div className="placeholder" style={{ height: 200 }}>loading signals…</div>
-              }
-              {/* Residuals — middle */}
+              {/* Residuals — top */}
               {fitResNode
                 ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("fit_residuals")} download={dl("fit_residuals")} />
                 : <div className="placeholder" style={{ height: 150 }}>loading residuals…</div>

@@ -91,6 +91,7 @@ export interface FetchBody {
   decimate?: number;
   device?: string; // data/device/<device>.json (default: diiid)
   sensor_set?: string; // a set under the device's sensor_sets; overrides analysis
+  signals?: string[]; // custom PTDATA pointnames; merged into an existing shot file
   ssh_user?: string; // SSH login for devices that gateway over ssh (e.g. KSTAR)
   ssh_password?: string; // sent to the local backend only; not stored
 }

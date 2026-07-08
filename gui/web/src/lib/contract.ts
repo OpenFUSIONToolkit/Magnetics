@@ -22,7 +22,7 @@ export interface Overlay {
   symbol?: "square" | "circle" | "cross";
 }
 
-/** Filled contour of a 2-D field — the SLCONTOUR φ–θ map. z is row-major [y][x]. */
+/** Filled contour of a 2-D field — the quasi-stationary φ–θ map. z is row-major [y][x]. */
 export interface ContourNode {
   kind: "contour";
   x: number[];
@@ -110,7 +110,7 @@ export type Node =
   | EquilibriumNode
   | MetricsNode;
 
-/** SLCONTOUR condition-number thresholds (warn > 10, error > 20). */
+/** quasi-stationary fit condition-number thresholds (warn > 10, error > 20). */
 export function qualityForK(K: number): Quality {
   if (!Number.isFinite(K) || K > 20) return "bad";
   if (K > 10) return "warn";

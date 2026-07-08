@@ -167,6 +167,34 @@ def resolve_sensor_set(dev: dict, name: str, _seen=None) -> list[str]:
     return _dedup(out)
 
 
+def split_custom_signals(dev: dict, names):
+    """Split GUI custom-signal names into (ptdata_pointnames, tree_signals).
+
+    Most custom names are PTDATA pointnames (``ip``, ``bt``, …). Some — the EFIT
+    scalars like ``betan``/``li``/``q95`` — are NOT in PTDATA; they live in an
+    MDSplus tree (``\\top.results.aeqdsk:<name>``, same place ``kappa`` comes from),
+    so ``ptdata2`` returns nothing and they'd read back "missing". The device file's
+    ``derived signals`` block ({"tree": <tree>, "names": [...]}) names those; any
+    listed name (case-insensitive) is routed to the tree-fetch path with the usual
+    bare-node + AEQDSK-fallback candidates. Unknown names stay PTDATA.
+    """
+    derived = dev.get("derived signals", {}) or {}
+    dtree = derived.get("tree")
+    dnames = {n.lower() for n in derived.get("names", [])} if dtree else set()
+    pointnames: list[str] = []
+    tree_signals: dict[str, list[tuple[str, str]]] = {}
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            continue
+        if name.lower() in dnames:
+            _, cands = _plasma_signal({"name": name, "tree": dtree})
+            tree_signals[name] = cands
+        else:
+            pointnames.append(name)
+    return _dedup(pointnames), tree_signals
+
+
 # A progress callback: (fraction_done in [0,1], human message) -> None.
 Progress = Callable[[float, str], None]
 
@@ -1099,6 +1127,7 @@ def fetch_shot(
     backend: str = "mdsthin",
     device: str = "diiid",
     sensor_set: str | None = None,
+    raw_pointnames: list[str] | None = None,
     username: str | None = None,
     password: str | None = None,
     duo: str | None = None,
@@ -1193,6 +1222,7 @@ def fetch_shot(
             decimate=decimate,
             device=device,
             sensor_set=sensor_set,
+            raw_pointnames=raw_pointnames,
             local_out_dir=(str(Path(out).parent) if out else None),
             progress=progress,
             **kw,
@@ -1235,49 +1265,59 @@ def fetch_shot(
                 "or use --tcp for a direct connection"
             )
 
-    # Signal selection. A device sensor set (preferred) overrides the analysis
-    # sensor groups: pull the set's signals plus the device's plasma params. When
-    # no set is named, a device that drives selection through its own sensor sets
-    # (it declares an `arrays` block -- e.g. KSTAR, which has no DIII-D PTDATA
-    # analysis groups) defaults to its toroidal+poloidal arrays; otherwise fall
-    # back to the per-analysis groups (DIII-D).
+    # Signal selection. An explicit `raw_pointnames` list (GUI custom-signal panel:
+    # Ip, betan, …) wins over everything — no device sensor map, no plasma extras —
+    # so it merges cleanly into an existing shot file. Names are split into PTDATA
+    # pointnames vs EFIT/derived tree signals (betan, li, …) so tree-only quantities
+    # actually fetch. Otherwise a device sensor set (preferred) overrides the analysis
+    # sensor groups; a device that drives selection through its own sensor sets (an
+    # `arrays` block -- e.g. KSTAR, no DIII-D PTDATA groups) defaults to its
+    # toroidal+poloidal arrays; else the per-analysis groups (DIII-D).
     stride = max(1, int(decimate))
-    if sensor_set:
-        set_names = [sensor_set]
-    elif dev.get("arrays"):
-        arr = dev["arrays"]
-        set_names = _dedup([s for s in (arr.get("toroidal"), arr.get("poloidal")) if s])
-    else:
-        set_names = []
-
-    if set_names:
-        sensors = _dedup([s for name in set_names for s in resolve_sensor_set(dev, name)])
-        # Always add the device's plasma params (current, toroidal field,
-        # elongation). Each entry is {"name": ..., "tree": <optional>}: a "tree"
-        # means the quantity lives in an MDSplus tree (e.g. EFIT elongation), so
-        # it's fetched by (tree, node) -- not as a PTDATA pointname.
-        extras: list[str] = []
-        tree_signals: dict[str, list[tuple[str, str]]] = {}
-        for entry in dev.get("plasma pointnames", {}).values():
-            name, cands = _plasma_signal(entry)
-            if cands:
-                tree_signals[name] = cands
-            else:
-                extras.append(name)
-        pointnames = _dedup(sensors + extras)
-        label = "+".join(set_names)
-        # Never decimate a set carrying raw bdot (dB/dt) probes -- corrupts FFTs.
+    if raw_pointnames:
+        pointnames, tree_signals = split_custom_signals(dev, raw_pointnames)
+        label = "custom"
+        # bdot / raw dB/dt probes end in "D"; never decimate them (corrupts FFTs).
         if stride > 1 and any(p.endswith("D") for p in pointnames):
-            progress(0.0, "decimation disabled (set has bdot signals)")
+            progress(0.0, "decimation disabled (custom set has bdot signals)")
             stride = 1
     else:
-        # Per-analysis reduction policy: never decimate FFT-critical signals.
-        if stride > 1 and not ms.decimate_allowed(analysis):
-            progress(0.0, f"decimation disabled for {analysis}")
-            stride = 1
-        pointnames = ms.signals_for(analysis)
-        tree_signals = ms.tree_signals_for(analysis)
-        label = analysis
+        if sensor_set:
+            set_names = [sensor_set]
+        elif dev.get("arrays"):
+            arr = dev["arrays"]
+            set_names = _dedup([s for s in (arr.get("toroidal"), arr.get("poloidal")) if s])
+        else:
+            set_names = []
+
+        if set_names:
+            sensors = _dedup([s for name in set_names for s in resolve_sensor_set(dev, name)])
+            # Always add the device's plasma params (current, toroidal field,
+            # elongation). Each entry is {"name": ..., "tree": <optional>}: a "tree"
+            # means the quantity lives in an MDSplus tree (e.g. EFIT elongation), so
+            # it's fetched by (tree, node) -- not as a PTDATA pointname.
+            extras: list[str] = []
+            tree_signals: dict[str, list[tuple[str, str]]] = {}
+            for entry in dev.get("plasma pointnames", {}).values():
+                name, cands = _plasma_signal(entry)
+                if cands:
+                    tree_signals[name] = cands
+                else:
+                    extras.append(name)
+            pointnames = _dedup(sensors + extras)
+            label = "+".join(set_names)
+            # Never decimate a set carrying raw bdot (dB/dt) probes -- corrupts FFTs.
+            if stride > 1 and any(p.endswith("D") for p in pointnames):
+                progress(0.0, "decimation disabled (set has bdot signals)")
+                stride = 1
+        else:
+            # Per-analysis reduction policy: never decimate FFT-critical signals.
+            if stride > 1 and not ms.decimate_allowed(analysis):
+                progress(0.0, f"decimation disabled for {analysis}")
+                stride = 1
+            pointnames = ms.signals_for(analysis)
+            tree_signals = ms.tree_signals_for(analysis)
+            label = analysis
 
     # Shot-aware pointname resolution: map canonical ids -> the pointnames valid
     # at THIS shot, dropping channels the shot can't have so we never query them.
@@ -1584,6 +1624,12 @@ def main(argv=None) -> int:
         "elongation instead of the --analysis groups",
     )
     ap.add_argument(
+        "--pointnames",
+        default=None,
+        help="comma-separated PTDATA pointnames to fetch verbatim (e.g. 'ip,dalpha'); "
+        "overrides --sensor-set/--analysis and merges into an existing shot file",
+    )
+    ap.add_argument(
         "--gateway",
         default=None,
         help="mdsthin SSH gateway as host[:port], or an ~/.ssh/config Host alias; "
@@ -1646,6 +1692,11 @@ def main(argv=None) -> int:
         backend=args.backend,
         device=args.device,
         sensor_set=args.sensor_set,
+        raw_pointnames=(
+            [p.strip() for p in args.pointnames.split(",") if p.strip()]
+            if args.pointnames
+            else None
+        ),
         username=args.username,
         duo=args.duo,
         gateway=args.gateway,

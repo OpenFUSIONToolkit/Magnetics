@@ -15,6 +15,17 @@ import {
 export type TabId = "sensors" | "qs" | "rotating";
 export type Theme = "dark" | "light";
 
+// Backend + DIII-D credentials for a live pull. Lifted out of PullControl so the
+// QS tab's custom-signal panel can reuse the same creds — the user enters them
+// once. Sent to the LOCAL backend (localhost) only, never persisted.
+export interface FetchCreds {
+  backend: string;
+  username: string;
+  password: string;
+  duoMode: "push" | "passcode";
+  duoPasscode: string;
+}
+
 // ── global appearance preferences ──────────────────────────────────────────
 // Each preference follows one shape: a persisted value → an `apply*` function
 // that mutates <html> → the whole app restyles from CSS/plot layer. `theme` and
@@ -75,6 +86,7 @@ interface State {
   cursorMs: number; // shared time cursor across views
   loadingMachines: boolean;
   theme: Theme;
+  fetchCreds: FetchCreds; // shared by PullControl + the QS custom-signal panel
   fontScale: number;
 
   init: () => Promise<void>;
@@ -85,6 +97,7 @@ interface State {
   setTab: (t: TabId) => void;
   setCursorMs: (t: number) => void;
   toggleTheme: () => void;
+  setFetchCreds: (patch: Partial<FetchCreds>) => void;
   setFontScale: (n: number) => void;
 }
 
@@ -97,6 +110,14 @@ export const useStore = create<State>((set) => ({
   cursorMs: 0,
   loadingMachines: true,
   theme: loadTheme(),
+  // Default to the fast cluster path (remote); PullControl's device snap adjusts it.
+  fetchCreds: {
+    backend: "remote",
+    username: "",
+    password: "",
+    duoMode: "push",
+    duoPasscode: "",
+  },
   fontScale: loadFontScale(),
 
   async init() {
@@ -137,6 +158,7 @@ export const useStore = create<State>((set) => ({
   setDevice: (id) => set({ device: id }),
   setTab: (t) => set({ tab: t }),
   setCursorMs: (t) => set({ cursorMs: t }),
+  setFetchCreds: (patch) => set((s) => ({ fetchCreds: { ...s.fetchCreds, ...patch } })),
   toggleTheme: () =>
     set((s) => {
       const theme: Theme = s.theme === "dark" ? "light" : "dark";
