@@ -3,8 +3,7 @@
 Print the contents of an HDF5 file (e.g. one written by toksearch_fetch.py).
 
 Usage:
-    python data/inspect_h5.py path/to/file.h5
-    python data/inspect_h5.py                      # defaults to data/shot_184927.h5
+    python -m magnetics.data.inspect path/to/file.h5
 """
 
 import argparse
@@ -12,17 +11,13 @@ from pathlib import Path
 
 import h5py
 
-DEFAULT_H5 = Path(__file__).resolve().parent / "shot_184927.h5"
-
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Print the contents of an HDF5 file.")
 
     ap.add_argument(
         "path",
-        nargs="?",
-        default=str(DEFAULT_H5),
-        help=f"HDF5 file to inspect (default: {DEFAULT_H5})",
+        help="HDF5 file to inspect",
     )
     args = ap.parse_args(argv)
     path = args.path

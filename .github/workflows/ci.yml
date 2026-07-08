@@ -36,31 +36,39 @@ jobs:
               - '.github/workflows/ci.yml'
 
   python:
-    name: Python
+    name: Python (${{ matrix.python }})
     needs: changes
     if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the supported floor (pyproject requires-python); 3.14 is the dev pin.
+        python: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up uv (Python 3.14 from .python-version)
+      - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install project + deps
-        run: uv sync --extra service
+        run: uv sync --python ${{ matrix.python }}
 
+      # ruff lint/format are Python-version-agnostic; run once, on the floor.
       - name: Lint (ruff)
+        if: ${{ matrix.python == '3.12' }}
         run: uvx ruff check .
 
       - name: Format check (ruff format)
+        if: ${{ matrix.python == '3.12' }}
         run: uvx ruff format --check .
 
       - name: Tests (pytest; tolerate "no tests collected" while skeletal)
         run: |
           set +e
-          uv run --with pytest pytest -q
+          uv run --python ${{ matrix.python }} --with pytest pytest -q
           code=$?
           set -e
           # exit 5 = no tests collected yet (skeleton); treat as success
@@ -80,7 +88,7 @@ jobs:
           enable-cache: true
 
       - name: Install project + deps
-        run: uv sync --extra service
+        run: uv sync
 
       - name: Typecheck (ty)
         run: uv run ty check src/magnetics

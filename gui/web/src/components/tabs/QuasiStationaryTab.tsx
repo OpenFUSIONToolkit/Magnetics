@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Plotly from "plotly.js-dist-min";
 import { useStore } from "../../store";
-import { apiBase, startFetch } from "../../lib/api";
+import { apiBase, startFetch, usingLiveBackend } from "../../lib/api";
 import { useNode } from "../../lib/useNode";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
@@ -386,7 +386,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const plotCustomSignals = useCallback(() => {
     const names = customText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
     if (!names.length || names.some(n => !POINTNAME_RE.test(n))) return;
-    if (!apiBase()) { setCustomMsg("✗ no live backend configured — set VITE_API_BASE to fetch data"); return; }
+    if (!usingLiveBackend()) { setCustomMsg("✗ no live backend configured — run the packaged app or set VITE_API_BASE"); return; }
     if (credsMissing) { setCustomMsg(`✗ ${CREDS_HINT}`); return; }
     setCustomBusy(true); setCustomFrac(0); setCustomMsg("fetching…");
     void (async () => {

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# One command to run the GUI.
+# One command to run the GUI for DEVELOPMENT.
 #
 # DEFAULT is LIVE: the GUI talks to the real FastAPI service, and NO mock data is
 # served or renderable in this mode. The rotating-mode (MODESPEC) path serves real
 # analysis from fetched shots; the quasi-stationary fit stream is still a stub. Use
 # `static` only for offline frontend work against the demo fixtures.
 #
-#   ./run.sh           live    — FastAPI service (:8000) + GUI (:5173) against it (default)
-#   ./run.sh static    demo    — GUI on :5173 only, STATIC mock fixtures (no backend)
-#   ./run.sh --prod    deploy  — build the GUI and serve it on one port (:8000)
+#   ./run-dev.sh           live    — FastAPI service (:8000) + GUI (:5173) against it (default)
+#   ./run-dev.sh static    demo    — GUI on :5173 only, STATIC mock fixtures (no backend)
+#   ./run-dev.sh --prod    deploy  — build the GUI and serve it on one port (:8000)
+#
+# To build a distributable wheel/sdist (not just preview it), use scripts/build-dist.sh.
 #
 # Press Ctrl-C to stop. Prereqs: Node.js 22 + uv (uv only needed for live/--prod).
 
@@ -31,10 +33,10 @@ case "$MODE" in
 
   --live|live|"")
     echo "▶ syncing Python deps (uv)…"
-    uv sync --extra service --quiet
+    uv sync --quiet
     # Auto-pick a free backend port (prefer 8000) so several checkouts can run at
     # once without colliding. Vite already auto-picks a free GUI port; we just wire
-    # the GUI to whichever backend port we grabbed. Override with `PORT=NNNN ./run.sh`.
+    # the GUI to whichever backend port we grabbed. Override with `PORT=NNNN ./run-dev.sh`.
     PORT="${PORT:-$(python3 - <<'PY'
 import socket
 
@@ -60,7 +62,7 @@ else:  # everything 8000-8099 busy — let the OS pick any free port
 PY
 )}"
     echo "▶ starting service (:$PORT) + GUI dev server (Vite auto-port)…"
-    PORT="$PORT" uv run --extra service magnetics-service &
+    PORT="$PORT" uv run magnetics-service &
     SERVICE_PID=$!
     ( cd gui/web && VITE_API_BASE="http://127.0.0.1:$PORT" npm run dev ) &
     GUI_PID=$!
@@ -73,7 +75,7 @@ PY
 
   --prod|prod)
     echo "▶ syncing Python deps (uv)…"
-    uv sync --extra service --quiet
+    uv sync --quiet
     echo "▶ building GUI…"
     ( cd gui/web && npm run build )
     echo "▶ staging built GUI into the package (magnetics/service/webapp)…"
@@ -82,11 +84,11 @@ PY
     echo ""
     echo "  ✓ open  http://127.0.0.1:8000   (single origin — GUI served on one port)"
     echo ""
-    exec uv run --extra service magnetics-service
+    exec uv run magnetics-service
     ;;
 
   *)
-    echo "usage: ./run.sh [live | static | --prod]" >&2
+    echo "usage: ./run-dev.sh [live | static | --prod]" >&2
     exit 2
     ;;
 esac

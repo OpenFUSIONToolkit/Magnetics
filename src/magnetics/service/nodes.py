@@ -52,7 +52,7 @@ def _f(params, key, default=None):
         return default
     try:
         return float(params[key])
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return default
 
 
@@ -244,7 +244,7 @@ def _kappa_at(shot, t0_ms=None):
         if "kappa" not in h5source.channel_names(shot):
             return None
         t, d = h5source.load_channel(shot, "kappa")
-    except KeyError, OSError:
+    except (KeyError, OSError):
         return None
     d = np.asarray(d, dtype=float)
     good = np.isfinite(d)
@@ -1361,7 +1361,7 @@ def _num_attr(val):
     (a whole-shot pull writes ``tmin``/``tmax`` as the string ``'*'``)."""
     try:
         return float(val)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 

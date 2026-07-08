@@ -5,8 +5,9 @@ hard-linked `time`, attrs `analysis`/`backend`) and the older pull_shot_h5 outpu
 (per-channel `time`, no analysis attr). A channel is read the same way in both:
 `/{name}/data` + `/{name}/time`.
 
-The HDF5 output directory is `$MAGNETICS_DATA_DIR` or the repo's `data/` dir
-relative to this file (where the fetcher writes `datafile/`).
+The HDF5 output directory is `$MAGNETICS_DATA_DIR`, or the repo's `data/` dir in a
+source checkout, or the per-user data dir for an installed package (see
+`data_dir()`). The fetcher writes `datafile/` under it.
 """
 
 from __future__ import annotations
@@ -23,8 +24,19 @@ def data_dir() -> Path:
     env = os.environ.get("MAGNETICS_DATA_DIR")
     if env:
         return Path(env).expanduser().resolve()
-    # src/magnetics/data/h5source.py -> repo root is parents[3]
-    return Path(__file__).resolve().parents[3] / "data"
+    # Source checkout: src/magnetics/data/h5source.py -> repo root is parents[3].
+    # Require both markers so an installed wheel under site-packages (whose
+    # great-grandparent is not the repo) never falsely matches.
+    repo = Path(__file__).resolve().parents[3]
+    if (repo / "pyproject.toml").is_file() and (repo / "gui").is_dir():
+        return repo / "data"
+    # Installed (non-checkout): per-user data dir, e.g. ~/.local/share/magnetics
+    # (Linux), ~/Library/Application Support/magnetics (macOS). Created if absent.
+    from platformdirs import user_data_dir
+
+    d = Path(user_data_dir("magnetics"))
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 @lru_cache(maxsize=1)
