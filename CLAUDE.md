@@ -70,6 +70,17 @@ The Python project **is the repo root** (a uv project, served as a webapp). `src
 Tests in `tests/`, maintainer scripts in `scripts/`. `gui/web/` — React + Vite + TypeScript
 frontend (its `dist/` is staged into `service/webapp/` for the wheel).
 
+## Running the tests
+- **Python:** `uv run pytest` from the repo root — the whole suite is offline and deterministic
+  (~5 s; synthetic fixtures are generated at collection time, no real data needed). Live-network
+  tests (GA gateway / PPPL flux) are env-gated and skip unless `MAGNETICS_GA_USER` /
+  `MAGNETICS_FLUX_USER` is set; they are manual-only, never wired into CI.
+- **Frontend:** `cd gui/web && npm run test` (vitest, one-shot; `npm run test:watch` to iterate).
+- **Everything CI runs:** `uv run ruff format --check .` + `uvx ruff check .` + `uv run pytest`
+  + `uv run ty check src/magnetics` (Python), and `npm run lint` + `npm run typecheck` +
+  `npm run test` + `npm run build` (in `gui/web/`). Run these locally before committing —
+  a plain `pytest` + `tsc` pass does NOT cover everything CI checks.
+
 ## Conventions
 - Physics lives in `src/magnetics/core` (pure, device-agnostic, testable); **no physics in the
   service routes**.
