@@ -291,3 +291,44 @@ def test_fetch_shot_remote_merges_instead_of_clobbering(tmp_path, monkeypatch):
         assert "MPI66M307D" in h5, "remote pull clobbered the existing channel"
         assert "betan" in h5
     assert not (tmp_path / "_remote_stage" / "shot_184927.h5").exists()
+
+
+# ---------------------------------------------------------------------------
+# issue #63 — transport failures must not poison the incremental cache
+# ---------------------------------------------------------------------------
+
+
+def test_transport_failures_are_not_cached_as_missing(tmp_path):
+    """A channel that failed because the tunnel died must be retried on the next
+    incremental pull: it may appear in the run's report, but never in the file's
+    channels_missing attr. Genuine no-data channels ARE cached."""
+    import h5py
+
+    from magnetics.data.fetch.toksearch import _existing_channels
+
+    t = np.linspace(0.0, 10.0, 100)
+    got = Channel("GOOD", t, np.ones(100, np.float32), ok=True)
+    dead = Channel("DROPPED", ok=False, error="Connection reset by peer", error_kind="transport")
+    empty = Channel("EMPTY", ok=False, error="no data")  # default kind: no_data
+
+    out, (ok_ch, missing) = _write(tmp_path, [got, dead, empty])
+
+    # the run report still surfaces both failures...
+    assert {c.name for c in missing} == {"DROPPED", "EMPTY"}
+    with h5py.File(out, "r") as h5:
+        cached = {x.decode() for x in h5.attrs["channels_missing"]}
+    # ...but only the genuine no-data channel is cached as missing
+    assert cached == {"EMPTY"}
+    # so the next same-window pull retries DROPPED and skips GOOD + EMPTY
+    assert _existing_channels(out, None, None, 1) == {"GOOD", "EMPTY"}
+
+
+def test_error_kind_classifier():
+    from magnetics.data.fetch.toksearch import _error_kind
+
+    assert _error_kind(ConnectionResetError("reset")) == "transport"
+    assert _error_kind(TimeoutError()) == "transport"
+    assert _error_kind(OSError(32, "Broken pipe")) == "transport"
+    assert _error_kind(RuntimeError("ssh tunnel exited")) == "transport"
+    assert _error_kind(RuntimeError("%TREE-W-NODATA, no data available")) == "no_data"
+    assert _error_kind(RuntimeError("TreeNNF: node not found")) == "no_data"

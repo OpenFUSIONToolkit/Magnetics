@@ -233,16 +233,44 @@ def _default_progress(frac: float, msg: str) -> None:
 
 # --- channel record -----------------------------------------------------------
 class Channel:
-    """One fetched pointname: time (ms, float64) + data (float32)."""
+    """One fetched pointname: time (ms, float64) + data (float32).
 
-    __slots__ = ("name", "time", "data", "ok", "error")
+    ``error_kind`` classifies a failure (``ok=False``): ``"no_data"`` — the server
+    answered and the channel genuinely has nothing (cached as missing so the next
+    incremental pull skips it); ``"transport"`` — the connection/tunnel died (NOT
+    cached, so the next pull retries without --force; see issue #63)."""
 
-    def __init__(self, name, time=None, data=None, ok=False, error=""):
+    __slots__ = ("name", "time", "data", "ok", "error", "error_kind")
+
+    def __init__(self, name, time=None, data=None, ok=False, error="", error_kind="no_data"):
         self.name = name
         self.time = time
         self.data = data
         self.ok = ok
         self.error = error
+        self.error_kind = error_kind
+
+
+def _error_kind(exc) -> str:
+    """Classify a fetch exception: ``"transport"`` for connection-level failures
+    (socket/tunnel/timeout — worth retrying next run), ``"no_data"`` for a genuine
+    MDSplus no-data / no-node answer (cacheable as missing). Message matching is
+    the fallback for errors wrapped in strings by intermediate layers."""
+    if isinstance(exc, (OSError, EOFError, TimeoutError, ConnectionError)):
+        return "transport"
+    msg = str(exc).lower()
+    transport_words = (
+        "connection",
+        "timed out",
+        "timeout",
+        "broken pipe",
+        "reset by peer",
+        "eof",
+        "socket",
+        "tunnel",
+        "ssh",
+    )
+    return "transport" if any(w in msg for w in transport_words) else "no_data"
 
 
 def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
@@ -402,6 +430,7 @@ def _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress):
                 conn.openTree(tree, shot)
             except Exception as exc:
                 ch.error = f"open {tree}: {exc}"
+                ch.error_kind = _error_kind(exc)
                 continue
             try:
                 y = np.atleast_1d(conn.get(node).data())
@@ -418,6 +447,7 @@ def _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress):
                 ch.error = f"{tree}{node}: degenerate (n={y.size}, t={t.size})"
             except Exception as exc:
                 ch.error = f"{tree}{node}: {exc}"
+                ch.error_kind = _error_kind(exc)
         out.append(ch)
         progress(1.0, f"tree:{name} ({'ok' if ch.ok else 'missing'})")
     return out
@@ -548,7 +578,9 @@ def _fetch_mdsthin(
                         t = _arr(gm.get(f"t{i}"))
                         out.append(Channel(pt, t, y.astype(np.float32, copy=False), ok=True))
                     except Exception as exc:  # per-channel error in the batch
-                        out.append(Channel(pt, ok=False, error=str(exc)))
+                        out.append(
+                            Channel(pt, ok=False, error=str(exc), error_kind=_error_kind(exc))
+                        )
                 tick(batch[-1], k=len(batch))
                 return out, True
             except Exception as exc:  # whole-batch failure -> fall back
@@ -563,7 +595,7 @@ def _fetch_mdsthin(
                 else:
                     out.append(Channel(pt, ok=False, error="no data"))
             except Exception as exc:
-                out.append(Channel(pt, ok=False, error=str(exc)))
+                out.append(Channel(pt, ok=False, error=str(exc), error_kind=_error_kind(exc)))
             tick(pt)
         return out, False
 
@@ -711,6 +743,7 @@ def _fetch_mdsthin_tree(
                     ch.error = f"degenerate (n={y.size}, t={t.size})"
             except Exception as exc:
                 ch.error = str(exc)
+                ch.error_kind = _error_kind(exc)
             out.append(ch)
             tick(node)
         # plasma / equilibrium tree signals (efit01, ...): first candidate that opens
@@ -734,6 +767,7 @@ def _fetch_mdsthin_tree(
                     chp.error = f"{tree}{node}: degenerate"
                 except Exception as exc:
                     chp.error = f"{tree}{node}: {exc}"
+                    chp.error_kind = _error_kind(exc)
             out.append(chp)
             progress(1.0, f"tree:{name} ({'ok' if chp.ok else 'missing'})")
         return out
@@ -833,7 +867,7 @@ def _fetch_mds_tree(
             )
         except Exception as exc:  # noqa: BLE001 — one bad node shouldn't sink the pull
             current_tree = None  # a failed openTree/get can leave the conn unsure
-            out.append(Channel(canon, ok=False, error=str(exc)))
+            out.append(Channel(canon, ok=False, error=str(exc), error_kind=_error_kind(exc)))
         progress(i / n, canon)
 
     for j, (name, candidates) in enumerate(tree_signals.items(), len(items) + 1):
@@ -861,6 +895,7 @@ def _fetch_mds_tree(
             except Exception as exc:  # noqa: BLE001 — plasma extras must not sink the pull
                 current_tree = None
                 chp.error = f"{tree}:{node}: {exc}"
+                chp.error_kind = _error_kind(exc)
         out.append(chp)
         progress(j / n, f"tree:{name} ({'ok' if chp.ok else 'missing'})")
     return out
@@ -1136,9 +1171,13 @@ def _write_h5(
                     g.attrs[k] = float(v)
 
         # Union new channels with whatever the file already recorded; a name that
-        # is now fetched is removed from the missing list.
+        # is now fetched is removed from the missing list. Transport failures
+        # (dropped tunnel mid-pull, issue #63) are deliberately NOT recorded as
+        # missing — caching them would make every later incremental pull skip
+        # them, leaving the file permanently incomplete without --force.
+        no_data = {c.name for c in missing if getattr(c, "error_kind", "no_data") != "transport"}
         fetched = _attr_names(h5, "channels_fetched") | {c.name for c in got}
-        missing_names = (_attr_names(h5, "channels_missing") | {c.name for c in missing}) - fetched
+        missing_names = (_attr_names(h5, "channels_missing") | no_data) - fetched
         h5.attrs["channels_fetched"] = np.array(sorted(fetched), dtype="S")
         h5.attrs["channels_missing"] = np.array(sorted(missing_names), dtype="S")
     return got, missing
