@@ -23,11 +23,12 @@ magnetics --no-browser        # headless (e.g. on a server)
 magnetics --data-dir PATH     # where shot data lives (see below)
 ```
 
-Two more console scripts come with the install:
+Three more console scripts come with the install:
 
 ```sh
 magnetics-fetch --shot 184927 # pull a shot to the local data dir
 magnetics-service             # start just the API/service (honors HOST/PORT)
+magnetics-connect omega       # run the server on a remote host, browse it locally
 ```
 
 ### Where shot data lives
@@ -45,6 +46,37 @@ usually quota'd and shot files are large) — e.g. in your shell profile:
 
 ```sh
 export MAGNETICS_DATA_DIR=$SCRATCH/magnetics
+```
+
+## Remote use — run on a cluster, browse locally
+
+The server should run where the data lives (a cluster work node), but that is
+rarely where your browser lives — you're on a laptop off-site, or on a NoMachine
+desktop on the site's login/gateway node with a firewall between you and the
+work node. `magnetics-connect` does the standard SSH-tunnel dance in one command:
+it opens one authenticated connection to the host, asks it for a free port and
+its real node name, starts the server there **bound to loopback only**, carries
+a `-L` port-forward on the same connection, and opens your local browser once
+the server answers through the tunnel. Only HTTP crosses the wire — fetches and
+fits run next to the data, plots stream back. Ctrl-C stops both ends.
+
+```sh
+magnetics-connect omega                        # ~/.ssh/config alias (keys, ProxyJump)
+magnetics-connect me@omega.gat.com -J me@cybele.gat.com:2039
+magnetics-connect omega --data-dir /cscratch/$USER/magnetics
+magnetics-connect flux --remote-cmd \
+    'module load magnetics && magnetics --no-browser --port {port}'
+```
+
+The default remote command is `magnetics --no-browser --port {port}`, run
+through a login shell so module/profile PATHs apply; `--remote-cmd` overrides it
+(`{port}` is substituted). The launcher itself is **stdlib-only and standalone**
+— on a gateway node with only system `python3` (no pip, no magnetics), copy the
+single file and run it directly:
+
+```sh
+scp src/magnetics/connect.py gateway:
+python3 connect.py omega
 ```
 
 ## Development

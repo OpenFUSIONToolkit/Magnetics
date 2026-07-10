@@ -51,6 +51,10 @@ magnetics = "magnetics.cli:main"
 magnetics-service = "magnetics.service.app:main"
 # Fetch a shot to the local data dir (the toksearch/mdsthin CLI).
 magnetics-fetch = "magnetics.data.fetch.toksearch:main"
+# Run the server on a remote host (cluster) over an SSH tunnel, browse locally.
+# Stdlib-only and standalone: src/magnetics/connect.py also runs as a bare
+# `python3 connect.py` on hosts where magnetics is not installed.
+magnetics-connect = "magnetics.connect:main"
 
 [tool.ruff]
 line-length = 100  # target version is inferred from requires-python

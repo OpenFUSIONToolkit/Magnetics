@@ -66,6 +66,10 @@ The Python project **is the repo root** (a uv project, served as a webapp). `src
 - `data/` — sources + `fetch/` (toksearch/mdsthin pulls, cluster orchestration); device configs
   in `data/device/*.json`.
 - `service/` — FastAPI; the built GUI is bundled at `service/webapp/` and served here.
+- `connect.py` — the `magnetics-connect` remote-GUI launcher (server on a cluster node,
+  browser local, one SSH tunnel). Deliberately **stdlib-only and standalone** so it runs as a
+  bare `python3 connect.py` on gateway nodes with no magnetics install — keep it free of
+  package imports and of syntax newer than ~Python 3.9.
 
 Tests in `tests/`, maintainer scripts in `scripts/`. `gui/web/` — React + Vite + TypeScript
 frontend (its `dist/` is staged into `service/webapp/` for the wheel).
