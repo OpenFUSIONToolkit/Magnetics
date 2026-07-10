@@ -154,7 +154,10 @@ function CollapseHeader({
 export default function QuasiStationaryTab({ machine }: { machine: string }) {
   const dark = useDarkMode();
   const fontScale = useStore((s) => s.fontScale);
-  const { cursorMs, setCursorMs, machines } = useStore();
+  // Selective subscriptions: a whole-store destructure re-rendered this heavy tab
+  // on EVERY store change (each keystroke in the left rail's credential fields).
+  const setCursorMs = useStore((s) => s.setCursorMs);
+  const machines = useStore((s) => s.machines);
 
   // ── Analysis settings ─────────────────────────────────────────────
   const [ns, setNs]               = useState("1,2,3");
@@ -208,6 +211,9 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // ── Deferred fetch: only compute when user clicks Plot ────────────
   const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
+  // Bumped on every Plot click so an IDENTICAL param set still re-runs the fetch —
+  // without it a transient failure was unrecoverable except by jiggling a setting.
+  const [plotNonce, setPlotNonce] = useState(0);
 
   const qsParams = useMemo(() => {
     const p: Record<string, string> = {
@@ -236,10 +242,6 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     uncertainty, energyFraction, fitBasis, fitCond, cutoffLo, cutoffHi, excludedChannels,
   ]);
 
-  useEffect(() => {
-    if (cursorMs === 0) setCursorMs(3140);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Linked time-axis zoom (declared here so the trim-window effect below can reset it).
   const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
@@ -275,8 +277,11 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // null fetchMachine suppresses all useNode fetches until initial commit fires.
   const fetchMachine = committedParams !== null ? machine : null;
-  // Highlight the Plot button when settings have drifted from the last commit.
-  const paramsDirty = committedParams !== null && committedParams !== qsParams;
+  // Highlight the Plot button when settings have drifted from the last commit —
+  // by VALUE (the memo object is recreated on any edit, so a reference compare
+  // flagged "settings changed" even after reverting to identical values).
+  const paramsDirty =
+    committedParams !== null && JSON.stringify(committedParams) !== JSON.stringify(qsParams);
 
   // Per-plot export helpers: a stable filename + the download descriptor (node id +
   // the params that produced it) so each figure exports its own image + HDF5 data.
@@ -286,32 +291,48 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   );
   const xn = useCallback((nodeId: string) => `shot_${machine}_${nodeId}`, [machine]);
 
-  // ── Node fetches — gated by fetchMachine (null until Plot is clicked) ──
-  const { node: qualityRaw } = useNode(fetchMachine, "fit_quality", committedParams ?? {});
+  // ── Node fetches — gated by fetchMachine (null until Plot is clicked).
+  // plotNonce re-runs identical-key fetches on Plot/retry. Errors are captured
+  // per node and surfaced — a failed node must never sit behind an eternal
+  // "loading…" placeholder.
+  const { node: qualityRaw } = useNode(fetchMachine, "fit_quality", committedParams ?? {}, plotNonce);
   const qualityNode = qualityRaw?.kind === "metrics" ? (qualityRaw as MetricsNode) : null;
 
   // Time-series nodes
-  const { node: phiTimeNode }                   = useNode(fetchMachine, "phi_t",      committedParams ?? {});
-  const { node: ampNode, error: ampError }       = useNode(fetchMachine, "amplitude",   committedParams ?? {});
-  const { node: phaseTimeNode }                 = useNode(fetchMachine, "phase_t",     committedParams ?? {});
+  const { node: phiTimeNode, error: phiTError }   = useNode(fetchMachine, "phi_t",     committedParams ?? {}, plotNonce);
+  const { node: ampNode, error: ampError }        = useNode(fetchMachine, "amplitude", committedParams ?? {}, plotNonce);
+  const { node: phaseTimeNode, error: phaseTError } = useNode(fetchMachine, "phase_t", committedParams ?? {}, plotNonce);
 
   // Sensor maps (R-Z cross-section + unrolled φ-θ), signal conditioning, fit quality
   // time series.
-  const { node: sensorRzRaw }    = useNode(fetchMachine, "sensor_map_rz",           committedParams ?? {});
-  const { node: sensorCylRaw }   = useNode(fetchMachine, "sensor_map_cylindrical", committedParams ?? {});
-  const { node: signalRaw }      = useNode(fetchMachine, "signal_conditioning",    committedParams ?? {});
-  const { node: chiSqRaw }       = useNode(fetchMachine, "chi_sq_t",               committedParams ?? {});
-  const { node: fitResRaw }      = useNode(fetchMachine, "fit_residuals",          committedParams ?? {});
-  const { node: svdEnergyRaw, error: svdEnergyError } = useNode(fetchMachine, "svd_energy",    committedParams ?? {});
-  const { node: svdCondRaw, error: svdCondError }     = useNode(fetchMachine, "svd_condition", committedParams ?? {});
+  const { node: sensorRzRaw, error: sensorRzError }   = useNode(fetchMachine, "sensor_map_rz",          committedParams ?? {}, plotNonce);
+  const { node: sensorCylRaw, error: sensorCylError } = useNode(fetchMachine, "sensor_map_cylindrical", committedParams ?? {}, plotNonce);
+  const { node: signalRaw, error: signalError }       = useNode(fetchMachine, "signal_conditioning",    committedParams ?? {}, plotNonce);
+  const { node: chiSqRaw, error: chiSqError }         = useNode(fetchMachine, "chi_sq_t",               committedParams ?? {}, plotNonce);
+  const { node: fitResRaw, error: fitResError }       = useNode(fetchMachine, "fit_residuals",          committedParams ?? {}, plotNonce);
+  const { node: svdEnergyRaw, error: svdEnergyError } = useNode(fetchMachine, "svd_energy",    committedParams ?? {}, plotNonce);
+  const { node: svdCondRaw, error: svdCondError }     = useNode(fetchMachine, "svd_condition", committedParams ?? {}, plotNonce);
 
   // No-data guard: 404 means the shot's HDF5 file hasn't been pulled yet.
   const noData = committedParams !== null && ampError?.includes("fetch failed (404)") === true;
-  // Fit-unavailable guard: a non-404 error means the quasi-stationary fit couldn't run
-  // (most often the shot was pulled for rotating-mode analysis and lacks the Bp
-  // LFS midplane array). Show the reason instead of a perpetual "loading…".
-  const fitUnavailable = committedParams !== null && !noData && ampError != null;
+  // Fit-unavailable guard: ONLY a 422 means the quasi-stationary fit can't run on
+  // this shot (no Bp LFS midplane array — the server's explicit answer). Any other
+  // error (500, timeout, network) is transient and must show as a retryable error,
+  // not a confidently wrong "this shot lacks the QS array" diagnosis.
+  const missingArray = committedParams !== null && ampError?.includes("fetch failed (422)") === true;
+  const fitFailed = committedParams !== null && !noData && !missingArray && ampError != null;
   const fitError = ampError?.replace(/^Error:\s*fetch failed \(\d+\):\s*/, "") ?? "";
+  // Nodes that errored while showing nothing — surfaced as one strip above the plots.
+  const nodeErrors = (
+    [
+      ["φ–t", phiTimeNode, phiTError],
+      ["phase", phaseTimeNode, phaseTError],
+      ["signals", signalRaw, signalError],
+      ["residuals", fitResRaw, fitResError],
+      ["χ²", chiSqRaw, chiSqError],
+      ["sensor map", sensorRzRaw, sensorRzError],
+    ] as const
+  ).filter(([, node, err]) => node === null && err != null);
 
   const sensorRzNode  = sensorRzRaw?.kind  === "line" ? (sensorRzRaw  as LineNode) : null;
   const sensorCylNode = sensorCylRaw?.kind === "line" ? (sensorCylRaw as LineNode) : null;
@@ -928,7 +949,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
             <span style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)" }}>settings changed</span>
           )}
           <button
-            onClick={() => setCommittedParams(qsParams)}
+            onClick={() => { setCommittedParams(qsParams); setPlotNonce(n => n + 1); }}
             style={{
               fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px", borderRadius: 3, cursor: "pointer",
               background: paramsDirty ? "var(--accent)" : "var(--panel)",
@@ -1018,7 +1039,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           The HDF5 file for this shot has not been fetched yet.<br />
           Use the <strong>pull panel</strong> in the left sidebar to fetch the data, then click Plot.
         </div>
-      ) : fitUnavailable ? (
+      ) : missingArray ? (
         <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
                       color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
           <strong>No quasi-stationary fit for shot {machine}.</strong><br />
@@ -1026,6 +1047,20 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           fetched for rotating-mode analysis only. Re-fetch it with the quasi-stationary
           channels, or choose a QS-capable shot.<br />
           <span style={{ opacity: 0.7 }}>reason: {fitError}</span>
+        </div>
+      ) : fitFailed ? (
+        <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 4,
+                      color: "var(--text-dim)", fontSize: "calc(12px * var(--font-scale))", lineHeight: 1.6 }}>
+          <strong>The quasi-stationary fit failed for shot {machine}.</strong><br />
+          <span style={{ opacity: 0.7 }}>{fitError}</span><br />
+          <button
+            onClick={() => setPlotNonce(n => n + 1)}
+            style={{ marginTop: 6, fontSize: "calc(11px * var(--font-scale))", padding: "2px 10px",
+                     borderRadius: 3, cursor: "pointer", background: "var(--accent)", color: "#fff",
+                     border: "1px solid var(--border)" }}
+          >
+            Retry
+          </button>
         </div>
       ) : (<>
 
@@ -1058,19 +1093,40 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                     );
                   })}
                 </div>
-              ) : <div className="placeholder">loading channels…</div>}
+              ) : <div className="placeholder">{signalError ? `channels unavailable: ${signalError.replace(/^Error:\s*/, "")}` : "loading channels…"}</div>}
             </div>
             {/* right — φ-θ unrolled sensor map (R-Z lives in the Sensors tab) */}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ · {channelFilter}</div>
               {sensorCylNode
                 ? <Plot height={300} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
-                : <div className="placeholder" style={{ height: 300 }}>loading…</div>
+                : <div className="placeholder" style={{ height: 300 }}>{sensorCylError ? `unavailable: ${sensorCylError.replace(/^Error:\s*/, "")}` : "loading…"}</div>
               }
             </div>
           </div>
         )}
       </div>
+
+      {/* Per-node failures: surfaced instead of leaving sections silently absent
+          or stuck on "loading…" — with a retry that re-runs the identical fetch. */}
+      {nodeErrors.length > 0 && (
+        <div style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 4,
+                      fontSize: "calc(11px * var(--font-scale))", color: "var(--text-dim)",
+                      display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>
+            {nodeErrors.map(([label, , err]) =>
+              `${label}: ${(err ?? "").replace(/^Error:\s*fetch failed \(\d+\):\s*/, "")}`).join(" · ")}
+          </span>
+          <button
+            onClick={() => setPlotNonce(n => n + 1)}
+            style={{ fontSize: "calc(10px * var(--font-scale))", padding: "1px 8px", borderRadius: 3,
+                     cursor: "pointer", background: "var(--panel)", color: "var(--text)",
+                     border: "1px solid var(--border)" }}
+          >
+            retry
+          </button>
+        </div>
+      )}
 
       {/* ── Section D+E: Time-series results — PRIMARY, at top ────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1223,7 +1279,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
           </span>
         </div>
         {!signalNode ? (
-          <div className="placeholder" style={{ height: 240 }}>loading signals…</div>
+          <div className="placeholder" style={{ height: 240 }}>{signalError ? `signals unavailable: ${signalError.replace(/^Error:\s*/, "")}` : "loading signals…"}</div>
         ) : signalStacked && signalPairs ? (
           <div>
             {signalPairs.map((pair, i) => {
@@ -1260,12 +1316,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               {/* Residuals — top */}
               {fitResNode
                 ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("fit_residuals")} download={dl("fit_residuals")} />
-                : <div className="placeholder" style={{ height: 150 }}>loading residuals…</div>
+                : <div className="placeholder" style={{ height: 150 }}>{fitResError ? `residuals unavailable: ${fitResError.replace(/^Error:\s*/, "")}` : "loading residuals…"}</div>
               }
               {/* Chi² — bottom */}
               {chiSqNode
                 ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("chi_sq_t")} download={dl("chi_sq_t")} />
-                : <div className="placeholder" style={{ height: 130 }}>loading χ²…</div>
+                : <div className="placeholder" style={{ height: 130 }}>{chiSqError ? `χ² unavailable: ${chiSqError.replace(/^Error:\s*/, "")}` : "loading χ²…"}</div>
               }
             </div>
             <div style={{ width: 190, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1328,14 +1384,14 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
               <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", marginBottom: 2 }}>cross-section (R-Z)</div>
               {sensorRzNode
                 ? <Plot height={220} data={sensorRzData} layout={sensorRzLayout} exportName={xn("sensor_map_rz")} download={dl("sensor_map_rz")} />
-                : <div className="placeholder">loading…</div>
+                : <div className="placeholder">{sensorRzError ? `unavailable: ${sensorRzError.replace(/^Error:\s*/, "")}` : "loading…"}</div>
               }
             </div>
             <div>
               <div style={{ fontSize: "calc(10px * var(--font-scale))", color: "var(--text-dim)", marginBottom: 2 }}>unrolled φ-θ</div>
               {sensorCylNode
                 ? <Plot height={220} data={sensorCylData} layout={sensorCylLayout} exportName={xn("sensor_map_cylindrical")} download={dl("sensor_map_cylindrical")} />
-                : <div className="placeholder">loading…</div>
+                : <div className="placeholder">{sensorCylError ? `unavailable: ${sensorCylError.replace(/^Error:\s*/, "")}` : "loading…"}</div>
               }
             </div>
           </div>
