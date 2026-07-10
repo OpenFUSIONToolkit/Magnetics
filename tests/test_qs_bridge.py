@@ -155,3 +155,20 @@ def test_sigma_override_does_not_corrupt_fit_signal(synthetic_shot):
         default["chi_sq"].values * (sig0 / override) ** 2,
         rtol=1e-6,
     )
+
+
+def test_default_fit_cond_is_inversion_cutoff_not_trust_threshold(synthetic_shot):
+    """The default cutoff must be OMFIT SLCONTOUR's 1e3 inversion cutoff (1/rcond)
+    at every layer. When it was 10 (the GUI's K-trust threshold), any fit with K in
+    (10, 1e3) silently zeroed basis directions the reference fit keeps — and K(eff)
+    read <= 10 by construction, so the quality panel looked healthiest exactly when
+    the regularization was distorting the fit."""
+    import inspect
+
+    from magnetics.core import qs_fit
+
+    # core default (what a direct fit() call regularizes with)
+    assert inspect.signature(qs_fit.fit).parameters["fit_cond"].default == 1e3
+    # service default (what a GUI request without fit_cond regularizes with)
+    run = nodes._prep_qs_ds(synthetic_shot, {})
+    assert run.fit.attrs["fit_condition"] == 1e3

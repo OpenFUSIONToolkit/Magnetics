@@ -1446,7 +1446,9 @@ def _prep_qs_ds(shot, params):
     cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
     energy = float(params.get("energy", 0.98)) if params else 0.98
     fit_basis = params.get("fit_basis", "sinusoidal-integral") if params else "sinusoidal-integral"
-    fit_cond = float(params.get("fit_cond", 10.0)) if params else 10.0
+    # 1e3 = OMFIT SLCONTOUR's inversion cutoff (1/rcond); the "warn when K > 10"
+    # trust threshold lives in contracts.quality_for_k, not here.
+    fit_cond = float(params.get("fit_cond", 1e3)) if params else 1e3
     sigma_str = params.get("sigma") if params else None
     sigma = float(sigma_str) if sigma_str is not None else None
 

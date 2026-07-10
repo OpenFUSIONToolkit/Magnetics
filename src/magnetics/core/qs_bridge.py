@@ -248,7 +248,7 @@ def fit_to_fit_quality_node(fit_ds) -> dict:
     eff_cn = float(fit_ds.attrs.get("eff_cn", K))
     mean_chi2 = float(np.nanmean(fit_ds["red_chi_sq"].values))
     n_ch = int(fit_ds.sizes.get("channel", fit_ds["fit_sigmas"].shape[0]))
-    fit_cond = float(fit_ds.attrs.get("fit_condition", 10.0))
+    fit_cond = float(fit_ds.attrs.get("fit_condition", 1e3))
     n_modes = int(fit_ds.sizes["mode"])
 
     return contracts.metrics(
@@ -378,7 +378,7 @@ def fit_to_svd_condition_node(fit_ds) -> dict:
     w_a = np.linalg.svd(A, compute_uv=False)
     cond = np.abs(w_a[0] / w_a)
     idx = np.arange(1, len(cond) + 1)
-    fit_cond = float(fit_ds.attrs.get("fit_condition", 10.0))
+    fit_cond = float(fit_ds.attrs.get("fit_condition", 1e3))
 
     series = {
         "name": "condition number",
