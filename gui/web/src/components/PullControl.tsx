@@ -8,6 +8,7 @@
 // decimation to make a pull seconds instead of minutes.
 import { useEffect, useRef, useState } from "react";
 import { apiBase, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
+import { deviceDefaults } from "../lib/deviceDefaults";
 import { useStore } from "../store";
 
 export default function PullControl() {
@@ -57,18 +58,15 @@ export default function PullControl() {
   const esRef = useRef<EventSource | null>(null);
 
   // Snap backend / sensor-set / window / shot to sensible per-device defaults on a
-  // device change. A tree device (NSTX/KSTAR) has no cluster and no analysis→signal
-  // map, so it uses mdsthin over a NARROW window (its raw signals are ~15 MHz and
-  // seconds long — a wide window is gigabytes). An NSTX-style tree device requires a
-  // named sensor set; KSTAR's transport defaults to its declared arrays when none is
-  // chosen.
+  // device change. The decision lives in lib/deviceDefaults.ts (pure + unit-tested,
+  // issue #64); this just applies it to the form state.
   function snapDeviceDefaults(d: DeviceInfo) {
-    const tree = d.access === "mdsplus_tree";
-    setBackend(d.remote_capable ? "remote" : "mdsthin");
-    setSensorSet(tree && !d.needs_ssh_creds ? (d.sensor_sets[0] ?? "") : "");
-    setTmin(tree ? "250" : "1000");
-    setTmax(tree ? "350" : "5000");
-    if (d.default_shot != null) setShot(String(d.default_shot));
+    const def = deviceDefaults(d);
+    setBackend(def.backend);
+    setSensorSet(def.sensorSet);
+    setTmin(def.tmin);
+    setTmax(def.tmax);
+    if (def.shot != null) setShot(def.shot);
   }
 
   // The store owns `device`, and the left rail's Device picker (App.tsx) changes it

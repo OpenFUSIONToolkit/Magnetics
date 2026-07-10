@@ -87,3 +87,178 @@ def test_fit_reports_covariance_diagonal_sigmas():
 def test_bad_basis_raises():
     with pytest.raises(ValueError):
         form_basis_function(1, 0, 0.0, 1.0, 0.0, 1.0, fit_basis="not-a-basis")
+
+
+# ---------------------------------------------------------------------------
+# Gaussian bases — value-pinned against direct numerical integration.
+# These branches had NO tests, and this function is exactly where the port
+# deliberately diverges from the OMFIT source (its `)(` typo and integral
+# scale bugs) — so the intended semantics must be pinned, not inherited.
+# ---------------------------------------------------------------------------
+
+
+class TestGaussianBases:
+    X1, X2 = np.array([10.0]), np.array([30.0])  # sensor phi extent (deg)
+    Y1, Y2 = np.array([-5.0]), np.array([15.0])  # sensor theta extent (deg)
+    NE, ME = 25.0, 30.0  # RBF widths (deg)
+    CX, CY = 40.0, 10.0  # RBF centre (deg) — n/m carry the CENTRE for gaussians
+
+    def test_gaussian_point_is_rbf_at_sensor_centre(self):
+        v = form_basis_function(
+            self.CX,
+            self.CY,
+            self.X1,
+            self.X2,
+            self.Y1,
+            self.Y2,
+            "gaussian-point",
+            nepsilon=self.NE,
+            mepsilon=self.ME,
+        )
+        xc, yc = 20.0, 5.0  # midpoints of the extents
+        expect = np.exp(-(((self.CX - xc) / self.NE) ** 2 + ((self.CY - yc) / self.ME) ** 2))
+        assert v.dtype.kind == "f"
+        assert v[0] == pytest.approx(expect, rel=1e-12)
+
+    def test_gaussian_point_uniform_direction_drops_term(self):
+        # mepsilon=inf → ridge in phi only (theta term contributes nothing)
+        v = form_basis_function(
+            self.CX,
+            999.0,
+            self.X1,
+            self.X2,
+            self.Y1,
+            self.Y2,
+            "gaussian-point",
+            nepsilon=self.NE,
+            mepsilon=np.inf,
+        )
+        assert v[0] == pytest.approx(np.exp(-(((self.CX - 20.0) / self.NE) ** 2)), rel=1e-12)
+
+    def test_gaussian_point_periodic_copies_wrap(self):
+        # centre at 350°, sensor centred at 20°: the +360° copy (cx=710? no — cx-360=-10)
+        # sits 30° away and dominates the direct 330° separation.
+        base = form_basis_function(
+            350.0,
+            self.CY,
+            self.X1,
+            self.X2,
+            self.Y1,
+            self.Y2,
+            "gaussian-point",
+            ncycle=0,
+            nepsilon=self.NE,
+            mepsilon=self.ME,
+        )
+        wrapped = form_basis_function(
+            350.0,
+            self.CY,
+            self.X1,
+            self.X2,
+            self.Y1,
+            self.Y2,
+            "gaussian-point",
+            ncycle=1,
+            nepsilon=self.NE,
+            mepsilon=self.ME,
+        )
+        manual = sum(
+            np.exp(
+                -((((350.0 + k * 360) - 20.0) / self.NE) ** 2 + ((self.CY - 5.0) / self.ME) ** 2)
+            )
+            for k in (-1, 0, 1)
+        )
+        assert wrapped[0] == pytest.approx(manual, rel=1e-12)
+        assert wrapped[0] > base[0] * 10  # the wrap matters physically
+
+    def test_gaussian_integral_2d_matches_dblquad(self):
+        from scipy.integrate import dblquad
+
+        v = form_basis_function(
+            self.CX,
+            self.CY,
+            self.X1,
+            self.X2,
+            self.Y1,
+            self.Y2,
+            "gaussian-integral",
+            nepsilon=self.NE,
+            mepsilon=self.ME,
+        )
+        num, _ = dblquad(
+            lambda y, x: np.exp(-(((x - self.CX) / self.NE) ** 2 + ((y - self.CY) / self.ME) ** 2)),
+            float(self.X1[0]),
+            float(self.X2[0]),
+            float(self.Y1[0]),
+            float(self.Y2[0]),
+        )
+        # the basis IS the plain area integral of the RBF over the sensor extent
+        assert v[0] == pytest.approx(num, rel=1e-10)
+
+    @pytest.mark.parametrize("uniform", ["theta", "phi"])
+    def test_gaussian_integral_ridge_matches_quad(self, uniform):
+        from scipy.integrate import quad
+
+        if uniform == "theta":  # mepsilon=inf → 1-D line integral along phi
+            v = form_basis_function(
+                self.CX,
+                0.0,
+                self.X1,
+                self.X2,
+                self.Y1,
+                self.Y2,
+                "gaussian-integral",
+                nepsilon=self.NE,
+                mepsilon=np.inf,
+            )
+            num, _ = quad(
+                lambda x: np.exp(-(((x - self.CX) / self.NE) ** 2)),
+                float(self.X1[0]),
+                float(self.X2[0]),
+            )
+        else:  # nepsilon=inf → 1-D line integral along theta
+            v = form_basis_function(
+                0.0,
+                self.CY,
+                self.X1,
+                self.X2,
+                self.Y1,
+                self.Y2,
+                "gaussian-integral",
+                nepsilon=np.inf,
+                mepsilon=self.ME,
+            )
+            num, _ = quad(
+                lambda y: np.exp(-(((y - self.CY) / self.ME) ** 2)),
+                float(self.Y1[0]),
+                float(self.Y2[0]),
+            )
+        assert v[0] == pytest.approx(num, rel=1e-10)
+
+    def test_sinusoidal_integral_mixed_mode_is_exact_area_average(self):
+        """The (n≠0, m≠0) sinusoidal-integral value must be the exact area-average
+        of e^{i(nφ+mθ)} over the sensor extent. This is the site where the port
+        DELIBERATELY diverges from OMFIT (whose expression is off by −180/π); the
+        divergence is intentional and this pins the correct semantics."""
+        from scipy.integrate import dblquad
+
+        n_mode, m_mode = 2, 1
+        v = form_basis_function(
+            n_mode, m_mode, self.X1, self.X2, self.Y1, self.Y2, "sinusoidal-integral"
+        )
+        area = np.deg2rad(self.X2[0] - self.X1[0]) * np.deg2rad(self.Y2[0] - self.Y1[0])
+
+        def integrand(re):
+            def f(y, x):
+                val = np.exp(1j * (n_mode * np.deg2rad(x) + m_mode * np.deg2rad(y)))
+                return val.real if re else val.imag
+
+            num, _ = dblquad(
+                f, float(self.X1[0]), float(self.X2[0]), float(self.Y1[0]), float(self.Y2[0])
+            )
+            return num
+
+        # ∫∫ over degrees × (rad/deg)² = ∫∫ over radians; divide by the rad² area
+        avg = (integrand(True) + 1j * integrand(False)) * np.deg2rad(1.0) ** 2 / area
+        assert v[0].real == pytest.approx(avg.real, rel=1e-9)
+        assert v[0].imag == pytest.approx(avg.imag, rel=1e-9)
