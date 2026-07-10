@@ -339,21 +339,45 @@ def _named_sets(dg, substr: str) -> list[str]:
 
 
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
+_PAIR_N_MAX = 5  # the pair must resolve |n| <= this without aliasing (matches the n-map)
+
+
+def _best_pair(arr) -> tuple[tuple[str, float], tuple[str, float]] | None:
+    """Best 2-point probe pair from a (name, phi)-sorted array: the widest *wrapped*
+    separation that still resolves |n| <= _PAIR_N_MAX unaliased. round(phase/Δφ) is
+    exact for all |n| <= N iff (N + 0.5)·|Δφ| <= 180, and within that limit a wider
+    Δφ dilutes phase noise (σ_n = σ_φ/Δφ) — so: widest under the limit; if the array
+    has no such pair, the smallest non-zero separation (best available n range)."""
+    limit = 180.0 / (_PAIR_N_MAX + 0.5)
+    best = smallest = None
+    for i in range(len(arr)):
+        for j in range(i + 1, len(arr)):
+            sep = abs(spectral.wrap_angle_deg(arr[j][1] - arr[i][1]))
+            if sep == 0:
+                continue
+            if sep <= limit and (best is None or sep > best[0]):
+                best = (sep, arr[i], arr[j])
+            if smallest is None or sep < smallest[0]:
+                smallest = (sep, arr[i], arr[j])
+    pick = best or smallest
+    return None if pick is None else (pick[1], pick[2])
+
+
 def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     """Two toroidally-separated probes for the 2-point cross-spectrogram.
     Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set / a
     KSTAR declared toroidal array), then integrated Bp. Returns ((name1, phi1),
-    (name2, phi2)) with the widest non-zero separation."""
+    (name2, phi2)) chosen by ``_best_pair`` (aliasing-safe, noise-optimal)."""
     dev, arrays = _arrays(shot)
     if arrays:  # device declares an explicit toroidal set (KSTAR) → use it precisely
-        arr = _set_channels(dev, arrays["toroidal"], shot)
-        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
-            return arr[0], arr[-1]
+        pair = _best_pair(_set_channels(dev, arrays["toroidal"], shot))
+        if pair is not None:
+            return pair
         raise ValueError("need two toroidally-separated probes for a spectrogram")
     for families in _pick_pair_prefs(shot):
-        arr = _array_channels(shot, families)  # (name, phi), sorted by phi
-        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
-            return arr[0], arr[-1]
+        pair = _best_pair(_array_channels(shot, families))  # (name, phi), sorted by phi
+        if pair is not None:
+            return pair
     raise ValueError("need two toroidally-separated probes for a spectrogram")
 
 
@@ -394,7 +418,7 @@ def _spec_result(shot: str, slice_duration: float, coherence_smooth: int, max_co
         coherence_smooth=coherence_smooth,
         max_columns=max_columns,
     )
-    return res, (n1, n2), round(float(phi2 - phi1), 1)
+    return res, (n1, n2), round(spectral.wrap_angle_deg(phi2 - phi1), 1)
 
 
 def _prep_spec(shot, params):

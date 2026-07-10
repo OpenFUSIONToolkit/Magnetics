@@ -165,6 +165,17 @@ def _cross_spectral_errors(
     return phase_err, amp_err
 
 
+def wrap_angle_deg(angle: float) -> float:
+    """Reduce an angle (deg) to the signed principal value in (-180, 180].
+
+    A mode's cross-phase n·Δφ is only defined modulo 360°, so the 2-point estimator
+    n = round(phase / Δφ) needs the *short-way, signed* probe separation: probes at
+    20° and 340° are 320° apart measured one way, but the wrapped phase sees -40°.
+    Feeding the long-way separation aliases every mode toward n = 0."""
+    wrapped = (float(angle) + 180.0) % 360.0 - 180.0
+    return 180.0 if wrapped == -180.0 else wrapped
+
+
 def cross_spectrum(
     sig1: NDArray[np.floating],
     sig2: NDArray[np.floating],
@@ -180,7 +191,10 @@ def cross_spectrum(
         sig1 (ndarray): first probe time series.
         sig2 (ndarray): second probe time series.
         sample_rate (float): sampling rate (Hz).
-        delta_phi (float | None): toroidal separation (deg); enables mode-number output.
+        delta_phi (float | None): toroidal separation (deg), phi2 - phi1; enables
+            mode-number output. Wrapped internally to the principal value (-180, 180],
+            so either the short- or long-way separation may be passed. Modes are only
+            resolved unaliased for |n| <= 180 / |wrapped delta_phi|.
         nperseg (int | None): Welch segment length for csd/coherence; None uses scipy's
             default (256). Set below the signal length on short slices to keep multiple
             averaging segments — coherence is meaningless from a single segment.
@@ -209,8 +223,9 @@ def cross_spectrum(
             n_segments=k,
         )
 
+    delta_phi = wrap_angle_deg(delta_phi)
     if delta_phi == 0:
-        raise ValueError("delta_phi must be non-zero to compute mode numbers")
+        raise ValueError("delta_phi must be non-zero (mod 360°) to compute mode numbers")
 
     mode = np.rint(phase / delta_phi).astype(np.intp)
 
@@ -331,7 +346,8 @@ def compute_spectrogram(
         time (ndarray): sample times (s); assumed uniformly sampled.
         sig1 (ndarray): first probe time series.
         sig2 (ndarray): second probe time series.
-        delta_phi (float): toroidal separation (deg); must be non-zero.
+        delta_phi (float): toroidal separation (deg), phi2 - phi1; must be non-zero
+            mod 360°. Wrapped internally to (-180, 180] like ``cross_spectrum``.
         slice_duration (float): FFT window width (s) — sets the frequency resolution.
         window (str): scipy window name for the taper.
         max_columns (int): cap on spectrogram time columns (decimation lever).
@@ -340,8 +356,9 @@ def compute_spectrogram(
         result (SpectrogramResult): power/coherence/mode_number as (n_times, n_freqs)
             arrays, with time/frequency/rms_by_mode/mode_indices.
     """
+    delta_phi = wrap_angle_deg(delta_phi)
     if delta_phi == 0:
-        raise ValueError("delta_phi must be non-zero to compute mode numbers")
+        raise ValueError("delta_phi must be non-zero (mod 360°) to compute mode numbers")
 
     time = np.asarray(time)
     s1 = np.ascontiguousarray(sig1, dtype=np.float32)

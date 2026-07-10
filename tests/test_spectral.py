@@ -688,3 +688,64 @@ class TestArrayModeSpectrogram:
         assert sm.quality.shape == ms.quality.shape
         assert np.all((sm.quality >= 0.0) & (sm.quality <= 1.0 + 1e-6))
         np.testing.assert_array_equal(sm.mode_number, ms.mode_number)
+
+
+# -----------------------------------------------------------------------
+# wide-pair aliasing regression (probes 320° apart the long way = -40° wrapped)
+# -----------------------------------------------------------------------
+
+
+class TestWidePairAliasing:
+    """Regression for the production DIII-D pair MPI66M020D/340D (φ = 19.52°/339.7°):
+    Δφ = φ2 − φ1 = 320.2° the long way, −39.8° wrapped. Unwrapped, round(phase/Δφ)
+    reported n = 0 for every real mode. n is SIGNED here — sig ~ sin(ωt − nφ) with
+    Δφ = φ2 − φ1 (the service convention) must recover +n."""
+
+    PHI1, PHI2 = 19.52, 339.7  # real MPI66M020D / MPI66M340D toroidal angles
+
+    @staticmethod
+    def _pair(n, phi1, phi2, fs=50_000, f_mode=3_000.0, duration=0.1):
+        t = np.linspace(0, duration, int(fs * duration), endpoint=False)
+        w = 2 * np.pi * f_mode
+        sig1 = np.sin(w * t - np.deg2rad(n * phi1))
+        sig2 = np.sin(w * t - np.deg2rad(n * phi2))
+        return t, sig1, sig2, float(fs)
+
+    @pytest.mark.parametrize("n_true", [1, 2, 3, 4, -2])
+    def test_cross_spectrum_recovers_signed_n(self, n_true):
+        _, sig1, sig2, fs = self._pair(n_true, self.PHI1, self.PHI2)
+        result = cross_spectrum(sig1, sig2, fs, delta_phi=self.PHI2 - self.PHI1)
+        peak = np.argmax(result.power)
+        assert result.mode_number[peak] == n_true
+
+    @pytest.mark.parametrize("n_true", [1, 3])
+    def test_spectrogram_recovers_signed_n(self, n_true):
+        t, sig1, sig2, fs = self._pair(n_true, self.PHI1, self.PHI2)
+        res = compute_spectrogram(t, sig1, sig2, delta_phi=self.PHI2 - self.PHI1)
+        it, fi = np.unravel_index(np.argmax(res.power), res.power.shape)
+        assert res.mode_number[it, fi] == n_true
+
+    def test_long_and_short_way_separations_agree(self):
+        _, sig1, sig2, fs = self._pair(2, self.PHI1, self.PHI2)
+        long_way = cross_spectrum(sig1, sig2, fs, delta_phi=self.PHI2 - self.PHI1)
+        short_way = cross_spectrum(sig1, sig2, fs, delta_phi=self.PHI2 - self.PHI1 - 360.0)
+        np.testing.assert_array_equal(long_way.mode_number, short_way.mode_number)
+        np.testing.assert_array_equal(long_way.mode_indices, short_way.mode_indices)
+
+    def test_full_turn_separation_raises(self):
+        _, sig1, sig2, fs = self._pair(1, 0.0, 360.0)
+        with pytest.raises(ValueError, match="mod 360"):
+            cross_spectrum(sig1, sig2, fs, delta_phi=360.0)
+
+
+class TestWrapAngleDeg:
+    def test_values(self):
+        from magnetics.core.spectral import wrap_angle_deg
+
+        assert wrap_angle_deg(320.18) == pytest.approx(-39.82)
+        assert wrap_angle_deg(-200.0) == pytest.approx(160.0)
+        assert wrap_angle_deg(33.0) == pytest.approx(33.0)
+        assert wrap_angle_deg(180.0) == 180.0
+        assert wrap_angle_deg(-180.0) == 180.0
+        assert wrap_angle_deg(540.0) == 180.0
+        assert wrap_angle_deg(720.0) == 0.0
