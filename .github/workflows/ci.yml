@@ -65,8 +65,14 @@ jobs:
         if: ${{ matrix.python == '3.12' }}
         run: uvx ruff format --check .
 
-      - name: Tests (pytest)
-        run: uv run --python ${{ matrix.python }} --with pytest pytest -q
+      # Coverage floor: a regression guard, not a target. Today's suite sits at
+      # ~79% line coverage; 75 leaves headroom for legitimately-untestable code
+      # (live transports, notebook plotting) while catching a big untested
+      # feature landing. Raise it as coverage grows; never lower it to merge.
+      - name: Tests (pytest + coverage floor)
+        run: >
+          uv run --python ${{ matrix.python }} --with pytest --with pytest-cov
+          pytest -q --cov=magnetics --cov-report=term --cov-fail-under=75
 
   typecheck:
     name: Typecheck (ty)
