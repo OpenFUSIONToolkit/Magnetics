@@ -22,6 +22,9 @@ dependencies = [
     "uvicorn[standard]>=0.49.0",
     # per-user data dir for installed (non-checkout) runs; see data/h5source.py
     "platformdirs>=4",
+    # KSTAR VPN/SSH tunnel automation (data/fetch/kstar_transport.py imports it
+    # lazily; without declaring it, a wheel install dies at live-pull time)
+    "pexpect>=4.9",
 ]
 
 [build-system]

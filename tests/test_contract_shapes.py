@@ -1,7 +1,6 @@
 """Smoke tests for the mock seam: every generator emits the CONTRACT.md shapes.
 
-Imports only magnetics.service.mock (numpy), not the FastAPI app — so these run
-with the core install, no `service` extra needed.
+Imports only magnetics.service.mock (numpy), not the FastAPI app.
 """
 
 from magnetics.service import mock

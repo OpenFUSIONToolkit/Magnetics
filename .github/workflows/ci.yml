@@ -65,14 +65,8 @@ jobs:
         if: ${{ matrix.python == '3.12' }}
         run: uvx ruff format --check .
 
-      - name: Tests (pytest; tolerate "no tests collected" while skeletal)
-        run: |
-          set +e
-          uv run --python ${{ matrix.python }} --with pytest pytest -q
-          code=$?
-          set -e
-          # exit 5 = no tests collected yet (skeleton); treat as success
-          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+      - name: Tests (pytest)
+        run: uv run --python ${{ matrix.python }} --with pytest pytest -q
 
   typecheck:
     name: Typecheck (ty)
