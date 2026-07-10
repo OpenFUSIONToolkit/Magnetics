@@ -130,3 +130,28 @@ def test_reconstruction_uses_minus_i_sign_convention():
         f"reconstructed peak at φ={peak_phi}°, expected ~{delta}° (−i convention); "
         f"a peak near {360 - delta}° means the exp(+i…) sign bug is back"
     )
+
+
+def test_sigma_override_does_not_corrupt_fit_signal(synthetic_shot):
+    """Regression: fit_signal was de-normalized by the dataset signal_sigma while the
+    design matrix and RHS were normalized by the override sigma, scaling fit_signal
+    by signal_sigma/override and corrupting residual and chi_sq (the coefficients
+    stayed correct). With a uniform sigma the weighted LS solution is
+    override-invariant: fit_signal must be identical, and chi_sq must scale by
+    exactly (sigma_default / sigma_override)**2."""
+    default = nodes._prep_qs_ds(synthetic_shot, {}).fit
+    override = 1e-4
+    overridden = nodes._prep_qs_ds(synthetic_shot, {"sigma": str(override)}).fit
+
+    np.testing.assert_allclose(
+        overridden["fit_coeffs"].values, default["fit_coeffs"].values, rtol=1e-9
+    )
+    np.testing.assert_allclose(
+        overridden["fit_signal"].values, default["fit_signal"].values, rtol=1e-9
+    )
+    sig0 = float(np.nanmean(default["signal_sigma"].values))
+    np.testing.assert_allclose(
+        overridden["chi_sq"].values,
+        default["chi_sq"].values * (sig0 / override) ** 2,
+        rtol=1e-6,
+    )
