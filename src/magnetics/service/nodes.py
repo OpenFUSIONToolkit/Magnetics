@@ -884,7 +884,7 @@ def _array_mode_spec(shot, names, phis, slice_duration):
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
 def _toroidal_arr(shot):
     """The toroidal (midplane) array for the n-fit: ONE consistent probe type, all at
-    θ≈0 so the phase is a clean −nφ ramp. Prefer the fast-Mirnov dB/dt array; a "both"
+    θ≈0 so the phase is a clean +nφ ramp. Prefer the fast-Mirnov dB/dt array; a "both"
     pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
     probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
     scrambles the fit, so they're excluded."""
@@ -933,12 +933,13 @@ def _toroidal_mode(shot, params):
 
 # ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
 def _wrapped_ramp(intercept_deg, slope_n) -> dict:
-    """Fitted line phase(a) = (c − n·a) mod 360 over a∈[0,360], WRAPPED so it traces
-    the same |n| sawteeth as the (wrapped) data instead of one line shooting off-axis.
-    A null break is inserted at each 0/360 wrap so the polyline doesn't draw a vertical
+    """Fitted line phase(a) = (c + n·a) mod 360 over a∈[0,360] (the conj(sig)·ref
+    cross-phase ramp ``fit_toroidal_mode`` fits), WRAPPED so it traces the same |n|
+    sawteeth as the (wrapped) data instead of one line shooting off-axis. A null
+    break is inserted at each 0/360 wrap so the polyline doesn't draw a vertical
     jump across the panel."""
     a = np.linspace(0.0, 360.0, 361)
-    y = (intercept_deg - slope_n * a) % 360.0
+    y = (intercept_deg + slope_n * a) % 360.0
     fx: list = []
     fy: list = []
     prev = None
@@ -1105,7 +1106,7 @@ def _toroidal_n(shot, t0_s, f_khz):
 
 def _poloidal_mode(shot, params):
     """Per-probe phase/amplitude across the poloidal array vs θ. The probes span φ, so
-    the toroidal nφ ramp is removed (phase += n·φ → −m·θ + const) using the toroidal n
+    the toroidal +nφ ramp is removed (phase −= n·φ → m·θ + const) using the toroidal n
     at the same (t0, f). The probe angles are mapped to the elongation-corrected θ*
     (using the EFIT κ at the cursor) when available, so an `m` mode is a clean sinusoid
     rather than a κ-distorted one. Returns (arr, mode, f_khz, t0_ms, kappa)."""
@@ -1121,7 +1122,7 @@ def _poloidal_mode(shot, params):
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
-    detrended = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
+    detrended = (mode.phase - _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
     mode = dataclasses.replace(mode, phase=detrended)
     return arr, mode, f_khz, t0_ms, kappa
 

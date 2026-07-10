@@ -297,16 +297,20 @@ def mac_n_spectrum(
     *,
     n_range: tuple[int, int] = (-6, 6),
 ) -> tuple[NDArray[np.integer], NDArray[np.floating], int]:
-    """MAC of a measured shape vector against ideal pure-mode templates e^{−inφ}.
+    """MAC of a measured shape vector against ideal pure-mode templates e^{+inφ}.
 
     Gives a *shape-based*, geometry-aware toroidal mode-number identification (how
     closely the measured array pattern resembles each pure rotating mode), a useful
-    cross-check on the cross-phase fit. Returns (n_values, mac_values, best_n).
+    cross-check on the cross-phase fit. The measured shape comes from the
+    conj(sig)·ref cross-phases (``shape_vector`` of ``extract_mode_at_frequency`` /
+    ``mode_from_spectrum`` output), where a ``cos(nφ - ωt)`` mode appears as a
+    ``+nφ`` phase ramp, i.e. ``z ∝ e^{+inφ}`` — so matching that template reports
+    the same signed n as the cross-phase fit. Returns (n_values, mac_values, best_n).
     """
     phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
     z = np.asarray(complex_shape, dtype=np.complex128)
     ns = np.arange(n_range[0], n_range[1] + 1)
-    macs = np.array([mac(z, np.exp(-1j * n * phi)) for n in ns])
+    macs = np.array([mac(z, np.exp(1j * n * phi)) for n in ns])
     return ns, macs, int(ns[int(np.argmax(macs))])
 
 

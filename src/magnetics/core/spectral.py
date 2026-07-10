@@ -622,7 +622,7 @@ class ArrayModeSpectrogram:
     time: NDArray[np.floating]  # (n_times,) window-center times (s)
     freq_band: NDArray[np.floating]  # (n_band,) Hz kept
     mode_number: NDArray[np.integer]  # (n_times, n_band) best-fit toroidal n
-    amplitude: NDArray[np.floating]  # (n_times, n_band) |Σ_p Z_p e^{-inφ}|
+    amplitude: NDArray[np.floating]  # (n_times, n_band) |⟨Z, e^{-inφ}⟩| = |Σ_p Z_p e^{+inφ}|
     quality: NDArray[np.floating]  # (n_times, n_band) harmonic energy fraction ∈ [1/M,1]
 
 
@@ -642,11 +642,13 @@ def array_mode_spectrogram(
 
     The per-cell mode-coherence is the *energy fraction* the single best-fit n captures of
     the summed toroidal-harmonic power, ``|R_{n*}|² / Σ_n |R_n|² ∈ [1/M, 1]`` with
-    ``R_n = Σ_p Z_p e^{-inφ_p}`` and ``M = 2·n_max + 1`` candidates: 1 = a pure single-n
+    ``R_n = Σ_p Z_p e^{+inφ_p}`` and ``M = 2·n_max + 1`` candidates: 1 = a pure single-n
     pattern, 1/M = white across harmonics (incoherent noise). This is a spectral-
     concentration ratio (more noise/signal contrast than the resultant length ``|R_{n*}| /
-    Σ_p|Z_p|``, whose noise floor sits higher at ~1/√P). The ``exp(-i n φ)`` sign matches
-    ``mode_from_spectrum`` and the phase fit, so the reported n agrees with them.
+    Σ_p|Z_p|``, whose noise floor sits higher at ~1/√P). ``R_n`` is the inner product
+    ``⟨Z, e^{-inφ}⟩`` (template conjugated): a ``cos(nφ - ωt)`` mode's positive-frequency
+    STFT pattern is ``Z_p ∝ e^{-inφ_p}``, so the projection peaks at the same signed +n
+    that ``cross_spectrum`` and the phase fit report.
 
     Inputs:
         spectrum (ArrayShapeSpectrum): the per-probe complex STFT band.
@@ -658,8 +660,8 @@ def array_mode_spectrogram(
     z = np.asarray(spectrum.spec)  # (P, T, F) complex
     phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
     ns = np.arange(-int(n_max), int(n_max) + 1)
-    basis = np.exp(-1j * ns[:, None] * phi[None, :])  # (M, P)
-    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F) = R_n
+    basis = np.exp(1j * ns[:, None] * phi[None, :])  # (M, P) = conj(e^{-inφ_p}) templates
+    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F) = R_n = ⟨Z, e^{-inφ}⟩
     amp = np.abs(proj)
     k = np.argmax(amp, axis=0)  # (T, F)
     peak = np.take_along_axis(amp, k[None], axis=0)[0]  # |R_{n*}| (T, F)
@@ -884,11 +886,14 @@ def fit_toroidal_mode(
     """Fit a toroidal mode number to per-probe phase-vs-angle data.
 
     A rotating mode of toroidal number n imprints a linear phase ramp across the
-    toroidal array: ``phase(phi) = c - n * phi`` (deg). Rather than unwrap the
-    (mod-360) phases — ill-posed for sparse arrays — this scans integer candidates
-    and picks the n whose residual ``phase + n * phi`` clusters most tightly on the
-    circle (largest amplitude-weighted resultant). The intercept c is the angle of
-    that resultant, giving a wrap-free fit line for the GUI to draw.
+    toroidal array. With the conj(sig)·ref cross-phase convention used by
+    ``extract_mode_at_frequency`` / ``mode_from_spectrum``, a ``cos(nφ - ωt)`` mode
+    measures as ``phase(phi) = c + n * phi`` (deg) — the same signed n the 2-point
+    ``cross_spectrum`` reports. Rather than unwrap the (mod-360) phases — ill-posed
+    for sparse arrays — this scans integer candidates and picks the n whose residual
+    ``phase - n * phi`` clusters most tightly on the circle (largest
+    amplitude-weighted resultant). The intercept c is the angle of that resultant,
+    giving a wrap-free fit line for the GUI to draw.
 
     Inputs:
         mode_result (ModeAtFrequencyResult): per-probe phase/amplitude/angle, e.g.
@@ -919,7 +924,7 @@ def fit_toroidal_mode(
     inter = np.empty(len(candidates))  # per-candidate intercept c_n (deg)
     rmag = np.empty(len(candidates))  # per-candidate resultant length
     for j, n in enumerate(candidates):
-        resultant = np.sum(w * np.exp(1j * np.deg2rad(phase + n * phi))) / w.sum()
+        resultant = np.sum(w * np.exp(1j * np.deg2rad(phase - n * phi))) / w.sum()
         rmag[j] = np.abs(resultant)
         inter[j] = np.rad2deg(np.angle(resultant))
     best_j = int(np.argmax(rmag))
@@ -944,7 +949,7 @@ def fit_toroidal_mode(
 
     chi2 = np.array(
         [
-            np.sum((_wrap180(phase + n * phi - inter[j]) / sigma) ** 2)
+            np.sum((_wrap180(phase - n * phi - inter[j]) / sigma) ** 2)
             for j, n in enumerate(candidates)
         ]
     )
