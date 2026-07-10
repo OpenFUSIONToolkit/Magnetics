@@ -1086,6 +1086,60 @@ def _write_h5(
     return got, missing
 
 
+def _merge_h5_files(src, dst, *, compression="lzf"):
+    """Fold every channel of shot file ``src`` into the existing shot file ``dst``
+    (same shot/window/decimation — the caller verifies via ``_existing_channels``).
+
+    Channels are re-written through ``_write_h5``'s merge path so time-base dedup,
+    replace-on-conflict, and the fetched/missing bookkeeping behave exactly like a
+    local incremental fetch. Used by the remote backend: the cluster always ships a
+    fresh file holding only the requested selection, which must never replace a
+    local file holding earlier pulls.
+    """
+    import h5py
+
+    channels: list[Channel] = []
+    query_names: dict[str, str] = {}
+    geometry: dict[str, dict] = {}
+    with h5py.File(src, "r") as h5:
+        analysis = h5.attrs.get("analysis", "")
+        analysis = analysis.decode() if isinstance(analysis, bytes) else str(analysis)
+        tmin = h5.attrs.get("tmin")
+        tmax = h5.attrs.get("tmax")
+        stride = int(h5.attrs.get("decimate", 1))
+        tmin = None if isinstance(tmin, (bytes, str)) else tmin
+        tmax = None if isinstance(tmax, (bytes, str)) else tmax
+        for name, g in h5.items():
+            if name == "_timebases" or not isinstance(g, h5py.Group) or "data" not in g:
+                continue
+            channels.append(Channel(name, time=g["time"][()], data=g["data"][()], ok=True))
+            attrs = dict(g.attrs)
+            pn = attrs.pop("pointname", None)
+            if pn is not None:
+                query_names[name] = pn.decode() if isinstance(pn, bytes) else str(pn)
+            geometry[name] = {
+                k: v
+                for k, v in attrs.items()
+                if k != "time_units" and isinstance(v, (int, float, np.integer, np.floating))
+            }
+        for m in sorted(_attr_names(h5, "channels_missing")):
+            channels.append(Channel(m, ok=False, error="missing in remote pull"))
+    return _write_h5(
+        dst,
+        None,  # shot/device attrs already present in dst (merge never rewrites them)
+        analysis,
+        "remote",
+        channels,
+        compression=compression,
+        tmin=tmin,
+        tmax=tmax,
+        stride=stride,
+        query_names=query_names,
+        channel_geometry=geometry,
+        merge=True,
+    )
+
+
 def _existing_channels(path, tmin, tmax, stride):
     """Names already attempted in an existing shot file IF its reduction matches.
 
@@ -1203,31 +1257,10 @@ def fetch_shot(
             progress(0.0, f"{backend}→mdsthin (tree device)")
         backend = "mdsthin"
 
-    if backend == "remote" and not _tree_transport:
-        # Orchestrate a pull on the cluster from here; remote side runs this same
-        # script with --backend toksearch and writes the file we copy back.
-        from . import remote as remote_run
-
-        kw = {} if remote_python is None else {"python": remote_python}
-        return remote_run.run_remote(
-            shot,
-            analysis,
-            host=remote_host,
-            jump=ssh_jump,
-            username=username,
-            password=password,
-            duo=duo,
-            remote_dir=remote_dir,
-            tmin=tmin,
-            tmax=tmax,
-            decimate=decimate,
-            device=device,
-            sensor_set=sensor_set,
-            raw_pointnames=raw_pointnames,
-            local_out_dir=(str(Path(out).parent) if out else None),
-            progress=progress,
-            **kw,
-        )
+    # NOTE: the remote backend is dispatched BELOW, after the output path and the
+    # incremental-merge bookkeeping are resolved — the cluster ships a fresh file
+    # holding only the requested selection, so it must be merged into (never copied
+    # over) an existing local shot file.
 
     # Device config is the source of truth for mdsip addresses; an explicit
     # gateway/server (CLI or caller) overrides the device file. (`dev`, `device_name`,
@@ -1366,6 +1399,44 @@ def fetch_shot(
     if merge and not pointnames and not tree_signals:
         sys.stderr.write(f"All {n_skipped} requested signals already in {out}; nothing to fetch.\n")
         return out
+
+    if backend == "remote" and not _tree_transport:
+        # Orchestrate a pull on the cluster from here; remote side runs this same
+        # script with --backend toksearch and writes the file we copy back. When a
+        # compatible local file already exists (merge), the cluster result is staged
+        # beside it and folded in channel-by-channel — copying it over the local file
+        # would silently destroy every previously pulled channel set.
+        from . import remote as remote_run
+
+        kw = {} if remote_python is None else {"python": remote_python}
+        stage_dir = out_path.parent / "_remote_stage" if merge else out_path.parent
+        fetched = remote_run.run_remote(
+            shot,
+            analysis,
+            host=remote_host,
+            jump=ssh_jump,
+            username=username,
+            password=password,
+            duo=duo,
+            remote_dir=remote_dir,
+            tmin=tmin,
+            tmax=tmax,
+            decimate=decimate,
+            device=device,
+            sensor_set=sensor_set,
+            raw_pointnames=raw_pointnames,
+            local_out_dir=str(stage_dir),
+            progress=progress,
+            **kw,
+        )
+        if merge:
+            progress(0.95, f"merging into {out_path.name}")
+            _merge_h5_files(fetched, out)
+            Path(fetched).unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                stage_dir.rmdir()
+            return out
+        return fetched
 
     t0 = time.perf_counter()
     if _tree_transport:

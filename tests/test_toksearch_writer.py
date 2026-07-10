@@ -182,3 +182,112 @@ def test_toksearch_records_tree_signal_missing_when_tree_server_unavailable(monk
     assert by_name["PT"].ok is True
     assert by_name["kappa"].ok is False
     assert by_name["kappa"].error == "no tree server configured"
+
+
+# ---------------------------------------------------------------------------
+# _merge_h5_files — the remote-backend result must fold into an existing file
+# ---------------------------------------------------------------------------
+
+
+def test_merge_h5_files_preserves_existing_channels(tmp_path):
+    """Regression: a remote pull used to rsync the cluster file OVER the local shot
+    file, so a one-signal custom pull (e.g. 'betan') destroyed every previously
+    fetched channel. The staged file must merge in, replacing on name conflicts and
+    keeping everything else."""
+    import h5py
+
+    from magnetics.data.fetch.toksearch import _merge_h5_files
+
+    t = np.linspace(0.0, 10.0, 100)
+    a = Channel("MPI66M307D", t, np.ones(100, np.float32), ok=True)
+    b = Channel("MPI66M340D", t, np.full(100, 2.0, np.float32), ok=True)
+    dst, _ = _write(tmp_path, [a, b])
+
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    src = str(stage / "shot.h5")
+    t2 = np.linspace(0.0, 10.0, 50)
+    new = Channel("betan", t2, np.full(50, 1.5, np.float32), ok=True)
+    refetch = Channel("MPI66M340D", t, np.full(100, 9.0, np.float32), ok=True)
+    gone = Channel("ip", ok=False, error="no data")
+    _write_h5(
+        src,
+        123,
+        "custom",
+        "toksearch",
+        [new, refetch, gone],
+        compression="lzf",
+        tmin=None,
+        tmax=None,
+        stride=1,
+    )
+
+    _merge_h5_files(src, dst)
+
+    with h5py.File(dst, "r") as h5:
+        # pre-existing channel untouched, re-fetched channel replaced, new one added
+        assert set(h5) >= {"MPI66M307D", "MPI66M340D", "betan"}
+        np.testing.assert_array_equal(h5["MPI66M307D/data"][()], 1.0)
+        np.testing.assert_array_equal(h5["MPI66M340D/data"][()], 9.0)
+        np.testing.assert_array_equal(h5["betan/data"][()], 1.5)
+        np.testing.assert_allclose(h5["betan/time"][()], t2)
+        fetched = {x.decode() for x in h5.attrs["channels_fetched"]}
+        missing = {x.decode() for x in h5.attrs["channels_missing"]}
+        assert {"MPI66M307D", "MPI66M340D", "betan"} <= fetched
+        assert missing == {"ip"}
+        # both selection labels recorded
+        assert "custom" in str(h5.attrs["analysis"])
+
+
+def test_fetch_shot_remote_merges_instead_of_clobbering(tmp_path, monkeypatch):
+    """End-to-end dispatch regression: fetch_shot(backend='remote') with an existing
+    compatible shot file must stage the cluster result and merge it — the local file
+    keeps its earlier channels."""
+    import h5py
+
+    # existing local file with one 'earlier pull' channel, default window/stride
+    out = tmp_path / "shot_184927.h5"
+    t = np.linspace(0.0, 10.0, 100)
+    _write_h5(
+        str(out),
+        184927,
+        "both",
+        "toksearch",
+        [Channel("MPI66M307D", t, np.ones(100, np.float32), ok=True)],
+        compression="lzf",
+        tmin=None,
+        tmax=None,
+        stride=1,
+    )
+
+    def fake_run_remote(shot, analysis="both", *, local_out_dir=None, progress=None, **kw):
+        # the cluster always writes a FRESH file with only the requested selection
+        path = str(f"{local_out_dir}/shot_{shot}.h5")
+        import os
+
+        os.makedirs(local_out_dir, exist_ok=True)
+        t2 = np.linspace(0.0, 10.0, 50)
+        _write_h5(
+            path,
+            int(shot),
+            "custom",
+            "toksearch",
+            [Channel("betan", t2, np.full(50, 1.5, np.float32), ok=True)],
+            compression="lzf",
+            tmin=None,
+            tmax=None,
+            stride=1,
+        )
+        return path
+
+    from magnetics.data.fetch import remote as remote_mod
+
+    monkeypatch.setattr(remote_mod, "run_remote", fake_run_remote)
+
+    result = toksearch.fetch_shot(184927, backend="remote", raw_pointnames=["betan"], out=str(out))
+
+    assert result == str(out)
+    with h5py.File(out, "r") as h5:
+        assert "MPI66M307D" in h5, "remote pull clobbered the existing channel"
+        assert "betan" in h5
+    assert not (tmp_path / "_remote_stage" / "shot_184927.h5").exists()
