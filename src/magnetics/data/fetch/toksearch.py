@@ -99,6 +99,26 @@ def _resolve_pointnames(dev, pointnames, shot):
         if pt is None:  # out of range / NotAvailable
             skipped.append(cid)
             continue
+        prev = canonical_of.get(pt)
+        if prev is not None and prev != cid:
+            # A per-era alias collides with another sensor's queried pointname
+            # (e.g. KSTAR \MC1T10 -> \MC1P03 since shot 17377, while \MC1P03 is
+            # itself in the pull). Fetching one node under two canonical ids
+            # previously corrupted the relabel step — both channels got the same
+            # name and the writer silently dropped one. Query the node once,
+            # prefer the sensor literally named `pt` (identity mapping), and
+            # report the losing id as skipped instead of losing it silently.
+            if pt == cid:
+                skipped.append(prev)
+                canonical_of[pt] = cid
+            else:
+                skipped.append(cid)
+            sys.stderr.write(
+                f"pointname collision at shot {shot_i}: {skipped[-1]!r} aliases "
+                f"{pt!r}, which is fetched as {canonical_of[pt]!r}; skipping the "
+                "alias (check the device file's per-era pointname overrides).\n"
+            )
+            continue
         query.append(pt)
         canonical_of[pt] = cid
     return query, canonical_of, skipped
@@ -744,7 +764,9 @@ def _node_tree_map(dev):
     return node_tree, default_tree
 
 
-def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1e-6):
+def _fetch_mds_tree(
+    shot, items, *, connect, tmin, tmax, progress, resample_dt=1e-6, tree_signals=None
+):
     """Fetch tree nodes one-by-one over a single mdsthin connection.
 
     ``items`` is a list of ``(canonical_id, node, tree, gain)``: open each node's
@@ -759,20 +781,28 @@ def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1
     ``resample(node, tmin, tmax, dt)`` when both bounds are given: it bounds the wire
     transfer (a raw 2 MHz channel is ~10^7 pts) at a cadence far above rotating-mode
     frequencies (kHz). ``resample_dt`` seconds sets that cadence (default 1 µs =
-    1 MHz). With an open/absent window it falls back to a raw dimension slice."""
+    1 MHz). With an open/absent window it falls back to a raw dimension slice.
 
-    def _slice(expr):
+    ``tree_signals`` — plasma/equilibrium quantities ``{name: [(tree, node), …]}``
+    (Ip, B_T, kappa from the device's "plasma pointnames"): fetched on the same
+    connection after the sensors, first usable candidate wins, mirroring
+    ``_fetch_mdsthin_tree``. Windowed with a raw dimension slice, NOT resample() —
+    these are slow (ms-cadence) traces and resampling them onto the sensors' µs
+    grid would interpolate them ~1000x."""
+
+    def _slice(expr, resample=True):
         if tmin is None and tmax is None:
             return expr
         lo = "*" if tmin is None else repr(float(tmin))
         hi = "*" if tmax is None else repr(float(tmax))
-        if tmin is not None and tmax is not None and resample_dt:
+        if resample and tmin is not None and tmax is not None and resample_dt:
             return f"resample({expr}, {lo}, {hi}, {float(resample_dt)!r})"
         return f"({expr})[{lo} : {hi}]"
 
     conn = connect()
     out: list[Channel] = []
-    n = len(items) or 1
+    tree_signals = tree_signals or {}
+    n = (len(items) + len(tree_signals)) or 1
     current_tree = None
     for i, (canon, node, tree, gain) in enumerate(items, 1):
         try:
@@ -805,6 +835,34 @@ def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1
             current_tree = None  # a failed openTree/get can leave the conn unsure
             out.append(Channel(canon, ok=False, error=str(exc)))
         progress(i / n, canon)
+
+    for j, (name, candidates) in enumerate(tree_signals.items(), len(items) + 1):
+        chp = Channel(name, ok=False, error="no data")
+        for tree, node in candidates:
+            try:
+                if tree != current_tree:
+                    conn.openTree(tree, int(shot))
+                    current_tree = tree
+                sliced = _slice(node, resample=False)
+                y = np.atleast_1d(np.asarray(conn.get(sliced).data(), dtype=np.float32))
+                t = np.atleast_1d(np.asarray(conn.get(f"DIM_OF({sliced})").data()))
+                # A slow trace can legitimately hold few samples in a narrow window
+                # (helicity only needs the median sign), so allow n >= 1 here.
+                if y.size < 1 or t.size != y.size or not np.all(np.isfinite(t)):
+                    chp.error = f"{tree}:{node}: degenerate result (n={y.size})"
+                    continue
+                chp = Channel(
+                    name,
+                    (t * 1000.0).astype(np.float64),  # tree time is s; h5 stores ms
+                    y.astype(np.float32, copy=False),
+                    ok=True,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — plasma extras must not sink the pull
+                current_tree = None
+                chp.error = f"{tree}:{node}: {exc}"
+        out.append(chp)
+        progress(j / n, f"tree:{name} ({'ok' if chp.ok else 'missing'})")
     return out
 
 
@@ -1478,7 +1536,13 @@ def fetch_shot(
             tmin_s = None if tmin is None else float(tmin) / 1000.0
             tmax_s = None if tmax is None else float(tmax) / 1000.0
             channels = _fetch_mds_tree(
-                shot_i, items, connect=_connect, tmin=tmin_s, tmax=tmax_s, progress=progress
+                shot_i,
+                items,
+                connect=_connect,
+                tmin=tmin_s,
+                tmax=tmax_s,
+                progress=progress,
+                tree_signals=tree_signals,
             )
     elif tree_access:
         # NSTX/NSTX-U: sensors are fastmag tree nodes fetched with a value-window
