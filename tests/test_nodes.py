@@ -387,3 +387,27 @@ def test_channel_usage_tags_plasma_and_qs_channels(synthetic_shot):
     # the QS midplane array must carry a QS role, not sit in unused
     roles = {u["name"]: u["roles"] for u in usage["used"]}
     assert any("QS fit array" in r for rs in roles.values() for r in rs)
+
+
+def test_mode_number_band_follows_fmax(synthetic_shot, monkeypatch):
+    """Issue #85: the n-map's compute band was pinned at 0-50 kHz, so raising the
+    GUI's f_max never showed data above 50 kHz no matter the request. The requested
+    fmax must reach the array STFT as its band ceiling, quantized to 50-kHz steps
+    (so crops within a step still reuse the cached STFT)."""
+    captured = {}
+    orig = nodes.spectral.array_shape_spectrum
+
+    def spy(*a, **k):
+        captured["fmax"] = k.get("fmax")
+        return orig(*a, **k)
+
+    monkeypatch.setattr(nodes.spectral, "array_shape_spectrum", spy)
+    try:
+        nodes.refresh()
+        nodes.build_node(synthetic_shot, "mode_number", {"fmax": "120"})
+        assert captured["fmax"] == 150_000.0  # ceil(120/50) * 50 kHz
+        nodes.refresh()
+        nodes.build_node(synthetic_shot, "mode_number", {"fmax": "40"})
+        assert captured["fmax"] == 50_000.0  # within the default step
+    finally:
+        nodes.refresh()  # don't leak spy-built cache entries

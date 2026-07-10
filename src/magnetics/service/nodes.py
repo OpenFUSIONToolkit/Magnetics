@@ -568,7 +568,12 @@ def _mode_number(shot, params=None) -> dict:
     names = tuple(n for n, _ in arr)
     phis = tuple(float(p) for _, p in arr)
     sd = _f(params, "slice_duration", 0.002)  # honor the resolution knob (500 Hz default)
-    ms = _array_mode_spec(str(shot), names, phis, sd)
+    # Compute band follows the requested display band, quantized to 50-kHz steps so
+    # crops within a step reuse the cached STFT (issue #85: the ceiling was pinned at
+    # 50 kHz, so raising the GUI's f_max never showed data above it).
+    fmax_req = _f(params, "fmax")
+    band_hi = 50_000.0 * max(1.0, float(np.ceil((fmax_req or 50.0) / 50.0)))
+    ms = _array_mode_spec(str(shot), names, phis, sd, band_hi)
 
     # Optional 2-D Gaussian pre-smoothing on the NATIVE n-map grid (before the display-time
     # decimation below). σ is in grid cells, so a coherent mode survives the gate across its
@@ -899,15 +904,18 @@ def _array_spectrum(shot, names):
 
 
 @lru_cache(maxsize=2)
-def _array_mode_spec(shot, names, phis, slice_duration):
+def _array_mode_spec(shot, names, phis, slice_duration, band_hi_hz=50_000.0):
     """Toroidal-|n|-resolved spectrogram from a *dedicated* full-array STFT computed at
-    the requested frequency resolution over a fixed 0–50 kHz band — so the n-map refines
-    with the resolution knob and spans the same band as the power view, rather than being
-    locked to the cursor-analysis spectrum's 1–25 kHz / 1 kHz grid.
+    the requested frequency resolution over 0–``band_hi_hz`` — so the n-map refines
+    with the resolution knob and follows the power view's band, rather than being
+    locked to the cursor-analysis spectrum's 1–25 kHz / 1 kHz grid. The caller
+    quantizes ``band_hi_hz`` to 50-kHz steps, so band crops *within* a step stay a
+    cheap post-op on the cached STFT (issue #85: a fixed 50 kHz ceiling silently
+    truncated the map no matter how far the GUI's f_max was raised).
 
     Heavier than reusing ``_array_spectrum`` (its own 14-probe STFT), so ``maxsize`` is
-    small and only the resolution changes it — band cropping is a cheap post-op in the
-    node. ``names``/``phis`` are tuples so the call is hashable; cleared by ``refresh``."""
+    small and only the resolution/band change it. ``names``/``phis`` are tuples so the
+    call is hashable; cleared by ``refresh``."""
     t_ms, mat = _stack(shot, names)
     # Cap STFT columns at ~2000: the node decimates the display to 1500 anyway, so the
     # native fine hop would just inflate the per-cell projection (an (n, t, f) einsum)
@@ -916,7 +924,7 @@ def _array_mode_spec(shot, names, phis, slice_duration):
         mat,
         np.asarray(t_ms, dtype=float) * 1e-3,
         fmin=0.0,
-        fmax=50_000.0,
+        fmax=float(band_hi_hz),
         slice_duration=slice_duration,
         max_columns=2000,
     )
