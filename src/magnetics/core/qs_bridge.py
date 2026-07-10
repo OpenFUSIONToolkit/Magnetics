@@ -117,7 +117,8 @@ def fit_to_qs_fit_node(
         theta_grid = np.linspace(0, 360, 49)
 
     z = _reconstruct_grid(fit_ds, phi_grid, theta_grid, t_idx) * _T_TO_G
-    zmax = float(np.nanmax(np.abs(z))) or 1.0
+    finite = np.abs(z[np.isfinite(z)])
+    zmax = float(finite.max()) if finite.size and finite.max() > 0 else 1.0
 
     overlay = None
     if sensor_phis is not None and sensor_thetas is not None:
@@ -147,7 +148,7 @@ def fit_to_qs_fit_node(
             "n": int(round(ns[dominant_idx])),
             "m": int(round(ms[dominant_idx])),
             "condition_number": round(K, 2),
-            "red_chi_sq": round(chi2_t, 3),
+            "red_chi_sq": round(chi2_t, 3) if np.isfinite(chi2_t) else None,
             "shot": str(fit_ds.attrs.get("shot", "")),
         },
     )
@@ -156,8 +157,11 @@ def fit_to_qs_fit_node(
 def fit_to_amplitude_node(fit_ds) -> dict:
     """Mode amplitude ± 1σ vs time for each fitted mode → LineNode.
 
-    meta.sigma[i] is the per-series error band consumed by lineTraces() in the GUI.
-    meta.legend_title is "n" when all poloidal m=0, else "m/n" (mirrors plot_fit_modes).
+    The ±1σ band rides in each series' typed ``lower``/``upper`` fields (the
+    contract's error-band channel, same as the rotating mode-shape nodes) so the
+    GUI band and the HDF5 export are the same data — not an untyped meta side
+    channel the exporter drops. meta.legend_title is "n" when all poloidal m=0,
+    else "m/n" (mirrors plot_fit_modes).
     """
     from ..core import contracts
 
@@ -168,17 +172,19 @@ def fit_to_amplitude_node(fit_ds) -> dict:
     sigmas = fit_ds["fit_sigmas"].values  # [mode, time] complex (constant along time)
 
     series = []
-    sigma_bands = []
     for i, (n, m) in enumerate(zip(ns, ms_vals)):
         amp, amp_err, _, _ = _amp_phase(coeffs[i], sigmas[i])
+        y = amp * _T_TO_G
+        err = amp_err * _T_TO_G
         series.append(
             {
                 "name": _mode_label(n, m),
                 "x": np.round(t_ms, 2).tolist(),
-                "y": np.round(amp * _T_TO_G, 4).tolist(),
+                "y": np.round(y, 4).tolist(),
+                "lower": np.round(y - err, 4).tolist(),
+                "upper": np.round(y + err, 4).tolist(),
             }
         )
-        sigma_bands.append(np.round(amp_err * _T_TO_G, 4).tolist())
 
     legend_title = "n" if np.all(ms_vals == 0) else "m/n"
     K = float(fit_ds.attrs.get("condition_number", fit_ds.attrs.get("raw_cn", 0.0)))
@@ -186,7 +192,6 @@ def fit_to_amplitude_node(fit_ds) -> dict:
         series,
         {"x": "time (ms)", "y": "amplitude (G)"},
         meta={
-            "sigma": sigma_bands,
             "legend_title": legend_title,
             "condition_number": round(K, 2),
             "shot": str(fit_ds.attrs.get("shot", "")),
@@ -215,7 +220,6 @@ def fit_to_phase_t_node(fit_ds) -> dict:
     phase_visible = [bool(a > 0.1 * max_amp) for a in p90_amps]
 
     series = []
-    sigma_bands = []
     for i, (n, m) in enumerate(zip(ns, ms_vals)):
         _, _, phase, phase_err = _amp_phase(coeffs[i], sigmas[i])
         series.append(
@@ -223,16 +227,16 @@ def fit_to_phase_t_node(fit_ds) -> dict:
                 "name": _mode_label(n, m),
                 "x": np.round(t_ms, 2).tolist(),
                 "y": np.round(phase, 3).tolist(),
+                "lower": np.round(phase - phase_err, 3).tolist(),
+                "upper": np.round(phase + phase_err, 3).tolist(),
             }
         )
-        sigma_bands.append(np.round(phase_err, 3).tolist())
 
     K = float(fit_ds.attrs.get("condition_number", fit_ds.attrs.get("raw_cn", 0.0)))
     return contracts.line(
         series,
         {"x": "time (ms)", "y": "phase (deg)"},
         meta={
-            "sigma": sigma_bands,
             "phase_visible": phase_visible,
             "condition_number": round(K, 2),
             "shot": str(fit_ds.attrs.get("shot", "")),
@@ -297,7 +301,9 @@ def fit_to_phi_t_node(fit_ds, theta_fixed_deg: float = 0.0, n_phi: int = 73) -> 
         z += (coeffs[i][None, :] * phase_phi * phase_theta).real
     z *= _T_TO_G
 
-    zmax = float(np.nanpercentile(np.abs(z), 99)) or 1.0
+    finite = np.abs(z[np.isfinite(z)])
+    zmax = float(np.percentile(finite, 99)) if finite.size else 1.0
+    zmax = zmax or 1.0
     K = float(fit_ds.attrs.get("condition_number", fit_ds.attrs.get("raw_cn", 0.0)))
 
     # z shape: [n_phi, n_time] but ContourNode z is [n_y][n_x]

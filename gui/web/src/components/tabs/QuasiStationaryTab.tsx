@@ -58,26 +58,26 @@ function lineTraces(
   node: LineNode,
   opts?: { visible?: boolean[]; opacity?: number[]; palette?: string[] },
 ): Partial<Plotly.PlotData>[] {
-  const sigma = node.meta?.sigma as number[][] | undefined;
   const pal = opts?.palette ?? LINE_PALETTE;
   const traces: Partial<Plotly.PlotData>[] = [];
 
   node.series.forEach((s, i) => {
     const color = pal[i % pal.length];
-    const sig = sigma?.[i];
     const vis = opts?.visible?.[i] !== false;
     const opacity = opts?.opacity?.[i] ?? 1;
 
-    if (sig && vis) {
+    // ±1σ band from the contract's typed lower/upper fields (also what the
+    // HDF5 export writes, so the band on screen matches the downloaded data).
+    if (s.lower && s.upper && vis) {
       traces.push({
         type: "scatter", mode: "lines", x: s.x,
-        y: s.y.map((v, j) => v + sig[j]),
+        y: s.upper,
         line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
         opacity,
       } as Partial<Plotly.PlotData>);
       traces.push({
         type: "scatter", mode: "lines", x: s.x,
-        y: s.y.map((v, j) => v - sig[j]),
+        y: s.lower,
         fill: "tonexty", fillcolor: hexToRgba(color, 0.45 * opacity),
         line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
         opacity,

@@ -33,12 +33,17 @@ def test_signal_conditioning_meta_pairs(synthetic_shot):
 
 def test_amplitude_meta_fields(synthetic_shot):
     meta = _meta(synthetic_shot, "amplitude")
-    assert "sigma" in meta and "legend_title" in meta
+    assert "legend_title" in meta
+    # the ±1σ band rides in the typed per-series lower/upper, not meta.sigma
+    node = nodes.build_node(synthetic_shot, "amplitude")
+    assert all("lower" in s and "upper" in s for s in node["series"])
 
 
 def test_phase_t_meta_fields(synthetic_shot):
     meta = _meta(synthetic_shot, "phase_t")
-    assert "sigma" in meta and "phase_visible" in meta
+    assert "phase_visible" in meta
+    node = nodes.build_node(synthetic_shot, "phase_t")
+    assert all("lower" in s and "upper" in s for s in node["series"])
 
 
 def test_phase_fit_reports_n_estimate(synthetic_shot):

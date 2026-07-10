@@ -58,8 +58,11 @@ def test_fit_quality_statuses_use_contract_vocabulary(fit_ds):
 
 def test_amplitude_sigma_is_finite(fit_ds):
     node = qs_bridge.fit_to_amplitude_node(fit_ds)
-    sigma = np.asarray(node["meta"]["sigma"], dtype=float)
-    assert np.all(np.isfinite(sigma))
+    for series in node["series"]:
+        lower = np.asarray(series["lower"], dtype=float)
+        upper = np.asarray(series["upper"], dtype=float)
+        assert np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))
+        assert np.all(upper >= np.asarray(series["y"], dtype=float))
 
 
 def test_svd_energy_node_is_monotonic_and_bounded(fit_ds):
@@ -82,9 +85,14 @@ def test_svd_condition_node_is_finite_and_positive(fit_ds):
 def test_sigma_override_changes_amplitude_uncertainty(synthetic_shot):
     default_fit = nodes._prep_qs_ds(synthetic_shot, {}).fit
     overridden_fit = nodes._prep_qs_ds(synthetic_shot, {"sigma": "1.0"}).fit
-    default_sigma = qs_bridge.fit_to_amplitude_node(default_fit)["meta"]["sigma"]
-    overridden_sigma = qs_bridge.fit_to_amplitude_node(overridden_fit)["meta"]["sigma"]
-    assert np.mean(overridden_sigma) > np.mean(default_sigma)
+
+    def band_width(fit):
+        node = qs_bridge.fit_to_amplitude_node(fit)
+        return np.mean(
+            [np.mean(np.asarray(s["upper"]) - np.asarray(s["lower"])) for s in node["series"]]
+        )
+
+    assert band_width(overridden_fit) > band_width(default_fit)
 
 
 def test_fit_basis_param_reaches_fit(synthetic_shot):

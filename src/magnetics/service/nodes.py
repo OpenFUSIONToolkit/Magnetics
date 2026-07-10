@@ -111,6 +111,39 @@ def channel_usage(shot: str) -> dict:
         tag([n for n, _ in _poloidal_arr(str(shot))], "poloidal array")
     except ValueError:
         pass
+    # The quasi-stationary fit's default sensor set (same resolution as _prep_qs_ds).
+    try:
+        from ..core import qs_device
+
+        dev, _ = _device_key(str(shot))
+        default_cf = "Bp_LFS_midplane"
+        if dev:
+            default_cf = dev.get("qs_default_set") or (
+                "quasi_stationary"
+                if "quasi_stationary" in dev.get("sensor_sets", {})
+                else default_cf
+            )
+        pats = np.atleast_1d(
+            qs_device.resolve_channel_filter(
+                default_cf, h5source.meta(shot).get("device", "DIII-D")
+            )
+        )
+        tag(
+            [nm for nm in all_names if any(re.match(str(p), nm) for p in pats)],
+            "QS fit array",
+        )
+    except Exception:  # noqa: BLE001 — QS not applicable to this shot/device
+        pass
+    # Plasma context channels: not part of any probe array, but consumed by the
+    # analyses — dropping them silently degrades the physics (θ* falls back to
+    # geometric θ; QS helicity falls back to its default) with no error anywhere.
+    for nm, role in (
+        ("kappa", "θ* elongation correction (poloidal nodes)"),
+        ("ip", "QS helicity (sign of Ip·Bt)"),
+        ("bt", "QS helicity (sign of Ip·Bt)"),
+    ):
+        if nm in all_names:
+            tag([nm], role)
 
     used = [{"name": nm, "roles": roles[nm]} for nm in all_names if nm in roles]
     unused = [nm for nm in all_names if nm not in roles]
@@ -126,7 +159,15 @@ def channel_usage(shot: str) -> dict:
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run, _dev_geom):
+    for fn in (
+        _spec_result,
+        _stack_cached,
+        _array_spectrum,
+        _array_mode_spec,
+        _qs_run,
+        _dev_geom,
+        _real_theta,  # channel→θ map derives from channel_names: stale after a re-pull
+    ):
         fn.cache_clear()
 
 
@@ -643,12 +684,13 @@ def _toroidal_grid(shot):
 # ── contour: raw δBp(φ, t) — x=φ, y=time (QS contour hero plot) ──────────────
 def _contour(shot, params=None) -> dict:
     t_sub, phi_grid, z, phis, n_ch = _toroidal_grid(shot)
-    zmax = float(np.nanmax(np.abs(z))) or 1.0
+    finite = np.abs(z[np.isfinite(z)])
+    zmax = float(finite.max()) if finite.size and finite.max() > 0 else 1.0
     overlay = {"points": [{"x": float(p), "y": float(t_sub[0])} for p in phis], "symbol": "square"}
     return contracts.contour(
         phi_grid.tolist(),
         t_sub.tolist(),
-        z.tolist(),
+        contracts.json_finite(z),
         {"x": "φ (deg)", "y": "time (ms)", "z": "δBp (G)"},
         zrange=[-zmax, zmax],
         overlay=overlay,
@@ -698,7 +740,7 @@ def _toroidal_stripes(shot, params=None) -> dict:
     return contracts.heatmap(
         t_sub.tolist(),
         ang.tolist(),
-        z.tolist(),
+        contracts.json_finite(z),
         {"x": "time (ms)", "y": "φ (deg)", "z": "δBp (a.u.)"},
         discrete=False,
         meta={
@@ -722,7 +764,7 @@ def _poloidal_stripes(shot, params=None) -> dict:
     return contracts.heatmap(
         t_sub.tolist(),
         ang.tolist(),
-        z.tolist(),
+        contracts.json_finite(z),
         {"x": "time (ms)", "y": "θ (deg)", "z": "δBp (a.u.)"},
         discrete=False,
         meta={
@@ -754,7 +796,7 @@ def _raw_trace(shot, params=None) -> dict:
         sel = np.arange(max(0, c - 2000), min(t_ms.size, c + 2000))
     if sel.size > 2000:  # keep the line light
         sel = sel[np.linspace(0, sel.size - 1, 2000).astype(int)]
-    series = [{"name": name, "x": t_ms[sel].tolist(), "y": d[sel].tolist()}]
+    series = [{"name": name, "x": t_ms[sel].tolist(), "y": contracts.json_finite(d[sel])}]
     return contracts.line(
         series,
         {"x": "time (ms)", "y": "dB/dt (a.u.)"},

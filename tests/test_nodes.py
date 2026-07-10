@@ -313,3 +313,77 @@ def test_quality_for_k_thresholds():
     assert contracts.quality_for_k(15) == "warn"
     assert contracts.quality_for_k(25) == "bad"
     assert contracts.quality_for_k(float("nan")) == "bad"
+
+
+# ---------------------------------------------------------------------------
+# NaN samples in fetched channels must serialize as JSON null, not 500
+# ---------------------------------------------------------------------------
+
+
+def test_raw_trace_with_nan_samples_serializes(synthetic_shot, monkeypatch):
+    """starlette serializes with allow_nan=False, so a NaN gap in a raw channel
+    used to turn the whole node response into an opaque 500. Non-finite samples
+    must come out as JSON null (a Plotly gap)."""
+    import json
+
+    from magnetics.data import h5source
+
+    orig = h5source.load_channel
+
+    def nan_load(shot, name):
+        t, d = orig(shot, name)
+        d = np.asarray(d, dtype=float).copy()
+        d[::7] = np.nan
+        return t, d
+
+    monkeypatch.setattr(nodes.h5source, "load_channel", nan_load)
+    try:
+        node = nodes.build_node(synthetic_shot, "raw_trace")
+        json.dumps(node, allow_nan=False)  # must not raise
+        assert any(v is None for v in node["series"][0]["y"])
+        assert any(v is not None for v in node["series"][0]["y"])
+    finally:
+        nodes.refresh()  # don't leak NaN-poisoned caches into other tests
+
+
+def test_json_finite_helper():
+    from magnetics.core.contracts import json_finite
+
+    assert json_finite([1.0, np.nan, np.inf, -np.inf, 2.5]) == [1.0, None, None, None, 2.5]
+    assert json_finite([[1.0, np.nan], [3.0, 4.0]]) == [[1.0, None], [3.0, 4.0]]
+
+
+def test_quality_for_k_matches_ts_on_nonfinite():
+    """contract.ts uses !Number.isFinite(K) -> "bad"; the Python twin must agree
+    for NaN and BOTH infinities (K = -inf used to return "good")."""
+    assert contracts.quality_for_k(float("nan")) == "bad"
+    assert contracts.quality_for_k(float("inf")) == "bad"
+    assert contracts.quality_for_k(float("-inf")) == "bad"
+    assert contracts.quality_for_k(5.0) == "good"
+    assert contracts.quality_for_k(15.0) == "warn"
+    assert contracts.quality_for_k(25.0) == "bad"
+
+
+def test_refresh_clears_real_theta_cache(synthetic_shot):
+    """Regression: refresh() (fired after every fetch job) cleared every lru_cache
+    except _real_theta, so a re-pull with more probes kept serving the stale
+    channel->theta map and poloidal nodes 422'd until server restart."""
+    nodes._real_theta(str(synthetic_shot))
+    assert nodes._real_theta.cache_info().currsize > 0
+    nodes.refresh()
+    assert nodes._real_theta.cache_info().currsize == 0
+
+
+def test_channel_usage_tags_plasma_and_qs_channels(synthetic_shot):
+    """Regression: channel_usage marked kappa/ip/bt (and the QS fit array) as
+    "unused / droppable" although the theta* correction and the QS helicity
+    consume them — trimming a pull per that endpoint silently degraded physics."""
+    usage = nodes.channel_usage(synthetic_shot)
+    unused = set(usage["unused"])
+    present = {u["name"] for u in usage["used"]}
+    for nm in ("kappa", "ip", "bt"):
+        assert nm not in unused, f"{nm} reported droppable but analyses consume it"
+        assert nm in present
+    # the QS midplane array must carry a QS role, not sit in unused
+    roles = {u["name"]: u["roles"] for u in usage["used"]}
+    assert any("QS fit array" in r for rs in roles.values() for r in rs)
