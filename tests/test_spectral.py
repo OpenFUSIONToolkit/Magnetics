@@ -815,3 +815,41 @@ class TestSignedNConventionAgreement:
         assert n_2pt == n_specgram == n_fit == n_array == n_mac == self.N_TRUE, (
             f"2pt={n_2pt} specgram={n_specgram} fit={n_fit} array={n_array} mac={n_mac}"
         )
+
+
+# -----------------------------------------------------------------------
+# spectrogram power normalization — must match csd's density scaling
+# -----------------------------------------------------------------------
+
+
+class TestSpectrogramPowerNormalization:
+    """Regression: compute_spectrogram used raw |conj(S2)·S1| with no window-power
+    or fs scaling yet applied cross_spectrum's density-RMS formula, so its
+    'rms amplitude' was off by a data-dependent factor of thousands."""
+
+    def _pair(self, amp=1.0, fs=50_000, f_mode=3_000.0, duration=0.2):
+        t = np.linspace(0, duration, int(fs * duration), endpoint=False)
+        w = 2 * np.pi * f_mode
+        n, phi1, phi2 = 2, 30.0, 63.0
+        sig1 = amp * np.sin(w * t - np.deg2rad(n * phi1))
+        sig2 = amp * np.sin(w * t - np.deg2rad(n * phi2))
+        return t, sig1, sig2, float(fs), phi2 - phi1
+
+    def test_rms_by_mode_recovers_physical_rms(self):
+        # a unit-amplitude sine has RMS 1/sqrt(2); both estimators must report it
+        t, sig1, sig2, fs, dphi = self._pair(amp=1.0)
+        two_pt = cross_spectrum(sig1, sig2, fs, delta_phi=dphi, nperseg=1024)
+        spec = compute_spectrogram(t, sig1, sig2, dphi, slice_duration=0.02)
+        rms_2pt = float(np.max(two_pt.rms_by_mode))
+        rms_spec = float(np.max(spec.rms_by_mode))
+        assert rms_2pt == pytest.approx(2**-0.5, rel=0.05)
+        assert rms_spec == pytest.approx(2**-0.5, rel=0.05)
+
+    def test_rms_scales_linearly_with_amplitude(self):
+        _, s1a, s2a, fs, dphi = self._pair(amp=1.0)
+        t, s1b, s2b, _, _ = self._pair(amp=3.0)
+        a = compute_spectrogram(t, s1a, s2a, dphi, slice_duration=0.02)
+        b = compute_spectrogram(t, s1b, s2b, dphi, slice_duration=0.02)
+        assert float(np.max(b.rms_by_mode)) == pytest.approx(
+            3.0 * float(np.max(a.rms_by_mode)), rel=1e-3
+        )

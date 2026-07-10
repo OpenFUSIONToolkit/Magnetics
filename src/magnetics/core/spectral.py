@@ -338,9 +338,10 @@ def compute_spectrogram(
 
     Engine: one batched, single-precision short-time FFT per probe (no per-window loop),
     with the column count decimated to ``max_columns`` so cost scales with the display,
-    not the record length. Physics: cross-power = |conj(S1)·S2|, frequency-smoothed
-    coherence, n = round(phase / delta_phi), and per-mode RMS — identical to the 2-point
-    definitions in ``cross_spectrum``.
+    not the record length. Physics: cross-power = |conj(S1)·S2| scaled to a one-sided
+    cross-spectral density (csd's ``scaling="density"``), frequency-smoothed coherence,
+    n = round(phase / delta_phi), and per-mode RMS — identical to the 2-point
+    definitions in ``cross_spectrum``, so amplitudes are comparable across the two.
 
     Inputs:
         time (ndarray): sample times (s); assumed uniformly sampled.
@@ -383,7 +384,17 @@ def compute_spectrogram(
     # order matches cross_spectrum's scipy.signal.csd(sig2, sig1) convention so the
     # spectrogram and the single-window 2-point analysis report the same *signed* n.
     cross = np.conj(spec2) * spec1
-    power = np.abs(cross)
+    # Scale |cross| to a one-sided cross-spectral DENSITY exactly like scipy's
+    # csd(scaling="density"): 1/(fs·Σwin²), doubled off the DC/Nyquist bins. Without
+    # this, rms_by_mode's sqrt(Σ power·df) is off by a data-dependent factor of
+    # thousands vs the 2-point cross_spectrum RMS it claims to match. (Coherence and
+    # phase are ratios/angles — unaffected.)
+    scale = 1.0 / (sample_rate * float(np.sum(win.astype(np.float64) ** 2)))
+    power = np.abs(cross) * scale
+    if n_fft % 2 == 0:
+        power[:, 1:-1] *= 2.0
+    else:
+        power[:, 1:] *= 2.0
     phase = np.rad2deg(np.angle(cross))
 
     # Coherence needs averaging; smooth the auto/cross spectra over frequency bins.
