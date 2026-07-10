@@ -193,7 +193,7 @@ def test_stream_error_frame_carries_the_reason(monkeypatch):
     jid = r.json()["job_id"]
     _wait_for(jid, until=("error",))
     with client.stream("GET", f"/api/fetch/{jid}/stream") as resp:
-        line = next(l for l in resp.iter_lines() if l.startswith("data: "))
+        line = next(ln for ln in resp.iter_lines() if ln.startswith("data: "))
     frame = json.loads(line[len("data: ") :])
     assert frame["status"] == "error"
     assert "boom" in frame["error"]

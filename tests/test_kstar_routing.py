@@ -4,9 +4,11 @@ when the caller/GUI selects backend="remote". Regression for the bug where a KST
 pull was sent to the GA `omega` ssh alias and failed with "SSH to the cluster failed".
 """
 
+import numpy as np
 import pytest
 
 from magnetics.data.fetch import kstar_transport, remote, toksearch
+from magnetics.data.fetch.toksearch import _fetch_mds_tree, _resolve_pointnames
 
 
 class _TransportHit(Exception):
@@ -76,10 +78,6 @@ def test_diiid_backend_remote_still_uses_run_remote(monkeypatch, tmp_path):
 # per-era pointname alias that collides with another sensor must not silently
 # drop a channel. Both run fully offline against stub connections.
 # ---------------------------------------------------------------------------
-
-import numpy as np
-
-from magnetics.data.fetch.toksearch import _fetch_mds_tree, _resolve_pointnames
 
 
 class _DefaultConn:

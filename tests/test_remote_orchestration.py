@@ -83,7 +83,7 @@ def test_off_site_pull_builds_the_full_round_trip(runner, tmp_path):
     # 4) the result is rsync'd back to the REQUESTED local dir, the stage removed,
     #    and the ControlMaster torn down
     rsync_back = next(c for c in cmds if c.startswith("rsync") and str(tmp_path) in c)
-    assert f"myuser@omega.gat.com:/tmp/magnetics_out_myuser/shot_184927.h5" in rsync_back
+    assert "myuser@omega.gat.com:/tmp/magnetics_out_myuser/shot_184927.h5" in rsync_back
     assert any("rm -f" in c and "shot_184927.h5" in c for c in cmds)
     assert "-O exit" in cmds[-1]
     assert out == str(tmp_path / "shot_184927.h5")
