@@ -3,8 +3,8 @@
 # One command to run the GUI for DEVELOPMENT.
 #
 # DEFAULT is LIVE: the GUI talks to the real FastAPI service, and NO mock data is
-# served or renderable in this mode. The rotating-mode (MODESPEC) path serves real
-# analysis from fetched shots; the quasi-stationary fit stream is still a stub. Use
+# served or renderable in this mode. Both the rotating-mode (MODESPEC) and the
+# quasi-stationary (SLCONTOUR) analyses serve real results from fetched shots. Use
 # `static` only for offline frontend work against the demo fixtures.
 #
 #   ./run-dev.sh           live    — FastAPI service (:8000) + GUI (:5173) against it (default)

@@ -35,7 +35,7 @@ def test_help_exits_clean(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--help"])
     assert exc.value.code == 0
-    assert "magnetics GUI" in capsys.readouterr().out or True  # help text printed
+    assert "magnetics GUI" in capsys.readouterr().out  # help text printed
 
 
 def test_data_dir_env_override(tmp_path, monkeypatch):

@@ -127,14 +127,16 @@ def synthetic_n2():
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
     f_mode = 3_000.0
     n = 2
-    phi1, phi2 = 30.0, 63.0  # Δφ = -33°, mimics the real 307/340 pair separation
+    phi1, phi2 = 30.0, 63.0  # Δφ = +33°, mimics the real 307/340 pair separation
     sig1 = np.sin(2 * np.pi * f_mode * t - np.deg2rad(n * phi1))
     sig2 = np.sin(2 * np.pi * f_mode * t - np.deg2rad(n * phi2))
     return {
         "time": t,
         "sig1": sig1,
         "sig2": sig2,
-        "delta_phi": phi1 - phi2,
+        # φ2 − φ1: the service convention (nodes._spec_result), so estimators
+        # recover the SIGNED n of a cos(nφ − ωt) mode as +n.
+        "delta_phi": phi2 - phi1,
         "fs": float(fs),
         "f_mode": f_mode,
         "n_true": n,

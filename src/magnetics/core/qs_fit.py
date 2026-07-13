@@ -171,7 +171,7 @@ def fit(
     fit_exclude=(),
     fit_basis="sinusoidal-integral",
     fit_geometry="cylindrical",
-    fit_cond=10.0,
+    fit_cond=1e3,
     sigma_override=None,
     ncenters=6,
     mcenters=1,
@@ -191,6 +191,11 @@ def fit(
         ``'gaussian-point'``, or ``'gaussian-integral'``.
     :param fit_geometry: ``'cylindrical'`` (phi, theta) or ``'vertical'`` (phi, z).
     :param fit_cond: condition-number cutoff for the lstsq inversion (= 1/rcond).
+        Basis directions with condition > fit_cond are zeroed. The default matches
+        OMFIT SLCONTOUR's 1e3 — this is the *inversion* cutoff, NOT the "warn when
+        K > 10" trust threshold (``contracts.quality_for_k``); setting it that low
+        silently truncates directions the reference fit would keep, while making
+        the reported K(eff) <= 10 by construction.
     :param sigma_override: when given, use this uniform measurement uncertainty
         for every channel instead of the per-channel ``signal_sigma`` baked into
         the dataset at load time.
@@ -449,9 +454,15 @@ def fit(
 
     # ── assemble output Dataset ───────────────────────────────────────────────
     fit_b = np.dot(A, fit_coeffs).real.reshape(ds["channel"].shape[0], -1)
-    ds["fit_signal"] = xr.DataArray(fit_b, coords=ds["signal"].coords, dims=ds["signal"].dims) * ds[
-        "signal_sigma"
-    ].fillna(float(sigma.mean()))
+    # De-normalize by the SAME effective sigma that normalized the RHS `b` above
+    # (it honors sigma_override and NaN fills). Using the dataset's raw
+    # signal_sigma here would scale fit_signal by signal_sigma/override whenever
+    # they differ, corrupting residual and chi_sq while the coefficients stay
+    # correct.
+    sig_eff = xr.DataArray(sigma, coords={"channel": ds["channel"]}, dims=("channel",))
+    ds["fit_signal"] = (
+        xr.DataArray(fit_b, coords=ds["signal"].coords, dims=ds["signal"].dims) * sig_eff
+    )
     ds["fit_ns"] = xr.DataArray(nms_arr[:, 0], coords={"mode": np.arange(len(nms))}, dims=("mode",))
     ds["fit_ms"] = xr.DataArray(nms_arr[:, 1], coords={"mode": np.arange(len(nms))}, dims=("mode",))
     ds["fit_coeffs"] = xr.DataArray(
@@ -462,8 +473,7 @@ def fit(
     )
 
     ds["residual"] = ds["signal"] - ds["fit_signal"]
-    sig_for_chi = xr.DataArray(sigma, coords={"channel": ds["channel"]}, dims=("channel",))
-    ds["chi_sq"] = ((ds["residual"] / sig_for_chi) ** 2).sum("channel")
+    ds["chi_sq"] = ((ds["residual"] / sig_eff) ** 2).sum("channel")
     nu = max(b.shape[0] - rank_fit, 1)
     ds["red_chi_sq"] = ds["chi_sq"] / nu
 

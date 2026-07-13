@@ -14,13 +14,18 @@ from magnetics.service import nodes
 
 
 def _first_shot():
-    # Prefer a DIII-D shot: these tests assume full geometry + QS arrays, which the
-    # synthetic KSTAR shot (device=kstar, toroidal-only, no r/z) does not yet carry.
-    ms = nodes.machines()
+    # The full DIII-D synthetic shot: these tests assume full geometry + QS arrays.
+    # (This used to take the first non-KSTAR machine, but list_shots() sorts shot ids
+    # as STRINGS, so the NSTX shot '204718' sorted before '990000' and the whole
+    # module silently ran against NSTX — making the DIII-D family-mixing guard
+    # tautological and permanently skipping the contour test.)
+    ms = {m["id"] for m in nodes.machines()}
     if not ms:
         pytest.skip("no fetched HDF5 in the data dir")
-    non_kstar = [m for m in ms if (m.get("device") or "").lower() != "kstar"]
-    return (non_kstar or ms)[0]["id"]
+    from .conftest import SYNTH_SHOT
+
+    assert str(SYNTH_SHOT) in ms, "synthetic DIII-D fixture shot missing from data dir"
+    return str(SYNTH_SHOT)
 
 
 def test_machines_shape():
@@ -88,10 +93,9 @@ def test_spectrogram_denoise_off_matches_default():
 
 def test_contour_node():
     shot = _first_shot()
-    try:
-        n = nodes.build_node(shot, "contour")
-    except Exception as e:  # noqa: BLE001 — shot may lack the MPID toroidal array
-        pytest.skip(f"no MPID toroidal array in this shot: {e}")
+    # The DIII-D fixture guarantees the MPID toroidal array — a builder crash here
+    # must be RED, not a skip (this test skipped for weeks while pointed at NSTX).
+    n = nodes.build_node(shot, "contour")
     assert n["kind"] == "contour"
     assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])
 
@@ -133,10 +137,7 @@ def test_toroidal_array_single_family():
 
 def test_poloidal_shape_node():
     shot = _first_shot()
-    try:
-        n = nodes.build_node(shot, "poloidal_shape")
-    except Exception as e:  # noqa: BLE001 — shot may lack the MPID poloidal array
-        pytest.skip(f"no poloidal array in this shot: {e}")
+    n = nodes.build_node(shot, "poloidal_shape")
     assert n["kind"] == "line"
     assert {s["name"] for s in n["series"]} >= {"Re", "Im"}
     assert all("markers" in s for s in n["series"])
@@ -191,7 +192,10 @@ def test_fit_quality_node_has_finite_k():
     shot = _first_shot()
     n = nodes.build_node(shot, "fit_quality")
     assert n["kind"] == "metrics"
-    assert n["fields"]
+    k_fields = [f for f in n["fields"] if str(f["label"]).startswith("K")]
+    assert k_fields, n["fields"]
+    for f in k_fields:
+        assert float(f["value"]) == float(f["value"]) and float(f["value"]) < 1e18
 
 
 def test_sensor_map_rz_threads_shot_to_wall_loader(synthetic_shot, monkeypatch):
@@ -230,10 +234,7 @@ def test_real_theta_has_full_poloidal_coverage():
 
 def test_mode_pattern_node():
     shot = _first_shot()
-    try:
-        n = nodes.build_node(shot, "mode_pattern")
-    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
-        pytest.skip(f"no poloidal array in this shot: {e}")
+    n = nodes.build_node(shot, "mode_pattern")
     assert n["kind"] == "contour"
     assert len(n["z"]) == len(n["y"]) and len(n["z"][0]) == len(n["x"])  # [θ][φ]
 
@@ -241,11 +242,6 @@ def test_mode_pattern_node():
 def test_elongation_theta_star_threads_into_poloidal_nodes(monkeypatch):
     """With κ available the poloidal axis is the corrected θ*; absent κ it's geometric."""
     shot = _first_shot()
-    try:
-        nodes.build_node(shot, "mode_pattern")  # needs the poloidal array
-    except Exception as e:  # noqa: BLE001
-        pytest.skip(f"no poloidal array in this shot: {e}")
-
     # κ absent → geometric θ, honest "no κ" label
     monkeypatch.setattr(nodes, "_kappa_at", lambda *a, **k: None)
     mp = nodes.build_node(shot, "mode_pattern", {"time": 3000})
@@ -277,10 +273,7 @@ def test_toroidal_stripes_node():
 
 def test_poloidal_phase_fit_node():
     shot = _first_shot()
-    try:
-        n = nodes.build_node(shot, "poloidal_phase_fit", {"time": 3000})
-    except Exception as e:  # noqa: BLE001 — shot may lack the poloidal array
-        pytest.skip(f"no poloidal array in this shot: {e}")
+    n = nodes.build_node(shot, "poloidal_phase_fit", {"time": 3000})
     assert n["kind"] == "scatter2d" and n["points"]
     assert "m_fit" in n["meta"]
 
@@ -313,3 +306,101 @@ def test_quality_for_k_thresholds():
     assert contracts.quality_for_k(15) == "warn"
     assert contracts.quality_for_k(25) == "bad"
     assert contracts.quality_for_k(float("nan")) == "bad"
+
+
+# ---------------------------------------------------------------------------
+# NaN samples in fetched channels must serialize as JSON null, not 500
+# ---------------------------------------------------------------------------
+
+
+def test_raw_trace_with_nan_samples_serializes(synthetic_shot, monkeypatch):
+    """starlette serializes with allow_nan=False, so a NaN gap in a raw channel
+    used to turn the whole node response into an opaque 500. Non-finite samples
+    must come out as JSON null (a Plotly gap)."""
+    import json
+
+    from magnetics.data import h5source
+
+    orig = h5source.load_channel
+
+    def nan_load(shot, name):
+        t, d = orig(shot, name)
+        d = np.asarray(d, dtype=float).copy()
+        d[::7] = np.nan
+        return t, d
+
+    monkeypatch.setattr(nodes.h5source, "load_channel", nan_load)
+    try:
+        node = nodes.build_node(synthetic_shot, "raw_trace")
+        json.dumps(node, allow_nan=False)  # must not raise
+        assert any(v is None for v in node["series"][0]["y"])
+        assert any(v is not None for v in node["series"][0]["y"])
+    finally:
+        nodes.refresh()  # don't leak NaN-poisoned caches into other tests
+
+
+def test_json_finite_helper():
+    from magnetics.core.contracts import json_finite
+
+    assert json_finite([1.0, np.nan, np.inf, -np.inf, 2.5]) == [1.0, None, None, None, 2.5]
+    assert json_finite([[1.0, np.nan], [3.0, 4.0]]) == [[1.0, None], [3.0, 4.0]]
+
+
+def test_quality_for_k_matches_ts_on_nonfinite():
+    """contract.ts uses !Number.isFinite(K) -> "bad"; the Python twin must agree
+    for NaN and BOTH infinities (K = -inf used to return "good")."""
+    assert contracts.quality_for_k(float("nan")) == "bad"
+    assert contracts.quality_for_k(float("inf")) == "bad"
+    assert contracts.quality_for_k(float("-inf")) == "bad"
+    assert contracts.quality_for_k(5.0) == "good"
+    assert contracts.quality_for_k(15.0) == "warn"
+    assert contracts.quality_for_k(25.0) == "bad"
+
+
+def test_refresh_clears_real_theta_cache(synthetic_shot):
+    """Regression: refresh() (fired after every fetch job) cleared every lru_cache
+    except _real_theta, so a re-pull with more probes kept serving the stale
+    channel->theta map and poloidal nodes 422'd until server restart."""
+    nodes._real_theta(str(synthetic_shot))
+    assert nodes._real_theta.cache_info().currsize > 0
+    nodes.refresh()
+    assert nodes._real_theta.cache_info().currsize == 0
+
+
+def test_channel_usage_tags_plasma_and_qs_channels(synthetic_shot):
+    """Regression: channel_usage marked kappa/ip/bt (and the QS fit array) as
+    "unused / droppable" although the theta* correction and the QS helicity
+    consume them — trimming a pull per that endpoint silently degraded physics."""
+    usage = nodes.channel_usage(synthetic_shot)
+    unused = set(usage["unused"])
+    present = {u["name"] for u in usage["used"]}
+    for nm in ("kappa", "ip", "bt"):
+        assert nm not in unused, f"{nm} reported droppable but analyses consume it"
+        assert nm in present
+    # the QS midplane array must carry a QS role, not sit in unused
+    roles = {u["name"]: u["roles"] for u in usage["used"]}
+    assert any("QS fit array" in r for rs in roles.values() for r in rs)
+
+
+def test_mode_number_band_follows_fmax(synthetic_shot, monkeypatch):
+    """Issue #85: the n-map's compute band was pinned at 0-50 kHz, so raising the
+    GUI's f_max never showed data above 50 kHz no matter the request. The requested
+    fmax must reach the array STFT as its band ceiling, quantized to 50-kHz steps
+    (so crops within a step still reuse the cached STFT)."""
+    captured = {}
+    orig = nodes.spectral.array_shape_spectrum
+
+    def spy(*a, **k):
+        captured["fmax"] = k.get("fmax")
+        return orig(*a, **k)
+
+    monkeypatch.setattr(nodes.spectral, "array_shape_spectrum", spy)
+    try:
+        nodes.refresh()
+        nodes.build_node(synthetic_shot, "mode_number", {"fmax": "120"})
+        assert captured["fmax"] == 150_000.0  # ceil(120/50) * 50 kHz
+        nodes.refresh()
+        nodes.build_node(synthetic_shot, "mode_number", {"fmax": "40"})
+        assert captured["fmax"] == 50_000.0  # within the default step
+    finally:
+        nodes.refresh()  # don't leak spy-built cache entries

@@ -152,9 +152,10 @@ class TestMacNSpectrum:
     def test_peaks_at_true_mode(self):
         phi = np.array([0.0, 33.0, 66.0, 120.0, 200.0, 300.0])
         n_true = 3
-        z = shape_vector(-n_true * phi, np.ones_like(phi))  # phase = -n·φ
+        # phase = +n·φ: the conj(sig)·ref cross-phase ramp a cos(nφ − ωt) mode measures
+        z = shape_vector(n_true * phi, np.ones_like(phi))
         ns, macs, best = mac_n_spectrum(phi, z)
-        assert abs(best) == n_true
+        assert best == n_true  # signed
         assert macs.max() > 0.99
         assert ns.shape == macs.shape
 
@@ -259,7 +260,7 @@ class TestModeTracking:
 
         sigs, phi, t = self._array()
         tr = track_mode_shape(sigs, phi, t, frequency=8000.0, n_slices=20)
-        assert abs(int(np.median(tr.n_by_time[tr.t_ms < 25.0]))) == 2
+        assert int(np.median(tr.n_by_time[tr.t_ms < 25.0])) == 2  # signed
 
 
 class TestGPScaleInvariance:

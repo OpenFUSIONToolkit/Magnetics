@@ -12,9 +12,9 @@ The full **fetch → process → service → GUI** path runs end-to-end for **bo
   `data/datafile/` (gitignored); read back via `magnetics.data.h5source`. The GUI can trigger a
   pull from the left rail (`PullControl` → `POST /api/fetch`).
 - **Process:** `core/spectral.py` (MODESPEC) is real and pure. The SLCONTOUR quasi-stationary fit
-  runs end-to-end via the reference pipeline in `magnetics._slcontour/` (xarray, self-contained
-  OMFIT shim) adapted by `core/qs_bridge` — real K / χ² / modes for shots pulled with the Bp LFS
-  midplane array. A pure `core/quasistationary` port exists but is not yet wired in production (#40).
+  runs end-to-end via the shim-free `core/qs_*` modules (`qs_io_data` → `qs_prep` → `qs_fit`,
+  adapted to nodes by `qs_bridge`; the former `_slcontour` translation, promoted into core) — real
+  K / χ² / modes for shots pulled with the Bp LFS midplane array.
 - **Service:** `service/app.py` — `GET /api/node/{shot}/{node_id}` serves `kind`-nodes from
   `service/nodes.py`; `/api/machines` lists fetched shots (mock fallback when none).
 - **Nodes / seam:** `nodes.py` forwards GUI query params and serves the core's real `mode_number` /
@@ -31,9 +31,10 @@ The full **fetch → process → service → GUI** path runs end-to-end for **bo
   the rotating/MODESPEC nodes and the Sensors view render those shots too.
 
 Known gaps / open work: per-sensor σ from the data layer (the QS fit currently uses a constant σ;
-helicity is computed from Ip·Bt); finishing the pure `core/quasistationary` port and wiring it in
-place of the `_slcontour` reference pipeline (#40); real equilibrium plotting in the Sensors tab
-(#43); Br saddle-loop geometry corrections (#44).
+helicity is computed from Ip·Bt); real equilibrium plotting in the Sensors tab (#43); the
+xarray-heavy `qs_*` modules are excluded from the `ty` typecheck (see `[tool.ty.src]` in
+pyproject.toml); the cursor analyses (`phase_fit` / mode shape) read from a 1–25 kHz cached
+array spectrum, so modes above 25 kHz aren't phase-fittable at the cursor.
 
 ## The API contract is FLEXIBLE — change it, don't fake around it
 The `kind`-node contract (`core/contracts.py` ⇄ `gui/web/src/lib/contract.ts`, plus the
@@ -59,15 +60,26 @@ rather than fabricating data in the GUI. Keep `contracts.py` and `contract.ts` i
 
 ## Layout
 The Python project **is the repo root** (a uv project, served as a webapp). `src/magnetics/`:
-- `core/` — device-agnostic math (geometry, basis, design metrics, `quasistationary`, `spectral`).
+- `core/` — device-agnostic math: `spectral` (MODESPEC), `mode_shape`, `geometry`, the
+  quasi-stationary fit (`qs_io_data`/`qs_prep`/`qs_fit`/`qs_bridge`/`qs_device`/`qs_run`/
+  `qs_plots`), and the `contracts` node shapes.
 - `data/` — sources + `fetch/` (toksearch/mdsthin pulls, cluster orchestration); device configs
   in `data/device/*.json`.
 - `service/` — FastAPI; the built GUI is bundled at `service/webapp/` and served here.
-- `_slcontour/` — the reference SLCONTOUR translation (self-contained OMFIT shim), pending port
-  into `core/quasistationary` (issue #40); **excluded from lint/typecheck** until then.
 
 Tests in `tests/`, maintainer scripts in `scripts/`. `gui/web/` — React + Vite + TypeScript
 frontend (its `dist/` is staged into `service/webapp/` for the wheel).
+
+## Running the tests
+- **Python:** `uv run pytest` from the repo root — the whole suite is offline and deterministic
+  (~5 s; synthetic fixtures are generated at collection time, no real data needed). Live-network
+  tests (GA gateway / PPPL flux) are env-gated and skip unless `MAGNETICS_GA_USER` /
+  `MAGNETICS_FLUX_USER` is set; they are manual-only, never wired into CI.
+- **Frontend:** `cd gui/web && npm run test` (vitest, one-shot; `npm run test:watch` to iterate).
+- **Everything CI runs:** `uv run ruff format --check .` + `uvx ruff check .` + `uv run pytest`
+  + `uv run ty check src/magnetics` (Python), and `npm run lint` + `npm run typecheck` +
+  `npm run test` + `npm run build` (in `gui/web/`). Run these locally before committing —
+  a plain `pytest` + `tsc` pass does NOT cover everything CI checks.
 
 ## Conventions
 - Physics lives in `src/magnetics/core` (pure, device-agnostic, testable); **no physics in the

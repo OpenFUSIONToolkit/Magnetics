@@ -111,6 +111,39 @@ def channel_usage(shot: str) -> dict:
         tag([n for n, _ in _poloidal_arr(str(shot))], "poloidal array")
     except ValueError:
         pass
+    # The quasi-stationary fit's default sensor set (same resolution as _prep_qs_ds).
+    try:
+        from ..core import qs_device
+
+        dev, _ = _device_key(str(shot))
+        default_cf = "Bp_LFS_midplane"
+        if dev:
+            default_cf = dev.get("qs_default_set") or (
+                "quasi_stationary"
+                if "quasi_stationary" in dev.get("sensor_sets", {})
+                else default_cf
+            )
+        pats = np.atleast_1d(
+            qs_device.resolve_channel_filter(
+                default_cf, h5source.meta(shot).get("device", "DIII-D")
+            )
+        )
+        tag(
+            [nm for nm in all_names if any(re.match(str(p), nm) for p in pats)],
+            "QS fit array",
+        )
+    except Exception:  # noqa: BLE001 — QS not applicable to this shot/device
+        pass
+    # Plasma context channels: not part of any probe array, but consumed by the
+    # analyses — dropping them silently degrades the physics (θ* falls back to
+    # geometric θ; QS helicity falls back to its default) with no error anywhere.
+    for nm, role in (
+        ("kappa", "θ* elongation correction (poloidal nodes)"),
+        ("ip", "QS helicity (sign of Ip·Bt)"),
+        ("bt", "QS helicity (sign of Ip·Bt)"),
+    ):
+        if nm in all_names:
+            tag([nm], role)
 
     used = [{"name": nm, "roles": roles[nm]} for nm in all_names if nm in roles]
     unused = [nm for nm in all_names if nm not in roles]
@@ -126,7 +159,15 @@ def channel_usage(shot: str) -> dict:
 def refresh() -> None:
     """Forget cached state (call after a new fetch writes a file)."""
     h5source.refresh()
-    for fn in (_spec_result, _stack_cached, _array_spectrum, _array_mode_spec, _qs_run, _dev_geom):
+    for fn in (
+        _spec_result,
+        _stack_cached,
+        _array_spectrum,
+        _array_mode_spec,
+        _qs_run,
+        _dev_geom,
+        _real_theta,  # channel→θ map derives from channel_names: stale after a re-pull
+    ):
         fn.cache_clear()
 
 
@@ -339,21 +380,45 @@ def _named_sets(dg, substr: str) -> list[str]:
 
 
 # ── spectrogram: real 2-point MODESPEC cross-spectrogram ─────────────────────
+_PAIR_N_MAX = 5  # the pair must resolve |n| <= this without aliasing (matches the n-map)
+
+
+def _best_pair(arr) -> tuple[tuple[str, float], tuple[str, float]] | None:
+    """Best 2-point probe pair from a (name, phi)-sorted array: the widest *wrapped*
+    separation that still resolves |n| <= _PAIR_N_MAX unaliased. round(phase/Δφ) is
+    exact for all |n| <= N iff (N + 0.5)·|Δφ| <= 180, and within that limit a wider
+    Δφ dilutes phase noise (σ_n = σ_φ/Δφ) — so: widest under the limit; if the array
+    has no such pair, the smallest non-zero separation (best available n range)."""
+    limit = 180.0 / (_PAIR_N_MAX + 0.5)
+    best = smallest = None
+    for i in range(len(arr)):
+        for j in range(i + 1, len(arr)):
+            sep = abs(spectral.wrap_angle_deg(arr[j][1] - arr[i][1]))
+            if sep == 0:
+                continue
+            if sep <= limit and (best is None or sep > best[0]):
+                best = (sep, arr[i], arr[j])
+            if smallest is None or sep < smallest[0]:
+                smallest = (sep, arr[i], arr[j])
+    pick = best or smallest
+    return None if pick is None else (pick[1], pick[2])
+
+
 def _pick_pair(shot) -> tuple[tuple[str, float], tuple[str, float]]:
     """Two toroidally-separated probes for the 2-point cross-spectrogram.
     Prefer the fast Mirnov dB/dt array (DIII-D MPI_BDOT / an NSTX toroidal set / a
     KSTAR declared toroidal array), then integrated Bp. Returns ((name1, phi1),
-    (name2, phi2)) with the widest non-zero separation."""
+    (name2, phi2)) chosen by ``_best_pair`` (aliasing-safe, noise-optimal)."""
     dev, arrays = _arrays(shot)
     if arrays:  # device declares an explicit toroidal set (KSTAR) → use it precisely
-        arr = _set_channels(dev, arrays["toroidal"], shot)
-        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
-            return arr[0], arr[-1]
+        pair = _best_pair(_set_channels(dev, arrays["toroidal"], shot))
+        if pair is not None:
+            return pair
         raise ValueError("need two toroidally-separated probes for a spectrogram")
     for families in _pick_pair_prefs(shot):
-        arr = _array_channels(shot, families)  # (name, phi), sorted by phi
-        if len(arr) >= 2 and arr[0][1] != arr[-1][1]:
-            return arr[0], arr[-1]
+        pair = _best_pair(_array_channels(shot, families))  # (name, phi), sorted by phi
+        if pair is not None:
+            return pair
     raise ValueError("need two toroidally-separated probes for a spectrogram")
 
 
@@ -394,7 +459,7 @@ def _spec_result(shot: str, slice_duration: float, coherence_smooth: int, max_co
         coherence_smooth=coherence_smooth,
         max_columns=max_columns,
     )
-    return res, (n1, n2), round(float(phi2 - phi1), 1)
+    return res, (n1, n2), round(spectral.wrap_angle_deg(phi2 - phi1), 1)
 
 
 def _prep_spec(shot, params):
@@ -503,7 +568,12 @@ def _mode_number(shot, params=None) -> dict:
     names = tuple(n for n, _ in arr)
     phis = tuple(float(p) for _, p in arr)
     sd = _f(params, "slice_duration", 0.002)  # honor the resolution knob (500 Hz default)
-    ms = _array_mode_spec(str(shot), names, phis, sd)
+    # Compute band follows the requested display band, quantized to 50-kHz steps so
+    # crops within a step reuse the cached STFT (issue #85: the ceiling was pinned at
+    # 50 kHz, so raising the GUI's f_max never showed data above it).
+    fmax_req = _f(params, "fmax")
+    band_hi = 50_000.0 * max(1.0, float(np.ceil((fmax_req or 50.0) / 50.0)))
+    ms = _array_mode_spec(str(shot), names, phis, sd, band_hi)
 
     # Optional 2-D Gaussian pre-smoothing on the NATIVE n-map grid (before the display-time
     # decimation below). σ is in grid cells, so a coherent mode survives the gate across its
@@ -619,12 +689,13 @@ def _toroidal_grid(shot):
 # ── contour: raw δBp(φ, t) — x=φ, y=time (QS contour hero plot) ──────────────
 def _contour(shot, params=None) -> dict:
     t_sub, phi_grid, z, phis, n_ch = _toroidal_grid(shot)
-    zmax = float(np.nanmax(np.abs(z))) or 1.0
+    finite = np.abs(z[np.isfinite(z)])
+    zmax = float(finite.max()) if finite.size and finite.max() > 0 else 1.0
     overlay = {"points": [{"x": float(p), "y": float(t_sub[0])} for p in phis], "symbol": "square"}
     return contracts.contour(
         phi_grid.tolist(),
         t_sub.tolist(),
-        z.tolist(),
+        contracts.json_finite(z),
         {"x": "φ (deg)", "y": "time (ms)", "z": "δBp (G)"},
         zrange=[-zmax, zmax],
         overlay=overlay,
@@ -674,7 +745,7 @@ def _toroidal_stripes(shot, params=None) -> dict:
     return contracts.heatmap(
         t_sub.tolist(),
         ang.tolist(),
-        z.tolist(),
+        contracts.json_finite(z),
         {"x": "time (ms)", "y": "φ (deg)", "z": "δBp (a.u.)"},
         discrete=False,
         meta={
@@ -698,7 +769,7 @@ def _poloidal_stripes(shot, params=None) -> dict:
     return contracts.heatmap(
         t_sub.tolist(),
         ang.tolist(),
-        z.tolist(),
+        contracts.json_finite(z),
         {"x": "time (ms)", "y": "θ (deg)", "z": "δBp (a.u.)"},
         discrete=False,
         meta={
@@ -730,7 +801,7 @@ def _raw_trace(shot, params=None) -> dict:
         sel = np.arange(max(0, c - 2000), min(t_ms.size, c + 2000))
     if sel.size > 2000:  # keep the line light
         sel = sel[np.linspace(0, sel.size - 1, 2000).astype(int)]
-    series = [{"name": name, "x": t_ms[sel].tolist(), "y": d[sel].tolist()}]
+    series = [{"name": name, "x": t_ms[sel].tolist(), "y": contracts.json_finite(d[sel])}]
     return contracts.line(
         series,
         {"x": "time (ms)", "y": "dB/dt (a.u.)"},
@@ -833,15 +904,18 @@ def _array_spectrum(shot, names):
 
 
 @lru_cache(maxsize=2)
-def _array_mode_spec(shot, names, phis, slice_duration):
+def _array_mode_spec(shot, names, phis, slice_duration, band_hi_hz=50_000.0):
     """Toroidal-|n|-resolved spectrogram from a *dedicated* full-array STFT computed at
-    the requested frequency resolution over a fixed 0–50 kHz band — so the n-map refines
-    with the resolution knob and spans the same band as the power view, rather than being
-    locked to the cursor-analysis spectrum's 1–25 kHz / 1 kHz grid.
+    the requested frequency resolution over 0–``band_hi_hz`` — so the n-map refines
+    with the resolution knob and follows the power view's band, rather than being
+    locked to the cursor-analysis spectrum's 1–25 kHz / 1 kHz grid. The caller
+    quantizes ``band_hi_hz`` to 50-kHz steps, so band crops *within* a step stay a
+    cheap post-op on the cached STFT (issue #85: a fixed 50 kHz ceiling silently
+    truncated the map no matter how far the GUI's f_max was raised).
 
     Heavier than reusing ``_array_spectrum`` (its own 14-probe STFT), so ``maxsize`` is
-    small and only the resolution changes it — band cropping is a cheap post-op in the
-    node. ``names``/``phis`` are tuples so the call is hashable; cleared by ``refresh``."""
+    small and only the resolution/band change it. ``names``/``phis`` are tuples so the
+    call is hashable; cleared by ``refresh``."""
     t_ms, mat = _stack(shot, names)
     # Cap STFT columns at ~2000: the node decimates the display to 1500 anyway, so the
     # native fine hop would just inflate the per-cell projection (an (n, t, f) einsum)
@@ -850,7 +924,7 @@ def _array_mode_spec(shot, names, phis, slice_duration):
         mat,
         np.asarray(t_ms, dtype=float) * 1e-3,
         fmin=0.0,
-        fmax=50_000.0,
+        fmax=float(band_hi_hz),
         slice_duration=slice_duration,
         max_columns=2000,
     )
@@ -860,7 +934,7 @@ def _array_mode_spec(shot, names, phis, slice_duration):
 # ── toroidal mode at one frequency/cursor (shared by phase_fit & mode_shape) ──
 def _toroidal_arr(shot):
     """The toroidal (midplane) array for the n-fit: ONE consistent probe type, all at
-    θ≈0 so the phase is a clean −nφ ramp. Prefer the fast-Mirnov dB/dt array; a "both"
+    θ≈0 so the phase is a clean +nφ ramp. Prefer the fast-Mirnov dB/dt array; a "both"
     pull also brings the integrated-Bp (MPID) family and the off-midplane *poloidal*
     probes — mixing those in (different units, 90° dB/dt-vs-B offset, m·θ dependence)
     scrambles the fit, so they're excluded."""
@@ -909,12 +983,13 @@ def _toroidal_mode(shot, params):
 
 # ── phase_fit: phase-vs-φ at one frequency, at the GUI time cursor ────────────
 def _wrapped_ramp(intercept_deg, slope_n) -> dict:
-    """Fitted line phase(a) = (c − n·a) mod 360 over a∈[0,360], WRAPPED so it traces
-    the same |n| sawteeth as the (wrapped) data instead of one line shooting off-axis.
-    A null break is inserted at each 0/360 wrap so the polyline doesn't draw a vertical
+    """Fitted line phase(a) = (c + n·a) mod 360 over a∈[0,360] (the conj(sig)·ref
+    cross-phase ramp ``fit_toroidal_mode`` fits), WRAPPED so it traces the same |n|
+    sawteeth as the (wrapped) data instead of one line shooting off-axis. A null
+    break is inserted at each 0/360 wrap so the polyline doesn't draw a vertical
     jump across the panel."""
     a = np.linspace(0.0, 360.0, 361)
-    y = (intercept_deg - slope_n * a) % 360.0
+    y = (intercept_deg + slope_n * a) % 360.0
     fx: list = []
     fy: list = []
     prev = None
@@ -1081,7 +1156,7 @@ def _toroidal_n(shot, t0_s, f_khz):
 
 def _poloidal_mode(shot, params):
     """Per-probe phase/amplitude across the poloidal array vs θ. The probes span φ, so
-    the toroidal nφ ramp is removed (phase += n·φ → −m·θ + const) using the toroidal n
+    the toroidal +nφ ramp is removed (phase −= n·φ → m·θ + const) using the toroidal n
     at the same (t0, f). The probe angles are mapped to the elongation-corrected θ*
     (using the EFIT κ at the cursor) when available, so an `m` mode is a clean sinusoid
     rather than a κ-distorted one. Returns (arr, mode, f_khz, t0_ms, kappa)."""
@@ -1097,7 +1172,7 @@ def _poloidal_mode(shot, params):
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t0_s = (t0_ms * 1e-3) if t0_ms is not None else float(spec.time[spec.time.size // 2])
     mode = spectral.mode_from_spectrum(spec, thetas, t0_s, f_khz * 1e3)
-    detrended = (mode.phase + _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
+    detrended = (mode.phase - _toroidal_n(str(shot), t0_s, f_khz) * pphis) % 360.0
     mode = dataclasses.replace(mode, phase=detrended)
     return arr, mode, f_khz, t0_ms, kappa
 
@@ -1421,7 +1496,9 @@ def _prep_qs_ds(shot, params):
     cutoff_hi = float(params.get("cutoff_hi", 250.0)) if params else 250.0
     energy = float(params.get("energy", 0.98)) if params else 0.98
     fit_basis = params.get("fit_basis", "sinusoidal-integral") if params else "sinusoidal-integral"
-    fit_cond = float(params.get("fit_cond", 10.0)) if params else 10.0
+    # 1e3 = OMFIT SLCONTOUR's inversion cutoff (1/rcond); the "warn when K > 10"
+    # trust threshold lives in contracts.quality_for_k, not here.
+    fit_cond = float(params.get("fit_cond", 1e3)) if params else 1e3
     sigma_str = params.get("sigma") if params else None
     sigma = float(sigma_str) if sigma_str is not None else None
 

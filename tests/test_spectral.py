@@ -101,7 +101,7 @@ class TestCrossSpectrum:
         d = synthetic_n2
         result = cross_spectrum(d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"])
         peak_idx = np.argmax(result.power)
-        assert abs(result.mode_number[peak_idx]) == d["n_true"]
+        assert result.mode_number[peak_idx] == d["n_true"]  # signed
 
     def test_peak_frequency_near_expected(self, synthetic_n2):
         d = synthetic_n2
@@ -113,7 +113,7 @@ class TestCrossSpectrum:
         d = synthetic_n2
         result = cross_spectrum(d["sig1"], d["sig2"], d["fs"], delta_phi=d["delta_phi"])
         peak_mode_idx = np.argmax(result.rms_by_mode)
-        assert abs(result.mode_indices[peak_mode_idx]) == d["n_true"]
+        assert result.mode_indices[peak_mode_idx] == d["n_true"]  # signed
 
     def test_coherence_high_for_correlated_signals(self, synthetic_n2):
         d = synthetic_n2
@@ -168,11 +168,11 @@ class TestComputeSpectrogram:
         )
         for i in range(len(result.time)):
             peak_idx = np.argmax(result.power[i])
-            assert abs(result.mode_number[i, peak_idx]) == d["n_true"]
+            assert result.mode_number[i, peak_idx] == d["n_true"]  # signed
 
     def test_on_real_data(self, shot_174446):
         d = shot_174446
-        delta_phi = d["phi_307"] - d["phi_340"]
+        delta_phi = d["phi_340"] - d["phi_307"]  # φ2 − φ1, service convention
         result = compute_spectrogram(
             d["time_s"],
             d["sig_307"],
@@ -290,7 +290,7 @@ class TestDenoiseSpectrogram:
         dn = denoise_spectrogram(spec, coherence_min=0.5, power_floor_k=None)
         peak = np.unravel_index(np.argmax(spec.power), spec.power.shape)
         assert dn.power[peak] > 0
-        assert abs(dn.mode_number[peak]) == d["n_true"]
+        assert dn.mode_number[peak] == d["n_true"]  # signed
 
     def test_power_floor_removes_more_than_coherence_alone(self, synthetic_n2):
         spec = self._spec(synthetic_n2)
@@ -300,7 +300,7 @@ class TestDenoiseSpectrogram:
 
     def test_on_real_data(self, shot_174446):
         d = shot_174446
-        delta_phi = d["phi_307"] - d["phi_340"]
+        delta_phi = d["phi_340"] - d["phi_307"]  # φ2 − φ1, service convention
         spec = compute_spectrogram(
             d["time_s"], d["sig_307"], d["sig_340"], delta_phi, slice_duration=0.004
         )
@@ -513,7 +513,7 @@ class TestModeUncertaintyPropagation:
     def test_fit_reports_confidence_and_sigma(self):
         mode, n_true = self._modes()
         fit = fit_toroidal_mode(mode)
-        assert abs(fit.n) == n_true
+        assert fit.n == n_true  # signed
         assert fit.phase_sigma is not None and fit.phase_sigma > 0
         assert fit.n_confidence is not None
         assert 0.0 < fit.n_confidence <= 1.0
@@ -656,7 +656,7 @@ class TestArrayModeSpectrogram:
         fi = int(np.argmin(np.abs(ms.freq_band - 8000.0)))  # the injected mode bin
         it = ms.time.size // 2
         n_fit = fit_toroidal_mode(mode_from_spectrum(spec, phi, t[it], 8000.0)).n
-        assert abs(ms.mode_number[it, fi]) == n_true  # right |n| (not aliased)
+        assert ms.mode_number[it, fi] == n_true  # right SIGNED n (not aliased)
         assert ms.mode_number[it, fi] == n_fit  # agrees with the phase fit
         assert ms.quality[it, fi] > 0.9  # clean single-n → high q
 
@@ -688,3 +688,168 @@ class TestArrayModeSpectrogram:
         assert sm.quality.shape == ms.quality.shape
         assert np.all((sm.quality >= 0.0) & (sm.quality <= 1.0 + 1e-6))
         np.testing.assert_array_equal(sm.mode_number, ms.mode_number)
+
+
+# -----------------------------------------------------------------------
+# wide-pair aliasing regression (probes 320° apart the long way = -40° wrapped)
+# -----------------------------------------------------------------------
+
+
+class TestWidePairAliasing:
+    """Regression for the production DIII-D pair MPI66M020D/340D (φ = 19.52°/339.7°):
+    Δφ = φ2 − φ1 = 320.2° the long way, −39.8° wrapped. Unwrapped, round(phase/Δφ)
+    reported n = 0 for every real mode. n is SIGNED here — sig ~ sin(ωt − nφ) with
+    Δφ = φ2 − φ1 (the service convention) must recover +n."""
+
+    PHI1, PHI2 = 19.52, 339.7  # real MPI66M020D / MPI66M340D toroidal angles
+
+    @staticmethod
+    def _pair(n, phi1, phi2, fs=50_000, f_mode=3_000.0, duration=0.1):
+        t = np.linspace(0, duration, int(fs * duration), endpoint=False)
+        w = 2 * np.pi * f_mode
+        sig1 = np.sin(w * t - np.deg2rad(n * phi1))
+        sig2 = np.sin(w * t - np.deg2rad(n * phi2))
+        return t, sig1, sig2, float(fs)
+
+    @pytest.mark.parametrize("n_true", [1, 2, 3, 4, -2])
+    def test_cross_spectrum_recovers_signed_n(self, n_true):
+        _, sig1, sig2, fs = self._pair(n_true, self.PHI1, self.PHI2)
+        result = cross_spectrum(sig1, sig2, fs, delta_phi=self.PHI2 - self.PHI1)
+        peak = np.argmax(result.power)
+        assert result.mode_number[peak] == n_true
+
+    @pytest.mark.parametrize("n_true", [1, 3])
+    def test_spectrogram_recovers_signed_n(self, n_true):
+        t, sig1, sig2, fs = self._pair(n_true, self.PHI1, self.PHI2)
+        res = compute_spectrogram(t, sig1, sig2, delta_phi=self.PHI2 - self.PHI1)
+        it, fi = np.unravel_index(np.argmax(res.power), res.power.shape)
+        assert res.mode_number[it, fi] == n_true
+
+    def test_long_and_short_way_separations_agree(self):
+        _, sig1, sig2, fs = self._pair(2, self.PHI1, self.PHI2)
+        long_way = cross_spectrum(sig1, sig2, fs, delta_phi=self.PHI2 - self.PHI1)
+        short_way = cross_spectrum(sig1, sig2, fs, delta_phi=self.PHI2 - self.PHI1 - 360.0)
+        np.testing.assert_array_equal(long_way.mode_number, short_way.mode_number)
+        np.testing.assert_array_equal(long_way.mode_indices, short_way.mode_indices)
+
+    def test_full_turn_separation_raises(self):
+        _, sig1, sig2, fs = self._pair(1, 0.0, 360.0)
+        with pytest.raises(ValueError, match="mod 360"):
+            cross_spectrum(sig1, sig2, fs, delta_phi=360.0)
+
+
+class TestWrapAngleDeg:
+    def test_values(self):
+        from magnetics.core.spectral import wrap_angle_deg
+
+        assert wrap_angle_deg(320.18) == pytest.approx(-39.82)
+        assert wrap_angle_deg(-200.0) == pytest.approx(160.0)
+        assert wrap_angle_deg(33.0) == pytest.approx(33.0)
+        assert wrap_angle_deg(180.0) == 180.0
+        assert wrap_angle_deg(-180.0) == 180.0
+        assert wrap_angle_deg(540.0) == 180.0
+        assert wrap_angle_deg(720.0) == 0.0
+
+
+# -----------------------------------------------------------------------
+# cross-family signed-n agreement — every estimator, one physical mode
+# -----------------------------------------------------------------------
+
+
+class TestSignedNConventionAgreement:
+    """One physical mode b ∝ cos(nφ − ωt) (n = +2, rotating toward +φ) must be
+    reported with the SAME signed n by every estimator family: the 2-point
+    cross-spectrum/spectrogram, the phase-ramp fit, the array projection, and the
+    shape MAC. Regression for the families disagreeing in sign (docstrings claimed
+    agreement while the fit family returned −n)."""
+
+    N_TRUE = 2
+    F_MODE = 8_000.0
+
+    @pytest.fixture()
+    def array_mode(self):
+        fs = 200_000
+        t = np.linspace(0, 0.05, int(fs * 0.05), endpoint=False)
+        phi = np.linspace(0.0, 330.0, 12)
+        rng = np.random.default_rng(11)
+        sigs = np.vstack(
+            [
+                np.sin(2 * np.pi * self.F_MODE * t - np.deg2rad(self.N_TRUE * p))
+                + 0.02 * rng.standard_normal(t.size)
+                for p in phi
+            ]
+        )
+        return sigs, phi, t, float(fs)
+
+    def test_all_families_agree_on_signed_n(self, array_mode):
+        from magnetics.core.mode_shape import mac_n_spectrum, shape_vector
+        from magnetics.core.spectral import (
+            array_mode_spectrogram,
+            array_shape_spectrum,
+        )
+
+        sigs, phi, t, fs = array_mode
+
+        # family A1: 2-point cross-spectrum (adjacent probes, Δφ = φ2 − φ1 = 30°)
+        two_pt = cross_spectrum(sigs[0], sigs[1], fs, delta_phi=phi[1] - phi[0])
+        n_2pt = int(two_pt.mode_number[np.argmax(two_pt.power)])
+
+        # family A2: 2-point spectrogram
+        spec2 = compute_spectrogram(t, sigs[0], sigs[1], delta_phi=phi[1] - phi[0])
+        it, fi = np.unravel_index(np.argmax(spec2.power), spec2.power.shape)
+        n_specgram = int(spec2.mode_number[it, fi])
+
+        # family B1: phase-ramp fit on the full array
+        mode = extract_mode_at_frequency(sigs, phi, t, frequency=self.F_MODE)
+        n_fit = fit_toroidal_mode(mode).n
+
+        # family B2: array harmonic projection
+        aspec = array_shape_spectrum(sigs, t)
+        ms = array_mode_spectrogram(aspec, phi)
+        fb = int(np.argmin(np.abs(ms.freq_band - self.F_MODE)))
+        n_array = int(ms.mode_number[ms.time.size // 2, fb])
+
+        # family B3: shape MAC
+        _, _, n_mac = mac_n_spectrum(phi, shape_vector(mode.phase, mode.amplitude))
+
+        assert n_2pt == n_specgram == n_fit == n_array == n_mac == self.N_TRUE, (
+            f"2pt={n_2pt} specgram={n_specgram} fit={n_fit} array={n_array} mac={n_mac}"
+        )
+
+
+# -----------------------------------------------------------------------
+# spectrogram power normalization — must match csd's density scaling
+# -----------------------------------------------------------------------
+
+
+class TestSpectrogramPowerNormalization:
+    """Regression: compute_spectrogram used raw |conj(S2)·S1| with no window-power
+    or fs scaling yet applied cross_spectrum's density-RMS formula, so its
+    'rms amplitude' was off by a data-dependent factor of thousands."""
+
+    def _pair(self, amp=1.0, fs=50_000, f_mode=3_000.0, duration=0.2):
+        t = np.linspace(0, duration, int(fs * duration), endpoint=False)
+        w = 2 * np.pi * f_mode
+        n, phi1, phi2 = 2, 30.0, 63.0
+        sig1 = amp * np.sin(w * t - np.deg2rad(n * phi1))
+        sig2 = amp * np.sin(w * t - np.deg2rad(n * phi2))
+        return t, sig1, sig2, float(fs), phi2 - phi1
+
+    def test_rms_by_mode_recovers_physical_rms(self):
+        # a unit-amplitude sine has RMS 1/sqrt(2); both estimators must report it
+        t, sig1, sig2, fs, dphi = self._pair(amp=1.0)
+        two_pt = cross_spectrum(sig1, sig2, fs, delta_phi=dphi, nperseg=1024)
+        spec = compute_spectrogram(t, sig1, sig2, dphi, slice_duration=0.02)
+        rms_2pt = float(np.max(two_pt.rms_by_mode))
+        rms_spec = float(np.max(spec.rms_by_mode))
+        assert rms_2pt == pytest.approx(2**-0.5, rel=0.05)
+        assert rms_spec == pytest.approx(2**-0.5, rel=0.05)
+
+    def test_rms_scales_linearly_with_amplitude(self):
+        _, s1a, s2a, fs, dphi = self._pair(amp=1.0)
+        t, s1b, s2b, _, _ = self._pair(amp=3.0)
+        a = compute_spectrogram(t, s1a, s2a, dphi, slice_duration=0.02)
+        b = compute_spectrogram(t, s1b, s2b, dphi, slice_duration=0.02)
+        assert float(np.max(b.rms_by_mode)) == pytest.approx(
+            3.0 * float(np.max(a.rms_by_mode)), rel=1e-3
+        )

@@ -8,7 +8,10 @@ sync. No physics here, just shaping.
 
 from __future__ import annotations
 
+import math
 from typing import Any
+
+import numpy as np
 
 
 def _clean(d: dict[str, Any]) -> dict[str, Any]:
@@ -98,11 +101,24 @@ def metrics(title, fields, *, meta=None) -> dict:
 def quality_for_k(k: float) -> str:
     """SLCONTOUR condition-number thresholds (warn > 10, error > 20).
 
-    Mirrors `qualityForK` in contract.ts so the GUI's traffic-light coloring and
-    the backend agree.
+    Mirrors `qualityForK` in contract.ts (which tests `!Number.isFinite(K)`) so
+    the GUI's traffic-light coloring and the backend agree — including ±inf.
     """
-    if not (k == k) or k > 20:  # NaN or too ill-conditioned
+    if not math.isfinite(k) or k > 20:  # NaN/±inf or too ill-conditioned
         return "bad"
     if k > 10:
         return "warn"
     return "good"
+
+
+def json_finite(a):
+    """Array → nested lists with every non-finite value as None (JSON null).
+
+    The HTTP layer serializes with ``allow_nan=False``, so a single NaN sample in
+    a raw fetched channel otherwise turns a whole node response into an opaque
+    500. The GUI's Plotly renderers treat null as a gap, which is the honest
+    picture of missing samples."""
+    a = np.asarray(a, dtype=float)
+    out = a.astype(object)
+    out[~np.isfinite(a)] = None
+    return out.tolist()

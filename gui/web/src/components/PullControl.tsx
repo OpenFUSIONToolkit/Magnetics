@@ -8,6 +8,7 @@
 // decimation to make a pull seconds instead of minutes.
 import { useEffect, useRef, useState } from "react";
 import { apiBase, startFetch, usingLiveBackend, type DeviceInfo } from "../lib/api";
+import { deviceDefaults } from "../lib/deviceDefaults";
 import { useStore } from "../store";
 
 export default function PullControl() {
@@ -57,20 +58,32 @@ export default function PullControl() {
   const esRef = useRef<EventSource | null>(null);
 
   // Snap backend / sensor-set / window / shot to sensible per-device defaults on a
-  // device change. A tree device (NSTX/KSTAR) has no cluster and no analysis→signal
-  // map, so it uses mdsthin over a NARROW window (its raw signals are ~15 MHz and
-  // seconds long — a wide window is gigabytes). An NSTX-style tree device requires a
-  // named sensor set; KSTAR's transport defaults to its declared arrays when none is
-  // chosen. Called from the device onChange handler — NOT a synchronous effect
-  // (react-hooks/set-state-in-effect).
+  // device change. The decision lives in lib/deviceDefaults.ts (pure + unit-tested,
+  // issue #64); this just applies it to the form state.
   function snapDeviceDefaults(d: DeviceInfo) {
-    const tree = d.access === "mdsplus_tree";
-    setBackend(d.remote_capable ? "remote" : "mdsthin");
-    setSensorSet(tree && !d.needs_ssh_creds ? (d.sensor_sets[0] ?? "") : "");
-    setTmin(tree ? "250" : "1000");
-    setTmax(tree ? "350" : "5000");
-    if (d.default_shot != null) setShot(String(d.default_shot));
+    const def = deviceDefaults(d);
+    setBackend(def.backend);
+    setSensorSet(def.sensorSet);
+    setTmin(def.tmin);
+    setTmax(def.tmax);
+    if (def.shot != null) setShot(def.shot);
   }
+
+  // The store owns `device`, and the left rail's Device picker (App.tsx) changes it
+  // WITHOUT going through this component's select — snapping only in the select's
+  // onChange left the backend/window/sensor-set at the previous device's values (a
+  // rail switch to a tree device then POSTed backend "remote" to a device with no
+  // cluster while the select displayed "mdsthin"). Snap once per device id, from
+  // wherever the change originated.
+  const snappedDevice = useRef<string | null>(null);
+  useEffect(() => {
+    if (!device || snappedDevice.current === device) return;
+    snappedDevice.current = device;
+    const d = devices.find((x) => x.id === device);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-device defaults must follow an external (rail) device change
+    if (d) snapDeviceDefaults(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device, devices]);
 
   // close any open pull stream when the component unmounts
   useEffect(() => () => esRef.current?.close(), []);
@@ -150,11 +163,7 @@ export default function PullControl() {
       <h3>Pull a shot (live)</h3>
       {devices.length > 0 && (
         <select className="pull-input" value={device} aria-label="device"
-          onChange={(e) => {
-            const d = devices.find((x) => x.id === e.target.value);
-            setDevice(e.target.value);
-            if (d) snapDeviceDefaults(d);
-          }}>
+          onChange={(e) => setDevice(e.target.value)}>
           {devices.map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}

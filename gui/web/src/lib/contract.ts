@@ -6,7 +6,7 @@
 // adding a new analysis on the Python side needs ZERO frontend changes — the
 // physics teams just emit one of these shapes.
 //
-// This mirrors the Python builders (magfit/contracts.py): contour · heatmap ·
+// This mirrors the Python builders (magnetics/core/contracts.py): contour · heatmap ·
 // scatter2d · metrics, plus `line` for time-series traces. Keep the two in sync.
 // ─────────────────────────────────────────────────────────────────────────────
 

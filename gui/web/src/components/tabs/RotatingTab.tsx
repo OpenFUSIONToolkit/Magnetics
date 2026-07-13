@@ -58,7 +58,11 @@ function PanelPlaceholder({ text, height = 200 }: { text: string; height?: numbe
 }
 
 export default function RotatingTab({ machine }: { machine: string }) {
-  const { cursorMs, setCursorMs } = useStore();
+  // Selective subscriptions: a whole-store destructure re-rendered this heavy tab
+  // (every Plotly panel rebuilt) on EVERY store change, including each keystroke
+  // in the left rail's credential fields.
+  const cursorMs = useStore((s) => s.cursorMs);
+  const setCursorMs = useStore((s) => s.setCursorMs);
   // Foreground ink that flips with the theme so the raw dB/dt trace stays visible on
   // the light plot background (it was hard-coded white → invisible in light mode).
   const dark = useStore((s) => s.theme === "dark");
@@ -204,7 +208,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // Real toroidal mode-number map n(t,f) — a full-array fit per cell (resolves n=1,2,3,4…
   // that the 2-point estimate aliases away). Backs the "Mode n" toggle, gated server-side.
   // Honors the same resolution knob + band as the power view so the two stay consistent.
-  const { node: modeNumberNode } = useNode(machine, "mode_number", {
+  const { node: modeNumberNode, error: modeNumberError } = useNode(machine, "mode_number", {
     slice_duration: specSliceMs / 1000, fmin, fmax, n_amp_pct: powerGate, n_gate: nGate,
     ...smoothParams,
   });
@@ -476,7 +480,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         zrange: [-3, 0] as [number, number],
       };
     }
-  }, [hasStaticFiles, specNode, modeNumberNode, syntheticSpecNode, displayMode, fmin, fmax, powerGate, gateFrac]);
+  }, [hasStaticFiles, specNode, modeNumberNode, syntheticSpecNode, displayMode, fmin, fmax, gateFrac]);
 
   // Time scrubber source: keep the scrubber alive when the "n" mode map is still
   // computing (processedSpecNode null) by falling back to the loaded power spectrogram's
@@ -728,9 +732,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
     if (!processedSpecNode) {
       // In "n" mode the heavy array-STFT mode_number node can still be loading after the
       // power spectrogram has already arrived (specLoading is false by then) — show an
-      // explicit indicator instead of a blank tile.
+      // explicit indicator instead of a blank tile. A server ERROR (e.g. 422: no usable
+      // toroidal array) must read as an error, not as fake eternal progress.
       if (displayMode === "n" && hasStaticFiles) {
-        return <div className="placeholder">Computing mode map…</div>;
+        return modeNumberError
+          ? <div className="placeholder">mode map unavailable: {modeNumberError.replace(/^Error:\s*fetch failed \(\d+\):\s*/, "")}</div>
+          : <div className="placeholder">Computing mode map…</div>;
       }
       return null;
     }

@@ -10,7 +10,7 @@
 // The node is a scatter2d (R-Z points) whose `meta` carries the full per-sensor
 // records + the vessel outline; the backend owns every device specific (which
 // family is Bp vs a saddle loop, the wall shape), so this view is device-agnostic.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
@@ -122,6 +122,13 @@ export default function SensorsTab({ machine }: { machine: string }) {
   // User's explicit checkbox overrides; null until the first toggle, before which
   // the default selection (broadest Bp + Br set) is derived from `sets` at render.
   const [userSets, setUserSets] = useState<Record<string, boolean> | null>(null);
+  // Overrides are keyed by SET NAME, which is device-specific: carrying them to a
+  // different machine leaves every checkbox unmatched and renders an empty sensor
+  // scene with no hint why. Reset to the derived default on machine change.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- drop per-device set overrides on machine change
+    setUserSets(null);
+  }, [machine]);
   const selectedSets = useMemo<Record<string, boolean>>(() => {
     if (userSets) return userSets;
     const init: Record<string, boolean> = {};

@@ -165,6 +165,17 @@ def _cross_spectral_errors(
     return phase_err, amp_err
 
 
+def wrap_angle_deg(angle: float) -> float:
+    """Reduce an angle (deg) to the signed principal value in (-180, 180].
+
+    A mode's cross-phase n·Δφ is only defined modulo 360°, so the 2-point estimator
+    n = round(phase / Δφ) needs the *short-way, signed* probe separation: probes at
+    20° and 340° are 320° apart measured one way, but the wrapped phase sees -40°.
+    Feeding the long-way separation aliases every mode toward n = 0."""
+    wrapped = (float(angle) + 180.0) % 360.0 - 180.0
+    return 180.0 if wrapped == -180.0 else wrapped
+
+
 def cross_spectrum(
     sig1: NDArray[np.floating],
     sig2: NDArray[np.floating],
@@ -180,7 +191,10 @@ def cross_spectrum(
         sig1 (ndarray): first probe time series.
         sig2 (ndarray): second probe time series.
         sample_rate (float): sampling rate (Hz).
-        delta_phi (float | None): toroidal separation (deg); enables mode-number output.
+        delta_phi (float | None): toroidal separation (deg), phi2 - phi1; enables
+            mode-number output. Wrapped internally to the principal value (-180, 180],
+            so either the short- or long-way separation may be passed. Modes are only
+            resolved unaliased for |n| <= 180 / |wrapped delta_phi|.
         nperseg (int | None): Welch segment length for csd/coherence; None uses scipy's
             default (256). Set below the signal length on short slices to keep multiple
             averaging segments — coherence is meaningless from a single segment.
@@ -209,8 +223,9 @@ def cross_spectrum(
             n_segments=k,
         )
 
+    delta_phi = wrap_angle_deg(delta_phi)
     if delta_phi == 0:
-        raise ValueError("delta_phi must be non-zero to compute mode numbers")
+        raise ValueError("delta_phi must be non-zero (mod 360°) to compute mode numbers")
 
     mode = np.rint(phase / delta_phi).astype(np.intp)
 
@@ -323,15 +338,17 @@ def compute_spectrogram(
 
     Engine: one batched, single-precision short-time FFT per probe (no per-window loop),
     with the column count decimated to ``max_columns`` so cost scales with the display,
-    not the record length. Physics: cross-power = |conj(S1)·S2|, frequency-smoothed
-    coherence, n = round(phase / delta_phi), and per-mode RMS — identical to the 2-point
-    definitions in ``cross_spectrum``.
+    not the record length. Physics: cross-power = |conj(S1)·S2| scaled to a one-sided
+    cross-spectral density (csd's ``scaling="density"``), frequency-smoothed coherence,
+    n = round(phase / delta_phi), and per-mode RMS — identical to the 2-point
+    definitions in ``cross_spectrum``, so amplitudes are comparable across the two.
 
     Inputs:
         time (ndarray): sample times (s); assumed uniformly sampled.
         sig1 (ndarray): first probe time series.
         sig2 (ndarray): second probe time series.
-        delta_phi (float): toroidal separation (deg); must be non-zero.
+        delta_phi (float): toroidal separation (deg), phi2 - phi1; must be non-zero
+            mod 360°. Wrapped internally to (-180, 180] like ``cross_spectrum``.
         slice_duration (float): FFT window width (s) — sets the frequency resolution.
         window (str): scipy window name for the taper.
         max_columns (int): cap on spectrogram time columns (decimation lever).
@@ -340,8 +357,9 @@ def compute_spectrogram(
         result (SpectrogramResult): power/coherence/mode_number as (n_times, n_freqs)
             arrays, with time/frequency/rms_by_mode/mode_indices.
     """
+    delta_phi = wrap_angle_deg(delta_phi)
     if delta_phi == 0:
-        raise ValueError("delta_phi must be non-zero to compute mode numbers")
+        raise ValueError("delta_phi must be non-zero (mod 360°) to compute mode numbers")
 
     time = np.asarray(time)
     s1 = np.ascontiguousarray(sig1, dtype=np.float32)
@@ -366,7 +384,17 @@ def compute_spectrogram(
     # order matches cross_spectrum's scipy.signal.csd(sig2, sig1) convention so the
     # spectrogram and the single-window 2-point analysis report the same *signed* n.
     cross = np.conj(spec2) * spec1
-    power = np.abs(cross)
+    # Scale |cross| to a one-sided cross-spectral DENSITY exactly like scipy's
+    # csd(scaling="density"): 1/(fs·Σwin²), doubled off the DC/Nyquist bins. Without
+    # this, rms_by_mode's sqrt(Σ power·df) is off by a data-dependent factor of
+    # thousands vs the 2-point cross_spectrum RMS it claims to match. (Coherence and
+    # phase are ratios/angles — unaffected.)
+    scale = 1.0 / (sample_rate * float(np.sum(win.astype(np.float64) ** 2)))
+    power = np.abs(cross) * scale
+    if n_fft % 2 == 0:
+        power[:, 1:-1] *= 2.0
+    else:
+        power[:, 1:] *= 2.0
     phase = np.rad2deg(np.angle(cross))
 
     # Coherence needs averaging; smooth the auto/cross spectra over frequency bins.
@@ -605,7 +633,7 @@ class ArrayModeSpectrogram:
     time: NDArray[np.floating]  # (n_times,) window-center times (s)
     freq_band: NDArray[np.floating]  # (n_band,) Hz kept
     mode_number: NDArray[np.integer]  # (n_times, n_band) best-fit toroidal n
-    amplitude: NDArray[np.floating]  # (n_times, n_band) |Σ_p Z_p e^{-inφ}|
+    amplitude: NDArray[np.floating]  # (n_times, n_band) |⟨Z, e^{-inφ}⟩| = |Σ_p Z_p e^{+inφ}|
     quality: NDArray[np.floating]  # (n_times, n_band) harmonic energy fraction ∈ [1/M,1]
 
 
@@ -625,11 +653,13 @@ def array_mode_spectrogram(
 
     The per-cell mode-coherence is the *energy fraction* the single best-fit n captures of
     the summed toroidal-harmonic power, ``|R_{n*}|² / Σ_n |R_n|² ∈ [1/M, 1]`` with
-    ``R_n = Σ_p Z_p e^{-inφ_p}`` and ``M = 2·n_max + 1`` candidates: 1 = a pure single-n
+    ``R_n = Σ_p Z_p e^{+inφ_p}`` and ``M = 2·n_max + 1`` candidates: 1 = a pure single-n
     pattern, 1/M = white across harmonics (incoherent noise). This is a spectral-
     concentration ratio (more noise/signal contrast than the resultant length ``|R_{n*}| /
-    Σ_p|Z_p|``, whose noise floor sits higher at ~1/√P). The ``exp(-i n φ)`` sign matches
-    ``mode_from_spectrum`` and the phase fit, so the reported n agrees with them.
+    Σ_p|Z_p|``, whose noise floor sits higher at ~1/√P). ``R_n`` is the inner product
+    ``⟨Z, e^{-inφ}⟩`` (template conjugated): a ``cos(nφ - ωt)`` mode's positive-frequency
+    STFT pattern is ``Z_p ∝ e^{-inφ_p}``, so the projection peaks at the same signed +n
+    that ``cross_spectrum`` and the phase fit report.
 
     Inputs:
         spectrum (ArrayShapeSpectrum): the per-probe complex STFT band.
@@ -641,8 +671,8 @@ def array_mode_spectrogram(
     z = np.asarray(spectrum.spec)  # (P, T, F) complex
     phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
     ns = np.arange(-int(n_max), int(n_max) + 1)
-    basis = np.exp(-1j * ns[:, None] * phi[None, :])  # (M, P)
-    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F) = R_n
+    basis = np.exp(1j * ns[:, None] * phi[None, :])  # (M, P) = conj(e^{-inφ_p}) templates
+    proj = np.einsum("mp,ptf->mtf", basis, z)  # (M, T, F) = R_n = ⟨Z, e^{-inφ}⟩
     amp = np.abs(proj)
     k = np.argmax(amp, axis=0)  # (T, F)
     peak = np.take_along_axis(amp, k[None], axis=0)[0]  # |R_{n*}| (T, F)
@@ -867,11 +897,14 @@ def fit_toroidal_mode(
     """Fit a toroidal mode number to per-probe phase-vs-angle data.
 
     A rotating mode of toroidal number n imprints a linear phase ramp across the
-    toroidal array: ``phase(phi) = c - n * phi`` (deg). Rather than unwrap the
-    (mod-360) phases — ill-posed for sparse arrays — this scans integer candidates
-    and picks the n whose residual ``phase + n * phi`` clusters most tightly on the
-    circle (largest amplitude-weighted resultant). The intercept c is the angle of
-    that resultant, giving a wrap-free fit line for the GUI to draw.
+    toroidal array. With the conj(sig)·ref cross-phase convention used by
+    ``extract_mode_at_frequency`` / ``mode_from_spectrum``, a ``cos(nφ - ωt)`` mode
+    measures as ``phase(phi) = c + n * phi`` (deg) — the same signed n the 2-point
+    ``cross_spectrum`` reports. Rather than unwrap the (mod-360) phases — ill-posed
+    for sparse arrays — this scans integer candidates and picks the n whose residual
+    ``phase - n * phi`` clusters most tightly on the circle (largest
+    amplitude-weighted resultant). The intercept c is the angle of that resultant,
+    giving a wrap-free fit line for the GUI to draw.
 
     Inputs:
         mode_result (ModeAtFrequencyResult): per-probe phase/amplitude/angle, e.g.
@@ -902,7 +935,7 @@ def fit_toroidal_mode(
     inter = np.empty(len(candidates))  # per-candidate intercept c_n (deg)
     rmag = np.empty(len(candidates))  # per-candidate resultant length
     for j, n in enumerate(candidates):
-        resultant = np.sum(w * np.exp(1j * np.deg2rad(phase + n * phi))) / w.sum()
+        resultant = np.sum(w * np.exp(1j * np.deg2rad(phase - n * phi))) / w.sum()
         rmag[j] = np.abs(resultant)
         inter[j] = np.rad2deg(np.angle(resultant))
     best_j = int(np.argmax(rmag))
@@ -927,7 +960,7 @@ def fit_toroidal_mode(
 
     chi2 = np.array(
         [
-            np.sum((_wrap180(phase + n * phi - inter[j]) / sigma) ** 2)
+            np.sum((_wrap180(phase - n * phi - inter[j]) / sigma) ** 2)
             for j, n in enumerate(candidates)
         ]
     )

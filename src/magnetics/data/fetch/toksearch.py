@@ -99,6 +99,26 @@ def _resolve_pointnames(dev, pointnames, shot):
         if pt is None:  # out of range / NotAvailable
             skipped.append(cid)
             continue
+        prev = canonical_of.get(pt)
+        if prev is not None and prev != cid:
+            # A per-era alias collides with another sensor's queried pointname
+            # (e.g. KSTAR \MC1T10 -> \MC1P03 since shot 17377, while \MC1P03 is
+            # itself in the pull). Fetching one node under two canonical ids
+            # previously corrupted the relabel step — both channels got the same
+            # name and the writer silently dropped one. Query the node once,
+            # prefer the sensor literally named `pt` (identity mapping), and
+            # report the losing id as skipped instead of losing it silently.
+            if pt == cid:
+                skipped.append(prev)
+                canonical_of[pt] = cid
+            else:
+                skipped.append(cid)
+            sys.stderr.write(
+                f"pointname collision at shot {shot_i}: {skipped[-1]!r} aliases "
+                f"{pt!r}, which is fetched as {canonical_of[pt]!r}; skipping the "
+                "alias (check the device file's per-era pointname overrides).\n"
+            )
+            continue
         query.append(pt)
         canonical_of[pt] = cid
     return query, canonical_of, skipped
@@ -213,16 +233,44 @@ def _default_progress(frac: float, msg: str) -> None:
 
 # --- channel record -----------------------------------------------------------
 class Channel:
-    """One fetched pointname: time (ms, float64) + data (float32)."""
+    """One fetched pointname: time (ms, float64) + data (float32).
 
-    __slots__ = ("name", "time", "data", "ok", "error")
+    ``error_kind`` classifies a failure (``ok=False``): ``"no_data"`` — the server
+    answered and the channel genuinely has nothing (cached as missing so the next
+    incremental pull skips it); ``"transport"`` — the connection/tunnel died (NOT
+    cached, so the next pull retries without --force; see issue #63)."""
 
-    def __init__(self, name, time=None, data=None, ok=False, error=""):
+    __slots__ = ("name", "time", "data", "ok", "error", "error_kind")
+
+    def __init__(self, name, time=None, data=None, ok=False, error="", error_kind="no_data"):
         self.name = name
         self.time = time
         self.data = data
         self.ok = ok
         self.error = error
+        self.error_kind = error_kind
+
+
+def _error_kind(exc) -> str:
+    """Classify a fetch exception: ``"transport"`` for connection-level failures
+    (socket/tunnel/timeout — worth retrying next run), ``"no_data"`` for a genuine
+    MDSplus no-data / no-node answer (cacheable as missing). Message matching is
+    the fallback for errors wrapped in strings by intermediate layers."""
+    if isinstance(exc, (OSError, EOFError, TimeoutError, ConnectionError)):
+        return "transport"
+    msg = str(exc).lower()
+    transport_words = (
+        "connection",
+        "timed out",
+        "timeout",
+        "broken pipe",
+        "reset by peer",
+        "eof",
+        "socket",
+        "tunnel",
+        "ssh",
+    )
+    return "transport" if any(w in msg for w in transport_words) else "no_data"
 
 
 def _reduce(t: np.ndarray, y: np.ndarray, tmin, tmax, stride: int):
@@ -382,6 +430,7 @@ def _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress):
                 conn.openTree(tree, shot)
             except Exception as exc:
                 ch.error = f"open {tree}: {exc}"
+                ch.error_kind = _error_kind(exc)
                 continue
             try:
                 y = np.atleast_1d(conn.get(node).data())
@@ -398,6 +447,7 @@ def _mdsthin_tree_channels(connect, shot, tree_signals, tmin, tmax, progress):
                 ch.error = f"{tree}{node}: degenerate (n={y.size}, t={t.size})"
             except Exception as exc:
                 ch.error = f"{tree}{node}: {exc}"
+                ch.error_kind = _error_kind(exc)
         out.append(ch)
         progress(1.0, f"tree:{name} ({'ok' if ch.ok else 'missing'})")
     return out
@@ -528,7 +578,9 @@ def _fetch_mdsthin(
                         t = _arr(gm.get(f"t{i}"))
                         out.append(Channel(pt, t, y.astype(np.float32, copy=False), ok=True))
                     except Exception as exc:  # per-channel error in the batch
-                        out.append(Channel(pt, ok=False, error=str(exc)))
+                        out.append(
+                            Channel(pt, ok=False, error=str(exc), error_kind=_error_kind(exc))
+                        )
                 tick(batch[-1], k=len(batch))
                 return out, True
             except Exception as exc:  # whole-batch failure -> fall back
@@ -543,7 +595,7 @@ def _fetch_mdsthin(
                 else:
                     out.append(Channel(pt, ok=False, error="no data"))
             except Exception as exc:
-                out.append(Channel(pt, ok=False, error=str(exc)))
+                out.append(Channel(pt, ok=False, error=str(exc), error_kind=_error_kind(exc)))
             tick(pt)
         return out, False
 
@@ -691,6 +743,7 @@ def _fetch_mdsthin_tree(
                     ch.error = f"degenerate (n={y.size}, t={t.size})"
             except Exception as exc:
                 ch.error = str(exc)
+                ch.error_kind = _error_kind(exc)
             out.append(ch)
             tick(node)
         # plasma / equilibrium tree signals (efit01, ...): first candidate that opens
@@ -714,6 +767,7 @@ def _fetch_mdsthin_tree(
                     chp.error = f"{tree}{node}: degenerate"
                 except Exception as exc:
                     chp.error = f"{tree}{node}: {exc}"
+                    chp.error_kind = _error_kind(exc)
             out.append(chp)
             progress(1.0, f"tree:{name} ({'ok' if chp.ok else 'missing'})")
         return out
@@ -744,7 +798,9 @@ def _node_tree_map(dev):
     return node_tree, default_tree
 
 
-def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1e-6):
+def _fetch_mds_tree(
+    shot, items, *, connect, tmin, tmax, progress, resample_dt=1e-6, tree_signals=None
+):
     """Fetch tree nodes one-by-one over a single mdsthin connection.
 
     ``items`` is a list of ``(canonical_id, node, tree, gain)``: open each node's
@@ -759,20 +815,28 @@ def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1
     ``resample(node, tmin, tmax, dt)`` when both bounds are given: it bounds the wire
     transfer (a raw 2 MHz channel is ~10^7 pts) at a cadence far above rotating-mode
     frequencies (kHz). ``resample_dt`` seconds sets that cadence (default 1 µs =
-    1 MHz). With an open/absent window it falls back to a raw dimension slice."""
+    1 MHz). With an open/absent window it falls back to a raw dimension slice.
 
-    def _slice(expr):
+    ``tree_signals`` — plasma/equilibrium quantities ``{name: [(tree, node), …]}``
+    (Ip, B_T, kappa from the device's "plasma pointnames"): fetched on the same
+    connection after the sensors, first usable candidate wins, mirroring
+    ``_fetch_mdsthin_tree``. Windowed with a raw dimension slice, NOT resample() —
+    these are slow (ms-cadence) traces and resampling them onto the sensors' µs
+    grid would interpolate them ~1000x."""
+
+    def _slice(expr, resample=True):
         if tmin is None and tmax is None:
             return expr
         lo = "*" if tmin is None else repr(float(tmin))
         hi = "*" if tmax is None else repr(float(tmax))
-        if tmin is not None and tmax is not None and resample_dt:
+        if resample and tmin is not None and tmax is not None and resample_dt:
             return f"resample({expr}, {lo}, {hi}, {float(resample_dt)!r})"
         return f"({expr})[{lo} : {hi}]"
 
     conn = connect()
     out: list[Channel] = []
-    n = len(items) or 1
+    tree_signals = tree_signals or {}
+    n = (len(items) + len(tree_signals)) or 1
     current_tree = None
     for i, (canon, node, tree, gain) in enumerate(items, 1):
         try:
@@ -803,8 +867,37 @@ def _fetch_mds_tree(shot, items, *, connect, tmin, tmax, progress, resample_dt=1
             )
         except Exception as exc:  # noqa: BLE001 — one bad node shouldn't sink the pull
             current_tree = None  # a failed openTree/get can leave the conn unsure
-            out.append(Channel(canon, ok=False, error=str(exc)))
+            out.append(Channel(canon, ok=False, error=str(exc), error_kind=_error_kind(exc)))
         progress(i / n, canon)
+
+    for j, (name, candidates) in enumerate(tree_signals.items(), len(items) + 1):
+        chp = Channel(name, ok=False, error="no data")
+        for tree, node in candidates:
+            try:
+                if tree != current_tree:
+                    conn.openTree(tree, int(shot))
+                    current_tree = tree
+                sliced = _slice(node, resample=False)
+                y = np.atleast_1d(np.asarray(conn.get(sliced).data(), dtype=np.float32))
+                t = np.atleast_1d(np.asarray(conn.get(f"DIM_OF({sliced})").data()))
+                # A slow trace can legitimately hold few samples in a narrow window
+                # (helicity only needs the median sign), so allow n >= 1 here.
+                if y.size < 1 or t.size != y.size or not np.all(np.isfinite(t)):
+                    chp.error = f"{tree}:{node}: degenerate result (n={y.size})"
+                    continue
+                chp = Channel(
+                    name,
+                    (t * 1000.0).astype(np.float64),  # tree time is s; h5 stores ms
+                    y.astype(np.float32, copy=False),
+                    ok=True,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — plasma extras must not sink the pull
+                current_tree = None
+                chp.error = f"{tree}:{node}: {exc}"
+                chp.error_kind = _error_kind(exc)
+        out.append(chp)
+        progress(j / n, f"tree:{name} ({'ok' if chp.ok else 'missing'})")
     return out
 
 
@@ -1078,12 +1171,70 @@ def _write_h5(
                     g.attrs[k] = float(v)
 
         # Union new channels with whatever the file already recorded; a name that
-        # is now fetched is removed from the missing list.
+        # is now fetched is removed from the missing list. Transport failures
+        # (dropped tunnel mid-pull, issue #63) are deliberately NOT recorded as
+        # missing — caching them would make every later incremental pull skip
+        # them, leaving the file permanently incomplete without --force.
+        no_data = {c.name for c in missing if getattr(c, "error_kind", "no_data") != "transport"}
         fetched = _attr_names(h5, "channels_fetched") | {c.name for c in got}
-        missing_names = (_attr_names(h5, "channels_missing") | {c.name for c in missing}) - fetched
+        missing_names = (_attr_names(h5, "channels_missing") | no_data) - fetched
         h5.attrs["channels_fetched"] = np.array(sorted(fetched), dtype="S")
         h5.attrs["channels_missing"] = np.array(sorted(missing_names), dtype="S")
     return got, missing
+
+
+def _merge_h5_files(src, dst, *, compression="lzf"):
+    """Fold every channel of shot file ``src`` into the existing shot file ``dst``
+    (same shot/window/decimation — the caller verifies via ``_existing_channels``).
+
+    Channels are re-written through ``_write_h5``'s merge path so time-base dedup,
+    replace-on-conflict, and the fetched/missing bookkeeping behave exactly like a
+    local incremental fetch. Used by the remote backend: the cluster always ships a
+    fresh file holding only the requested selection, which must never replace a
+    local file holding earlier pulls.
+    """
+    import h5py
+
+    channels: list[Channel] = []
+    query_names: dict[str, str] = {}
+    geometry: dict[str, dict] = {}
+    with h5py.File(src, "r") as h5:
+        analysis = h5.attrs.get("analysis", "")
+        analysis = analysis.decode() if isinstance(analysis, bytes) else str(analysis)
+        tmin = h5.attrs.get("tmin")
+        tmax = h5.attrs.get("tmax")
+        stride = int(h5.attrs.get("decimate", 1))
+        tmin = None if isinstance(tmin, (bytes, str)) else tmin
+        tmax = None if isinstance(tmax, (bytes, str)) else tmax
+        for name, g in h5.items():
+            if name == "_timebases" or not isinstance(g, h5py.Group) or "data" not in g:
+                continue
+            channels.append(Channel(name, time=g["time"][()], data=g["data"][()], ok=True))
+            attrs = dict(g.attrs)
+            pn = attrs.pop("pointname", None)
+            if pn is not None:
+                query_names[name] = pn.decode() if isinstance(pn, bytes) else str(pn)
+            geometry[name] = {
+                k: v
+                for k, v in attrs.items()
+                if k != "time_units" and isinstance(v, (int, float, np.integer, np.floating))
+            }
+        for m in sorted(_attr_names(h5, "channels_missing")):
+            channels.append(Channel(m, ok=False, error="missing in remote pull"))
+    return _write_h5(
+        dst,
+        None,  # shot/device attrs already present in dst (merge never rewrites them)
+        analysis,
+        "remote",
+        channels,
+        compression=compression,
+        tmin=tmin,
+        tmax=tmax,
+        stride=stride,
+        query_names=query_names,
+        channel_geometry=geometry,
+        merge=True,
+    )
 
 
 def _existing_channels(path, tmin, tmax, stride):
@@ -1203,31 +1354,10 @@ def fetch_shot(
             progress(0.0, f"{backend}→mdsthin (tree device)")
         backend = "mdsthin"
 
-    if backend == "remote" and not _tree_transport:
-        # Orchestrate a pull on the cluster from here; remote side runs this same
-        # script with --backend toksearch and writes the file we copy back.
-        from . import remote as remote_run
-
-        kw = {} if remote_python is None else {"python": remote_python}
-        return remote_run.run_remote(
-            shot,
-            analysis,
-            host=remote_host,
-            jump=ssh_jump,
-            username=username,
-            password=password,
-            duo=duo,
-            remote_dir=remote_dir,
-            tmin=tmin,
-            tmax=tmax,
-            decimate=decimate,
-            device=device,
-            sensor_set=sensor_set,
-            raw_pointnames=raw_pointnames,
-            local_out_dir=(str(Path(out).parent) if out else None),
-            progress=progress,
-            **kw,
-        )
+    # NOTE: the remote backend is dispatched BELOW, after the output path and the
+    # incremental-merge bookkeeping are resolved — the cluster ships a fresh file
+    # holding only the requested selection, so it must be merged into (never copied
+    # over) an existing local shot file.
 
     # Device config is the source of truth for mdsip addresses; an explicit
     # gateway/server (CLI or caller) overrides the device file. (`dev`, `device_name`,
@@ -1367,6 +1497,44 @@ def fetch_shot(
         sys.stderr.write(f"All {n_skipped} requested signals already in {out}; nothing to fetch.\n")
         return out
 
+    if backend == "remote" and not _tree_transport:
+        # Orchestrate a pull on the cluster from here; remote side runs this same
+        # script with --backend toksearch and writes the file we copy back. When a
+        # compatible local file already exists (merge), the cluster result is staged
+        # beside it and folded in channel-by-channel — copying it over the local file
+        # would silently destroy every previously pulled channel set.
+        from . import remote as remote_run
+
+        kw = {} if remote_python is None else {"python": remote_python}
+        stage_dir = out_path.parent / "_remote_stage" if merge else out_path.parent
+        fetched = remote_run.run_remote(
+            shot,
+            analysis,
+            host=remote_host,
+            jump=ssh_jump,
+            username=username,
+            password=password,
+            duo=duo,
+            remote_dir=remote_dir,
+            tmin=tmin,
+            tmax=tmax,
+            decimate=decimate,
+            device=device,
+            sensor_set=sensor_set,
+            raw_pointnames=raw_pointnames,
+            local_out_dir=str(stage_dir),
+            progress=progress,
+            **kw,
+        )
+        if merge:
+            progress(0.95, f"merging into {out_path.name}")
+            _merge_h5_files(fetched, out)
+            Path(fetched).unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                stage_dir.rmdir()
+            return out
+        return fetched
+
     t0 = time.perf_counter()
     if _tree_transport:
         # Tree device reached via its own transport (KSTAR: KFE VPN + nkstar tunnel).
@@ -1407,7 +1575,13 @@ def fetch_shot(
             tmin_s = None if tmin is None else float(tmin) / 1000.0
             tmax_s = None if tmax is None else float(tmax) / 1000.0
             channels = _fetch_mds_tree(
-                shot_i, items, connect=_connect, tmin=tmin_s, tmax=tmax_s, progress=progress
+                shot_i,
+                items,
+                connect=_connect,
+                tmin=tmin_s,
+                tmax=tmax_s,
+                progress=progress,
+                tree_signals=tree_signals,
             )
     elif tree_access:
         # NSTX/NSTX-U: sensors are fastmag tree nodes fetched with a value-window
