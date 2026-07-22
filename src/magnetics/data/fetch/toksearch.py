@@ -66,7 +66,7 @@ from ..devices import geometry_at, load_device, pointname_at, segment_at
 
 # Connection endpoints (mdsip / gateway) + automatic on-site detection, resolved
 # from the device file's `network` block so the hop count is picked for the user.
-from .network import gateway_address, mdsip_address, on_site_network
+from .network import gateway_address, mdsip_address, on_cluster_host, on_site_network
 
 # All fetched shot files land in the runtime data dir (data/datafile/) — the same
 # place h5source reads back from ($MAGNETICS_DATA_DIR or the repo's data/ dir).
@@ -1496,6 +1496,20 @@ def fetch_shot(
     if merge and not pointnames and not tree_signals:
         sys.stderr.write(f"All {n_skipped} requested signals already in {out}; nothing to fetch.\n")
         return out
+
+    # Already ON the cluster? Then "remote" has nothing to reach: its SSH would
+    # dial this very host, and on a node without the cluster in known_hosts it
+    # blocks on a host-key prompt no server process can answer (pull pinned at
+    # 0%). The data is local here, so fetch in-process with the best backend
+    # available -- toksearch when the env has it, else mdsthin straight to mdsip.
+    if backend == "remote" and not _tree_transport and on_cluster_host(device):
+        try:
+            import toksearch  # noqa: F401  # ty: ignore[unresolved-import]
+
+            backend = "toksearch"
+        except ImportError:
+            backend = "mdsthin"
+        progress(0.0, f"already on the cluster; remote→{backend}")
 
     if backend == "remote" and not _tree_transport:
         # Orchestrate a pull on the cluster from here; remote side runs this same

@@ -66,6 +66,34 @@ def on_site_network(device: str) -> bool:
     return socket.getfqdn().lower().endswith(domain)
 
 
+def on_cluster_host(device: str) -> bool:
+    """True when THIS process is already running on the device's compute cluster,
+    so the ``remote`` backend's SSH round trip would dial the very host it is
+    running on.
+
+    That self-SSH is not merely wasteful: on a node whose ``known_hosts`` lacks
+    the cluster's own entry, ssh stops at the host-key confirmation prompt, and a
+    server process has no terminal to answer it -- the pull hangs at 0% forever
+    rather than failing. Callers use this to fetch in-process instead.
+
+    Cluster submit nodes are load-balanced, so the FQDN we land on
+    (``omega-a.gat.com``) is rarely the configured cluster address
+    (``omega.gat.com``); we compare short names by prefix, gated on already being
+    inside the site domain. ``MAGNETICS_ON_CLUSTER`` (``0``/``1``) forces it.
+    """
+    override = os.environ.get("MAGNETICS_ON_CLUSTER")
+    if override is not None:
+        return override.strip().lower() not in ("", "0", "false", "no")
+    host = str(cluster_login(device).get("host") or "").strip().lower()
+    if not host or not on_site_network(device):
+        return False
+    cluster_short = host.split(".")[0]
+    me_short = socket.getfqdn().lower().split(".")[0]
+    if not cluster_short or not me_short:
+        return False
+    return me_short.startswith(cluster_short)
+
+
 def _hostport(block, default_port: int) -> str | None:
     """Render a ``{host, port}`` sub-block as ``host:port`` (None if no host)."""
     block = block or {}
