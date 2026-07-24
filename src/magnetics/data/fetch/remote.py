@@ -37,10 +37,13 @@ password is needed at all. Secrets are passed once to ssh and never stored.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .. import h5source
@@ -89,6 +92,112 @@ def _validate_remote_dir(remote_dir: str) -> str:
 def _log(msg: str) -> None:
     sys.stderr.write(msg + "\n")
     sys.stderr.flush()
+
+
+def _fetch_argv(
+    python, shot, analysis, device, out, tmin, tmax, decimate, sensor_set, raw_pointnames
+):
+    """The `python -m magnetics.data.fetch.toksearch --backend toksearch …` argv.
+
+    Shared by the SSH path (run_remote) and the on-cluster path
+    (run_on_cluster) so both invoke the native-PTDATA reader identically.
+    """
+    argv = [
+        python,
+        "-m",
+        "magnetics.data.fetch.toksearch",
+        "--backend",
+        "toksearch",
+        "--shot",
+        str(shot),
+        "--device",
+        device,
+        "--out",
+        out,
+    ]
+    if raw_pointnames:
+        argv += ["--pointnames", ",".join(raw_pointnames)]
+    elif sensor_set:
+        argv += ["--sensor-set", sensor_set]
+    else:
+        argv += ["--analysis", analysis]
+    if tmin is not None:
+        argv += ["--tmin", str(tmin)]
+    if tmax is not None:
+        argv += ["--tmax", str(tmax)]
+    if decimate and decimate > 1:
+        argv += ["--decimate", str(decimate)]
+    return argv
+
+
+def cluster_python_has_toksearch(python: str | None) -> bool:
+    """Whether `python` can import toksearch + the d3d PTDATA plugin."""
+    if not python or not Path(python).exists():
+        return False
+    probe = subprocess.run(
+        [python, "-c", "import toksearch, toksearch_d3d"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return probe.returncode == 0
+
+
+def run_on_cluster(
+    shot,
+    analysis="both",
+    *,
+    python=None,
+    device="diiid",
+    tmin=None,
+    tmax=None,
+    decimate=1,
+    sensor_set=None,
+    raw_pointnames=None,
+    out=None,
+    progress=None,
+) -> str:
+    """Run the toksearch pull HERE, under the cluster's env interpreter.
+
+    We are already ON the cluster: there is nothing to ssh to and nothing to copy
+    back. But `toksearch` lives in the site conda env, not in whatever venv runs
+    the GUI, so a plain in-process fetch would fall back to mdsthin -- the mdsip
+    path, which is ~5-7x slower than the native PTDATA read and is the *reason*
+    the remote backend exists. Re-invoking this same module under the cluster
+    interpreter keeps the fast reader without any network hop.
+
+    This is exactly the command `run_remote` sends over SSH, minus the SSH.
+    """
+    python = python or DEFAULT_PYTHON
+    out = str(out)
+    argv = _fetch_argv(
+        python, shot, analysis, device, out, tmin, tmax, decimate, sensor_set, raw_pointnames
+    )
+    # Expose ONLY the magnetics package to the cluster interpreter -- never our
+    # whole venv site-packages. That directory carries numpy/scipy/etc. built for
+    # THIS interpreter (e.g. 3.14); on the conda env's 3.11 those C extensions
+    # shadow its own working copies and break `import toksearch` (which pulls in
+    # numpy). A temp dir holding just a `magnetics` symlink resolves `-m
+    # magnetics.…` while the core's deps come from the conda env itself -- exactly
+    # what the SSH path achieves by rsync'ing only the package.
+    stage = tempfile.mkdtemp(prefix="magnetics_pkg_")
+    try:
+        os.symlink(PKG_ROOT, os.path.join(stage, PKG_NAME))
+        env = dict(os.environ)
+        # Fully override (don't append): a leaked outer PYTHONPATH could re-add the
+        # venv. TOKSEARCH_INDEX_DIR only matters for SQL shot *discovery* (we pass
+        # an explicit shot), so point it at the workdir to silence its warning.
+        env["PYTHONPATH"] = stage
+        env.setdefault("TOKSEARCH_INDEX_DIR", str(Path(out).parent))
+        _log(f"Fetching on this node with {python}: {shlex.join(argv)}")
+        if progress:
+            progress(0.5, f"pulling shot {shot} on this node (toksearch)")
+        if subprocess.run(argv, env=env).returncode != 0:
+            raise RuntimeError("on-cluster toksearch fetch failed")
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+    if progress:
+        progress(1.0, f"done: {Path(out).name}")
+    return out
 
 
 def run_remote(
@@ -201,31 +310,18 @@ def run_remote(
         #    an ABSOLUTE path in the /tmp stage, so it lands there regardless of the
         #    `cd {remote_dir}` the inner command does for the package imports.
         remote_out = f"{out_stage}/shot_{shot}.h5"
-        fetch = [
+        fetch = _fetch_argv(
             python,
-            "-m",
-            "magnetics.data.fetch.toksearch",
-            "--backend",
-            "toksearch",
-            "--shot",
-            str(shot),
-            "--device",
+            shot,
+            analysis,
             device,
-            "--out",
             remote_out,
-        ]
-        if raw_pointnames:
-            fetch += ["--pointnames", ",".join(raw_pointnames)]
-        elif sensor_set:
-            fetch += ["--sensor-set", sensor_set]
-        else:
-            fetch += ["--analysis", analysis]
-        if tmin is not None:
-            fetch += ["--tmin", str(tmin)]
-        if tmax is not None:
-            fetch += ["--tmax", str(tmax)]
-        if decimate and decimate > 1:
-            fetch += ["--decimate", str(decimate)]
+            tmin,
+            tmax,
+            decimate,
+            sensor_set,
+            raw_pointnames,
+        )
         # TOKSEARCH_INDEX_DIR only matters for SQL/index shot *discovery*; we pass an
         # explicit shotlist, so point it at the workdir to silence ~1 warning/signal.
         inner = (

@@ -66,7 +66,13 @@ from ..devices import geometry_at, load_device, pointname_at, segment_at
 
 # Connection endpoints (mdsip / gateway) + automatic on-site detection, resolved
 # from the device file's `network` block so the hop count is picked for the user.
-from .network import gateway_address, mdsip_address, on_cluster_host, on_site_network
+from .network import (
+    cluster_login,
+    gateway_address,
+    mdsip_address,
+    on_cluster_host,
+    on_site_network,
+)
 
 # All fetched shot files land in the runtime data dir (data/datafile/) — the same
 # place h5source reads back from ($MAGNETICS_DATA_DIR or the repo's data/ dir).
@@ -1500,16 +1506,41 @@ def fetch_shot(
     # Already ON the cluster? Then "remote" has nothing to reach: its SSH would
     # dial this very host, and on a node without the cluster in known_hosts it
     # blocks on a host-key prompt no server process can answer (pull pinned at
-    # 0%). The data is local here, so fetch in-process with the best backend
-    # available -- toksearch when the env has it, else mdsthin straight to mdsip.
+    # 0%). The data is local here -- but the POINT of the remote backend is
+    # toksearch's native PTDATA read (~5-7x mdsip), and toksearch lives in the
+    # site conda env, not in the venv running the GUI. So prefer, in order:
+    #   1. toksearch importable right here            -> plain in-process fetch
+    #   2. the cluster interpreter has it             -> subprocess, no ssh
+    #   3. neither                                    -> mdsthin (slow mdsip)
+    # Falling straight to (3) is what made an on-cluster pull SLOWER than the
+    # laptop's remote pull, which had been quietly using toksearch all along.
     if backend == "remote" and not _tree_transport and on_cluster_host(device):
+        from . import remote as remote_run
+
         try:
             import toksearch  # noqa: F401  # ty: ignore[unresolved-import]
 
             backend = "toksearch"
+            progress(0.0, "already on the cluster; remote→toksearch")
         except ImportError:
+            cluster_py = remote_python or cluster_login(device).get("python")
+            if remote_run.cluster_python_has_toksearch(cluster_py):
+                progress(0.0, "already on the cluster; toksearch via the cluster env")
+                return remote_run.run_on_cluster(
+                    shot,
+                    analysis,
+                    python=cluster_py,
+                    device=device,
+                    tmin=tmin,
+                    tmax=tmax,
+                    decimate=decimate,
+                    sensor_set=sensor_set,
+                    raw_pointnames=raw_pointnames,
+                    out=out,
+                    progress=progress,
+                )
             backend = "mdsthin"
-        progress(0.0, f"already on the cluster; remote→{backend}")
+            progress(0.0, "already on the cluster; no toksearch → mdsthin (slow)")
 
     if backend == "remote" and not _tree_transport:
         # Orchestrate a pull on the cluster from here; remote side runs this same
