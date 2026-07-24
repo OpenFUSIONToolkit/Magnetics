@@ -57,13 +57,17 @@ jobs:
         run: uv sync --python ${{ matrix.python }}
 
       # ruff lint/format are Python-version-agnostic; run once, on the floor.
+      # PIN the ruff version: bare `uvx ruff` resolves the latest release, so a
+      # new ruff (0.16.0 broadened the default rule set — E501, N802, S-codes)
+      # would spontaneously fail CI on unchanged code. Bump this deliberately,
+      # fixing findings in the same PR. Keep it in step with the dev-group cap.
       - name: Lint (ruff)
         if: ${{ matrix.python == '3.12' }}
-        run: uvx ruff check .
+        run: uvx ruff@0.15.22 check .
 
       - name: Format check (ruff format)
         if: ${{ matrix.python == '3.12' }}
-        run: uvx ruff format --check .
+        run: uvx ruff@0.15.22 format --check .
 
       # Coverage floor: a regression guard, not a target. Today's suite sits at
       # ~79% line coverage; 75 leaves headroom for legitimately-untestable code

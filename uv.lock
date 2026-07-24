@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-03T05:43:21.277622Z"
+exclude-newer = "2026-07-17T17:03:56.236499Z"
 exclude-newer-span = "P1W"
 
 [[package]]
@@ -1218,7 +1218,7 @@ dev = [
     { name = "nbconvert", specifier = ">=7.16" },
     { name = "nbstripout", specifier = ">=0.9.1" },
     { name = "pytest", specifier = ">=9.1.1" },
-    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ruff", specifier = ">=0.15.18,<0.16" },
     { name = "ty", specifier = ">=0.0.52" },
 ]
 

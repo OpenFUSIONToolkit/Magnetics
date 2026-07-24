@@ -34,7 +34,10 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.15.18",
+    # Cap below 0.16: that minor broadened ruff's default rule set and would fail
+    # the existing tree. Raise the cap deliberately (fixing findings) in step with
+    # the pinned `uvx ruff@…` in .github/workflows/ci.yml.
+    "ruff>=0.15.18,<0.16",
     # notebook tooling (examples + clean notebook commits)
     "ipykernel>=7.3.0",
     "jupyter>=1.1.0",
