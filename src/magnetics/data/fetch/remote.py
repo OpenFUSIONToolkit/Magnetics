@@ -131,14 +131,25 @@ def _fetch_argv(
 
 
 def cluster_python_has_toksearch(python: str | None) -> bool:
-    """Whether `python` can import toksearch + the d3d PTDATA plugin."""
-    if not python or not Path(python).exists():
+    """Whether `python` can import toksearch + the d3d PTDATA plugin.
+
+    The probe itself is the arbiter (a bad interpreter just returns non-zero),
+    so resolve bare command names through PATH the way subprocess would rather
+    than pre-rejecting them: `Path("python3").exists()` is false for anything
+    not sitting in the cwd, which would silently downgrade an on-cluster pull to
+    mdsthin (~5-7x slower) for a caller who passed `--remote-python python3`.
+    """
+    if not python:
         return False
-    probe = subprocess.run(
-        [python, "-c", "import toksearch, toksearch_d3d"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    resolved = python if os.path.isabs(python) else (shutil.which(python) or python)
+    try:
+        probe = subprocess.run(
+            [resolved, "-c", "import toksearch, toksearch_d3d"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:  # not found / not executable
+        return False
     return probe.returncode == 0
 
 

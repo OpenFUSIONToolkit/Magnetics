@@ -38,8 +38,8 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import collections
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -182,12 +182,10 @@ def _wait_ready(url: str, child: subprocess.Popen, timeout: float) -> bool:
     return False
 
 
-def _pump(stream, prefix: str, tail: collections.deque) -> None:
-    """Mirror the remote server's output locally, keeping a tail for error dumps."""
+def _pump(stream, prefix: str) -> None:
+    """Mirror the remote server's output locally, line by line as it arrives."""
     for line in stream:
-        line = line.rstrip("\r\n")
-        tail.append(line)
-        sys.stdout.write(f"{prefix}{line}\n")
+        sys.stdout.write(f"{prefix}{line.rstrip()}\n")
         sys.stdout.flush()
 
 
@@ -257,6 +255,15 @@ def main(argv: list[str] | None = None) -> int:
     sock = control_sock(args.host)
     remote_cmd_template = args.remote_cmd or default_remote_cmd(args.data_dir, args.install_from)
 
+    # Ctrl-C signals the whole foreground process group, so ssh dies with us and
+    # SIGHUPs the remote server. A bare `kill <pid>` does not: it would drop us
+    # without running any cleanup, orphaning the server on a shared cluster node.
+    # Route SIGTERM into the same KeyboardInterrupt path so both tear down.
+    def _on_sigterm(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     # 1) probe: authenticates the master (prompts go to the tty, not our pipe)
     #    and reports a free remote loopback port + the actual node we landed on.
     print(f"Connecting to {args.host}" + (f" via {args.jump}" if args.jump else "") + " ...")
@@ -265,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         stdout=subprocess.PIPE,
         text=True,
     )
+    child: subprocess.Popen | None = None  # the finally tears this down
     try:
         if probe.returncode != 0:
             print(
@@ -290,14 +298,12 @@ def main(argv: list[str] | None = None) -> int:
             text=True,
             bufsize=1,
         )
-        tail: collections.deque = collections.deque(maxlen=25)
         threading.Thread(
-            target=_pump, args=(child.stdout, f"  [{args.host}] ", tail), daemon=True
+            target=_pump, args=(child.stdout, f"  [{args.host}] "), daemon=True
         ).start()
 
         # 3) the server is up when it answers through the tunnel.
         if not _wait_ready(url, child, args.timeout):
-            child.terminate()
             print(
                 f"error: the remote server never answered on {url} within "
                 f"{args.timeout:.0f}s (last output above). If it was still "
@@ -318,11 +324,21 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return child.wait()
         except KeyboardInterrupt:
-            child.terminate()
-            child.wait(timeout=10)
             print("\nStopped.")
             return 0
     finally:
+        # Always take the tunnel down with us: while this ssh lives, so does the
+        # remote server it carries. Covers every exit — Ctrl-C, SIGTERM, a failed
+        # readiness wait, an exception — so nothing is left on a shared node.
+        if child is not None and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                # ssh ignored SIGTERM (a stuck remote pipeline: mid-bootstrap, a
+                # wedged fetch). Escalate rather than leave it holding the server.
+                child.kill()
+                child.wait()
         subprocess.run(
             ["ssh", "-o", f"ControlPath={sock}", "-O", "exit", args.host],
             stdout=subprocess.DEVNULL,

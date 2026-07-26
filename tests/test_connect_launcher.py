@@ -144,21 +144,65 @@ def test_probe_failure_exits_before_any_server(monkeypatch):
     assert _Popen.instances == []  # never tried to start the server
 
 
-def test_server_never_ready_terminates_the_tunnel(harness, monkeypatch):
+def _refuse_connections(monkeypatch):
     def _refused(url, timeout=0):
         raise OSError("connection refused")
 
     monkeypatch.setattr(urllib.request, "urlopen", _refused)
 
+
+def test_remote_command_died_reports_failure(harness, monkeypatch):
+    """ssh already exited (e.g. the launch command was not found): report the
+    failure and open no browser. Nothing to terminate — it's gone."""
+    _refuse_connections(monkeypatch)
+
     class _DeadPopen(_Popen):
         def __init__(self, cmd, **kw):
             super().__init__(cmd, **kw)
-            self._poll_rc = 127  # remote command not found; ssh already exited
+            self._poll_rc = 127
 
     monkeypatch.setattr(subprocess, "Popen", _DeadPopen)
     assert connect.main(["omega"]) == 1
+    assert harness.opened == []
+    assert not _Popen.instances[0].terminated  # already dead; no signal needed
+
+
+def test_server_never_ready_still_tears_the_tunnel_down(harness, monkeypatch):
+    """The timeout path with ssh still alive: it must not be left holding the
+    tunnel (and the remote server) open on a shared node."""
+    _refuse_connections(monkeypatch)
+    # _Popen's default poll() is None → still running
+    assert connect.main(["omega", "--timeout", "0.1"]) == 1
     assert _Popen.instances[0].terminated
     assert harness.opened == []
+
+
+def test_ctrl_c_escalates_to_kill_when_ssh_ignores_sigterm(harness, monkeypatch):
+    """A stuck remote (mid-bootstrap, wedged fetch) is exactly when Ctrl-C
+    matters. TimeoutExpired is not a KeyboardInterrupt, so an uncaught one would
+    turn the clean 'Stopped.' exit into a traceback."""
+
+    class _StubbornPopen(_Popen):
+        def __init__(self, cmd, **kw):
+            super().__init__(cmd, **kw)
+            self.killed = False
+            self._waits = 0
+
+        def wait(self, timeout=None):
+            self._waits += 1
+            if self._waits == 1:
+                raise KeyboardInterrupt  # the user's Ctrl-C
+            if timeout is not None and not self.killed:
+                raise subprocess.TimeoutExpired(self.cmd, timeout)  # ignores SIGTERM
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(subprocess, "Popen", _StubbornPopen)
+    assert connect.main(["omega"]) == 0  # clean exit, no traceback
+    child = _Popen.instances[0]
+    assert child.terminated and child.killed  # SIGTERM first, then escalate
 
 
 class TestBootstrap:

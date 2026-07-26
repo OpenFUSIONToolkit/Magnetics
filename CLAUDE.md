@@ -86,10 +86,13 @@ frontend (its `dist/` is staged into `service/webapp/` for the wheel).
   tests (GA gateway / PPPL flux) are env-gated and skip unless `MAGNETICS_GA_USER` /
   `MAGNETICS_FLUX_USER` is set; they are manual-only, never wired into CI.
 - **Frontend:** `cd gui/web && npm run test` (vitest, one-shot; `npm run test:watch` to iterate).
-- **Everything CI runs:** `uv run ruff format --check .` + `uvx ruff check .` + `uv run pytest`
+- **Everything CI runs:** `uv run ruff format --check .` + `uv run ruff check .` + `uv run pytest`
   + `uv run ty check src/magnetics` (Python), and `npm run lint` + `npm run typecheck` +
   `npm run test` + `npm run build` (in `gui/web/`). Run these locally before committing —
   a plain `pytest` + `tsc` pass does NOT cover everything CI checks.
+  Use `uv run ruff` (not a bare `uvx ruff`, which resolves the *latest* release): the dev group
+  caps ruff at `<0.16`, matching the version CI pins, so local lint can't drift from CI when a
+  new ruff broadens its default rules.
 
 ## Conventions
 - Physics lives in `src/magnetics/core` (pure, device-agnostic, testable); **no physics in the

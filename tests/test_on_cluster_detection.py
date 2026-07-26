@@ -227,3 +227,60 @@ class TestRunOnClusterIsolation:
         with pytest.raises(RuntimeError, match="on-cluster toksearch fetch failed"):
             remote_run.run_on_cluster(1, "both", python="/x/py", out=str(tmp_path / "o.h5"))
         assert not os.path.exists(seen["pp"])  # temp stage gone even on failure
+
+
+class TestClusterPythonProbe:
+    """The probe decides toksearch-vs-mdsthin, so a false negative silently costs
+    ~5-7x on every on-cluster pull. The subprocess is the arbiter — don't
+    pre-reject interpreters it would happily run."""
+
+    def test_bare_command_name_is_resolved_through_path(self, monkeypatch):
+        from magnetics.data.fetch import remote as remote_run
+
+        # `Path("python3").exists()` is False anywhere but the cwd; PATH lookup
+        # is what subprocess would do, so the probe must get a chance to run.
+        monkeypatch.setattr(remote_run.shutil, "which", lambda p: "/opt/conda/bin/" + p)
+        seen = {}
+
+        def _probe(argv, **kw):
+            seen["argv"] = argv
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(remote_run.subprocess, "run", _probe)
+        assert remote_run.cluster_python_has_toksearch("python3")
+        assert seen["argv"][0] == "/opt/conda/bin/python3"
+
+    def test_absolute_path_is_passed_through_untouched(self, monkeypatch):
+        from magnetics.data.fetch import remote as remote_run
+
+        monkeypatch.setattr(
+            remote_run.shutil, "which", lambda p: pytest.fail("which() on an absolute path")
+        )
+        seen = {}
+
+        def _probe(argv, **kw):
+            seen["argv"] = argv
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(remote_run.subprocess, "run", _probe)
+        assert remote_run.cluster_python_has_toksearch("/fusion/env/bin/python")
+        assert seen["argv"][0] == "/fusion/env/bin/python"
+
+    def test_missing_interpreter_is_false_not_a_crash(self, monkeypatch):
+        from magnetics.data.fetch import remote as remote_run
+
+        monkeypatch.setattr(remote_run.shutil, "which", lambda p: None)
+
+        def _enoent(argv, **kw):
+            raise FileNotFoundError(argv[0])
+
+        monkeypatch.setattr(remote_run.subprocess, "run", _enoent)
+        assert not remote_run.cluster_python_has_toksearch("nope-python")
+
+    def test_none_short_circuits_without_spawning(self, monkeypatch):
+        from magnetics.data.fetch import remote as remote_run
+
+        monkeypatch.setattr(
+            remote_run.subprocess, "run", lambda *a, **k: pytest.fail("spawned for None")
+        )
+        assert not remote_run.cluster_python_has_toksearch(None)
