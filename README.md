@@ -68,11 +68,21 @@ magnetics-connect flux --remote-cmd \
     'module load magnetics && magnetics --no-browser --port {port}'
 ```
 
-The default remote command is `magnetics --no-browser --port {port}`, run
-through a login shell so module/profile PATHs apply; `--remote-cmd` overrides it
-(`{port}` is substituted). The launcher itself is **stdlib-only and standalone**
-— on a gateway node with only system `python3` (no pip, no magnetics), copy the
-single file and run it directly:
+**Zero-install on the remote.** By default the launcher bootstraps the server
+for you: it runs an already-installed `magnetics` if the host has one; otherwise
+it installs `uv` (the official root-free installer, into `~/.local/bin`) and
+launches with `uvx magnetics`, which fetches the package **and provisions its own
+Python** — so a bare cluster node with only an old system Python needs nothing
+installed by hand. The first run downloads + provisions (slower; watch the
+streamed `[host]` log); later runs are cached and fast.
+
+- `--install-from SOURCE` — install from a wheel URL/path (any uv source) instead
+  of PyPI. This is the shim until `magnetics` is published to PyPI.
+- `--remote-cmd '…{port}…'` — full override of the launch line (bypasses the
+  bootstrap), e.g. for an eventual `module load magnetics`.
+
+The launcher itself is **stdlib-only and standalone** — on a gateway node with
+only system `python3`, copy the single file and run it directly:
 
 ```sh
 scp src/magnetics/connect.py gateway:

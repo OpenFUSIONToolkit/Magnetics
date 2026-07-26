@@ -49,10 +49,14 @@ import urllib.error
 import urllib.request
 import webbrowser
 
-# How the server is started on the remote host. `{port}` is substituted; a
-# template without it gets ` --port N` appended. Run through a login shell so
-# module-/profile-provided PATHs (the eventual `module load magnetics`) apply.
-DEFAULT_REMOTE_CMD = "magnetics --no-browser --port {port}"
+# The PyPI package + console-script the server ships as. Once published,
+# `uvx magnetics` fetches it and provisions its own Python — nothing to install
+# by hand. Until then, the bootstrap's fast path uses an already-installed
+# `magnetics` (or point --install-from at a wheel).
+PACKAGE = "magnetics"
+# The root-free, official uv installer. omega/cybele have curl + outbound net;
+# it drops uv in ~/.local/bin without touching the system.
+UV_INSTALLER = "https://astral.sh/uv/install.sh"
 
 # One remote python3 -c: print a free loopback port and the node's real name.
 _PROBE_PY = (
@@ -72,15 +76,42 @@ def control_sock(target: str) -> str:
     return f"/tmp/mc-{tag}.sock"
 
 
-def default_remote_cmd(data_dir: str | None = None) -> str:
-    cmd = DEFAULT_REMOTE_CMD
+def _serve_args(data_dir: str | None) -> str:
+    """The `magnetics` server flags shared by every launch path. `{port}` is a
+    placeholder resolved later (it appears more than once in the bootstrap)."""
+    args = "--no-browser --port {port}"
     if data_dir:
-        cmd += f" --data-dir {shlex.quote(data_dir)}"
-    return cmd
+        args += " --data-dir " + shlex.quote(data_dir)
+    return args
+
+
+def default_remote_cmd(data_dir: str | None = None, install_from: str | None = None) -> str:
+    """A self-bootstrapping serve command (POSIX sh, run via ``bash -lc``).
+
+    In order: run an already-installed ``magnetics`` if the remote has one (fast
+    path, no install); else ensure ``uv`` (fetch the root-free installer if it is
+    missing); else launch with ``uvx``, which downloads the package and provisions
+    a suitable Python — omega's system Python is far too old, and uvx sidesteps
+    that. ``install_from`` (a wheel URL / path / any uv source) overrides the PyPI
+    default via ``uvx --from`` — the shim until the package is published.
+    """
+    serve = _serve_args(data_dir)
+    from_opt = ("--from " + shlex.quote(install_from) + " ") if install_from else ""
+    return (
+        'export PATH="$HOME/.local/bin:$PATH"; '
+        f"if command -v {PACKAGE} >/dev/null 2>&1; then exec {PACKAGE} {serve}; fi; "
+        "if ! command -v uvx >/dev/null 2>&1; then "
+        "echo 'magnetics-connect: installing uv (one-time, no root)…' >&2; "
+        f"curl -LsSf {UV_INSTALLER} | sh || exit 1; "
+        'export PATH="$HOME/.local/bin:$PATH"; fi; '
+        "echo 'magnetics-connect: launching via uvx (first run provisions Python + deps)…' >&2; "
+        f"exec uvx {from_opt}{PACKAGE} {serve}"
+    )
 
 
 def resolve_remote_cmd(template: str, port: int) -> str:
-    """Substitute the chosen remote port into the serve command."""
+    """Substitute the chosen remote port into the serve command (every
+    ``{port}`` occurrence; the bootstrap names it more than once)."""
     if "{port}" in template:
         return template.replace("{port}", str(port))
     return f"{template} --port {port}"
@@ -175,14 +206,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--remote-cmd",
         default=None,
-        help="command that starts the server on HOST, with {port} substituted "
-        f"(default: {DEFAULT_REMOTE_CMD!r}); run through `bash -lc` so "
-        "module/profile PATHs apply",
+        help="full override for the command that starts the server on HOST, with "
+        "{port} substituted; run through `bash -lc`. Bypasses the uv/uvx "
+        "bootstrap — use when you have your own launch line (e.g. a module load).",
+    )
+    ap.add_argument(
+        "--install-from",
+        default=None,
+        metavar="SOURCE",
+        help="install the server from SOURCE instead of PyPI (a wheel URL/path or "
+        "any uv source), passed to `uvx --from`. The shim until the package is "
+        "on PyPI; ignored if the remote already has `magnetics` installed.",
     )
     ap.add_argument(
         "--data-dir",
         default=None,
-        help="remote shot-data directory, forwarded to the default remote command "
+        help="remote shot-data directory, forwarded to the launch command "
         "(on a cluster, point at scratch/project space)",
     )
     ap.add_argument(
@@ -201,8 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--timeout",
         type=float,
-        default=180.0,
-        help="seconds to wait for the remote server to answer (default: 180)",
+        default=300.0,
+        help="seconds to wait for the remote server to answer (default: 300; the "
+        "first uvx run provisions Python + deps and can be slow)",
     )
     ap.add_argument(
         "-o",
@@ -215,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     sock = control_sock(args.host)
-    remote_cmd_template = args.remote_cmd or default_remote_cmd(args.data_dir)
+    remote_cmd_template = args.remote_cmd or default_remote_cmd(args.data_dir, args.install_from)
 
     # 1) probe: authenticates the master (prompts go to the tty, not our pipe)
     #    and reports a free remote loopback port + the actual node we landed on.
@@ -259,9 +299,10 @@ def main(argv: list[str] | None = None) -> int:
         if not _wait_ready(url, child, args.timeout):
             child.terminate()
             print(
-                f"error: the remote server never answered on {url} "
-                f"(last output above; is {remote_cmd.split()[0]!r} on PATH there? "
-                "see --remote-cmd).",
+                f"error: the remote server never answered on {url} within "
+                f"{args.timeout:.0f}s (last output above). If it was still "
+                "installing, retry with a larger --timeout; otherwise check the "
+                "remote can reach PyPI, or pass --install-from / --remote-cmd.",
                 file=sys.stderr,
             )
             return 1

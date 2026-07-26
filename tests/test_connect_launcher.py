@@ -161,6 +161,47 @@ def test_server_never_ready_terminates_the_tunnel(harness, monkeypatch):
     assert harness.opened == []
 
 
+class TestBootstrap:
+    """The default remote command self-installs: fast path if magnetics is
+    present, else ensure uv, else `uvx magnetics` (PyPI, provisions its own
+    Python). This is the zero-touch hand-off for a fresh GA machine."""
+
+    def test_three_tiers_in_order(self):
+        cmd = connect.default_remote_cmd()
+        # 1) fast path: use an installed magnetics before anything else
+        fast = cmd.index("command -v magnetics")
+        exec_installed = cmd.index("exec magnetics")
+        # 2) ensure uv only if uvx is missing (root-free installer)
+        ensure_uv = cmd.index("command -v uvx")
+        assert "astral.sh/uv/install.sh" in cmd
+        # 3) last resort: uvx provisions + runs from PyPI
+        uvx = cmd.index("exec uvx magnetics")
+        assert fast < exec_installed < ensure_uv < uvx
+
+    def test_prepends_local_bin_to_path(self):
+        # uv installs into ~/.local/bin; it must be on PATH for the uvx step
+        assert "$HOME/.local/bin" in connect.default_remote_cmd()
+
+    def test_install_from_becomes_uvx_from(self):
+        url = "https://example.org/magnetics-0.1.0-py3-none-any.whl"
+        cmd = connect.default_remote_cmd(install_from=url)
+        assert f"uvx --from {url} magnetics" in cmd
+        # no --from when unset (plain PyPI)
+        assert "--from" not in connect.default_remote_cmd()
+
+    def test_every_port_placeholder_is_resolved(self, harness):
+        # {port} appears in BOTH the fast-path and uvx exec lines
+        connect.main(["omega"])
+        serve = " ".join(_Popen.instances[0].cmd)
+        assert "{port}" not in serve
+        assert serve.count("--port 43211") == 2  # installed path + uvx path
+
+    def test_bootstrap_is_the_default_but_remote_cmd_bypasses_it(self, harness):
+        connect.main(["omega", "--remote-cmd", "magnetics --port {port}"])
+        serve = " ".join(_Popen.instances[0].cmd)
+        assert "uvx" not in serve and "astral.sh" not in serve
+
+
 class TestHelpers:
     def test_resolve_remote_cmd_appends_when_no_placeholder(self):
         assert connect.resolve_remote_cmd("magnetics --no-browser", 8123).endswith("--port 8123")
