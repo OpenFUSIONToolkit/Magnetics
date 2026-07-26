@@ -10,7 +10,11 @@ The full **fetch → process → service → GUI** path runs end-to-end for **bo
 - **Fetch:** `magnetics.data.fetch.toksearch` (mdsthin via the `cybele` ssh-config alias, or a
   cluster-side `python -m` run orchestrated by `fetch/remote.py`) writes one HDF5 per shot to
   `data/datafile/` (gitignored); read back via `magnetics.data.h5source`. The GUI can trigger a
-  pull from the left rail (`PullControl` → `POST /api/fetch`).
+  pull from the left rail (`PullControl` → `POST /api/fetch`). The `remote` backend is
+  location-aware: `network.on_cluster_host()` detects when the server is already running ON the
+  device's cluster (load-balanced submit nodes included) and fetches in-process — via the cluster
+  interpreter's toksearch (`remote.run_on_cluster`), else mdsthin — instead of SSHing to the host
+  it is running on (which hangs on an unanswerable host-key prompt).
 - **Process:** `core/spectral.py` (MODESPEC) is real and pure. The SLCONTOUR quasi-stationary fit
   runs end-to-end via the shim-free `core/qs_*` modules (`qs_io_data` → `qs_prep` → `qs_fit`,
   adapted to nodes by `qs_bridge`; the former `_slcontour` translation, promoted into core) — real
@@ -66,6 +70,12 @@ The Python project **is the repo root** (a uv project, served as a webapp). `src
 - `data/` — sources + `fetch/` (toksearch/mdsthin pulls, cluster orchestration); device configs
   in `data/device/*.json`.
 - `service/` — FastAPI; the built GUI is bundled at `service/webapp/` and served here.
+- `connect.py` — the `magnetics-connect` remote-GUI launcher (server on a cluster node,
+  browser local, one SSH tunnel). Self-bootstraps the remote: existing `magnetics` → else
+  install uv → else `uvx magnetics` (targets PyPI; provisions its own Python). Deliberately
+  **stdlib-only and standalone** so it runs as a
+  bare `python3 connect.py` on gateway nodes with no magnetics install — keep it free of
+  package imports and of syntax newer than ~Python 3.9.
 
 Tests in `tests/`, maintainer scripts in `scripts/`. `gui/web/` — React + Vite + TypeScript
 frontend (its `dist/` is staged into `service/webapp/` for the wheel).
@@ -76,10 +86,13 @@ frontend (its `dist/` is staged into `service/webapp/` for the wheel).
   tests (GA gateway / PPPL flux) are env-gated and skip unless `MAGNETICS_GA_USER` /
   `MAGNETICS_FLUX_USER` is set; they are manual-only, never wired into CI.
 - **Frontend:** `cd gui/web && npm run test` (vitest, one-shot; `npm run test:watch` to iterate).
-- **Everything CI runs:** `uv run ruff format --check .` + `uvx ruff check .` + `uv run pytest`
+- **Everything CI runs:** `uv run ruff format --check .` + `uv run ruff check .` + `uv run pytest`
   + `uv run ty check src/magnetics` (Python), and `npm run lint` + `npm run typecheck` +
   `npm run test` + `npm run build` (in `gui/web/`). Run these locally before committing —
   a plain `pytest` + `tsc` pass does NOT cover everything CI checks.
+  Use `uv run ruff` (not a bare `uvx ruff`, which resolves the *latest* release): the dev group
+  caps ruff at `<0.16`, matching the version CI pins, so local lint can't drift from CI when a
+  new ruff broadens its default rules.
 
 ## Conventions
 - Physics lives in `src/magnetics/core` (pure, device-agnostic, testable); **no physics in the
