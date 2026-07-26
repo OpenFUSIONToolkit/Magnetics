@@ -10,7 +10,11 @@ The full **fetch → process → service → GUI** path runs end-to-end for **bo
 - **Fetch:** `magnetics.data.fetch.toksearch` (mdsthin via the `cybele` ssh-config alias, or a
   cluster-side `python -m` run orchestrated by `fetch/remote.py`) writes one HDF5 per shot to
   `data/datafile/` (gitignored); read back via `magnetics.data.h5source`. The GUI can trigger a
-  pull from the left rail (`PullControl` → `POST /api/fetch`).
+  pull from the left rail (`PullControl` → `POST /api/fetch`). The `remote` backend is
+  location-aware: `network.on_cluster_host()` detects when the server is already running ON the
+  device's cluster (load-balanced submit nodes included) and fetches in-process — via the cluster
+  interpreter's toksearch (`remote.run_on_cluster`), else mdsthin — instead of SSHing to the host
+  it is running on (which hangs on an unanswerable host-key prompt).
 - **Process:** `core/spectral.py` (MODESPEC) is real and pure. The SLCONTOUR quasi-stationary fit
   runs end-to-end via the shim-free `core/qs_*` modules (`qs_io_data` → `qs_prep` → `qs_fit`,
   adapted to nodes by `qs_bridge`; the former `_slcontour` translation, promoted into core) — real
@@ -67,7 +71,9 @@ The Python project **is the repo root** (a uv project, served as a webapp). `src
   in `data/device/*.json`.
 - `service/` — FastAPI; the built GUI is bundled at `service/webapp/` and served here.
 - `connect.py` — the `magnetics-connect` remote-GUI launcher (server on a cluster node,
-  browser local, one SSH tunnel). Deliberately **stdlib-only and standalone** so it runs as a
+  browser local, one SSH tunnel). Self-bootstraps the remote: existing `magnetics` → else
+  install uv → else `uvx magnetics` (targets PyPI; provisions its own Python). Deliberately
+  **stdlib-only and standalone** so it runs as a
   bare `python3 connect.py` on gateway nodes with no magnetics install — keep it free of
   package imports and of syntax newer than ~Python 3.9.
 
