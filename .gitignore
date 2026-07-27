@@ -32,6 +32,10 @@ src/magnetics/service/webapp/
 data/cache/
 *.nc
 
+# Per-shot bad-channel exclusions (#56): local operator state written next to the
+# shot data at runtime, not repo content.
+data/exclusions.json
+
 # HDF5 shot data — large, fetched/generated locally, not committed
 *.h5
 *.hdf5

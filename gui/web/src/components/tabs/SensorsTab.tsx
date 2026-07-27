@@ -10,7 +10,7 @@
 // The node is a scatter2d (R-Z points) whose `meta` carries the full per-sensor
 // records + the vessel outline; the backend owns every device specific (which
 // family is Bp vs a saddle loop, the wall shape), so this view is device-agnostic.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type * as Plotly from "plotly.js";
 import { useStore } from "../../store";
 import { useNode } from "../../lib/useNode";
@@ -102,6 +102,9 @@ export default function SensorsTab({ machine }: { machine: string }) {
   const wallInk = dark ? "rgba(255,255,255,0.30)" : "rgba(20,34,46,0.35)";
   const fluxInk = dark ? "rgba(120,170,255,0.55)" : "rgba(40,90,180,0.55)";
   const vvInk = dark ? "rgba(255,255,255,0.16)" : "rgba(20,34,46,0.18)";
+  // Excluded sensors: desaturated so they read as inactive against every kind's
+  // colour, but still clearly visible (you must be able to find and restore one).
+  const excludedInk = dark ? "rgba(255,255,255,0.45)" : "rgba(20,34,46,0.40)";
   // 3D vessel shell — brighter/whiter than the 2D outline so it reads in the
   // dark scene; lighter mode bumped up slightly too.
   const wallSurface = dark ? "rgb(225,232,245)" : "rgb(70,90,110)";
@@ -166,6 +169,26 @@ export default function SensorsTab({ machine }: { machine: string }) {
     for (const set of sets) if (selectedSets[set.name]) set.sensors.forEach((n) => names.add(n));
     return meta.sensors.filter((s) => names.has(s.name));
   }, [meta, sets, selectedSets]);
+
+  // ── bad-channel exclusions (#56) ──────────────────────────────────────────
+  // Click a sensor to drop it from BOTH analyses. Excluded sensors stay on the
+  // map, greyed, so you can see what you dropped and click it back in.
+  const excluded = useStore((s) => s.excluded);
+  const loadExclusions = useStore((s) => s.loadExclusions);
+  const toggleExcluded = useStore((s) => s.toggleExcluded);
+  const clearExclusions = useStore((s) => s.clearExclusions);
+  useEffect(() => {
+    if (machine) void loadExclusions(machine);
+  }, [machine, loadExclusions]);
+  const excludedSet = useMemo(() => new Set(excluded), [excluded]);
+  const onSensorClick = useCallback(
+    (e: Plotly.PlotMouseEvent) => {
+      // `text` carries the sensor name on every sensor trace (points and loops).
+      const name = e.points?.[0]?.text;
+      if (machine && typeof name === "string" && name) void toggleExcluded(machine, name);
+    },
+    [machine, toggleExcluded],
+  );
 
   const traces2d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -232,36 +255,77 @@ export default function SensorsTab({ machine }: { machine: string }) {
       let legendShown = false;
 
       if (points.length) {
-        t.push({
-          type: "scatter", mode: "markers", name: KIND_LABEL[kind],
-          legendgroup: kind, x: points.map((s) => s.r), y: points.map((s) => s.z),
-          text: points.map((s) => s.name), hoverinfo: "text",
-          marker: { size: 6, color: COLOR[kind], line: { color: wallInk, width: 0.5 } },
-        } as Partial<Plotly.PlotData>);
-        legendShown = true;
+        // Split live vs excluded so a dropped probe reads as inactive at a glance
+        // (grey, hollow) while staying clickable to put it back.
+        const live = points.filter((s) => !excludedSet.has(s.name));
+        const dead = points.filter((s) => excludedSet.has(s.name));
+        if (live.length) {
+          t.push({
+            type: "scatter", mode: "markers", name: KIND_LABEL[kind],
+            legendgroup: kind, x: live.map((s) => s.r), y: live.map((s) => s.z),
+            text: live.map((s) => s.name), hoverinfo: "text",
+            marker: { size: 6, color: COLOR[kind], line: { color: wallInk, width: 0.5 } },
+          } as Partial<Plotly.PlotData>);
+          legendShown = true;
+        }
+        if (dead.length) {
+          t.push({
+            type: "scatter", mode: "markers", name: `${KIND_LABEL[kind]} (excluded)`,
+            legendgroup: kind, showlegend: false,
+            x: dead.map((s) => s.r), y: dead.map((s) => s.z),
+            text: dead.map((s) => `${s.name} — excluded (click to restore)`),
+            hoverinfo: "text",
+            marker: {
+              size: 7, symbol: "circle-open", color: excludedInk,
+              line: { color: excludedInk, width: 1.5 },
+            },
+          } as Partial<Plotly.PlotData>);
+          legendShown = true;
+        }
       }
       if (loops.length) {
         // Each loop projects onto R-Z as a segment of its poloidal length, oriented
         // by the sensor's own tilt (its real angle in the R-Z plane, measured from
         // +R toward +Z) — NOT the vessel tangent, which points off-midplane loops
         // the wrong way. The segment is symmetric, so tilt's sign/wrap is moot.
-        const x: (number | null)[] = [], y: (number | null)[] = [], txt: (string | null)[] = [];
-        for (const s of loops) {
-          const seg = loopSegment2d(s);
-          x.push(seg.x[0], seg.x[1], null);
-          y.push(seg.y[0], seg.y[1], null);
-          txt.push(s.name, s.name, null);
+        // Excluded loops go in their own greyed trace, same as the point markers.
+        const seg2 = (group: Sensor[]) => {
+          const x: (number | null)[] = [], y: (number | null)[] = [], txt: (string | null)[] = [];
+          for (const s of group) {
+            const seg = loopSegment2d(s);
+            x.push(seg.x[0], seg.x[1], null);
+            y.push(seg.y[0], seg.y[1], null);
+            txt.push(s.name, s.name, null);
+          }
+          return { x, y, txt };
+        };
+        const liveLoops = loops.filter((s) => !excludedSet.has(s.name));
+        const deadLoops = loops.filter((s) => excludedSet.has(s.name));
+        if (liveLoops.length) {
+          const { x, y, txt } = seg2(liveLoops);
+          t.push({
+            type: "scatter", mode: "lines", name: KIND_LABEL[kind],
+            legendgroup: kind, showlegend: !legendShown,
+            x, y, text: txt, hoverinfo: "text",
+            line: { color: COLOR[kind], width: 2.5 },
+          } as Partial<Plotly.PlotData>);
         }
-        t.push({
-          type: "scatter", mode: "lines", name: KIND_LABEL[kind],
-          legendgroup: kind, showlegend: !legendShown,
-          x, y, text: txt, hoverinfo: "text",
-          line: { color: COLOR[kind], width: 2.5 },
-        } as Partial<Plotly.PlotData>);
+        if (deadLoops.length) {
+          const { x, y, txt } = seg2(deadLoops);
+          t.push({
+            type: "scatter", mode: "lines", name: `${KIND_LABEL[kind]} (excluded)`,
+            legendgroup: kind, showlegend: false,
+            x, y, text: txt, hoverinfo: "text",
+            line: { color: excludedInk, width: 2, dash: "dot" },
+          } as Partial<Plotly.PlotData>);
+        }
       }
     }
     return t;
-  }, [meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk]);
+  }, [
+    meta, wallInk, visibleSensors, equilibrium, fluxInk, showVV, showCoils, vvInk,
+    excludedSet, excludedInk,
+  ]);
 
   const traces3d = useMemo<Partial<Plotly.PlotData>[]>(() => {
     if (!meta) return [];
@@ -436,11 +500,59 @@ export default function SensorsTab({ machine }: { machine: string }) {
             </div>
           </div>
 
+          {/* Bad-channel exclusions (#56): what's currently dropped from every
+              analysis, and the way back. Only shown once something is excluded —
+              the hint below the plot covers discovery. */}
+          {excluded.length > 0 && (
+            <div
+              style={{
+                display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8,
+                margin: "8px 0", padding: "6px 10px", borderRadius: 6,
+                background: dark ? "rgba(255,180,80,0.10)" : "rgba(180,110,20,0.10)",
+                border: `1px solid ${dark ? "rgba(255,180,80,0.30)" : "rgba(180,110,20,0.30)"}`,
+                fontSize: "0.85em",
+              }}
+            >
+              <strong>{excluded.length} sensor{excluded.length === 1 ? "" : "s"} excluded</strong>
+              <span style={{ opacity: 0.85 }}>from all analysis:</span>
+              {excluded.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  title="Restore this sensor"
+                  onClick={() => machine && void toggleExcluded(machine, name)}
+                  style={{
+                    font: "inherit", cursor: "pointer", padding: "1px 6px", borderRadius: 4,
+                    border: "1px solid currentColor", background: "transparent", color: "inherit",
+                    opacity: 0.9,
+                  }}
+                >
+                  {name} ✕
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => machine && void clearExclusions(machine)}
+                style={{
+                  font: "inherit", cursor: "pointer", padding: "1px 8px", borderRadius: 4,
+                  border: "1px solid currentColor", background: "transparent", color: "inherit",
+                  marginLeft: "auto",
+                }}
+              >
+                restore all
+              </button>
+            </div>
+          )}
+
           {/* No time cursor here: sensor geometry is shot-static, and the only
               time-dependent overlay (equilibrium) is a future backend node (#43). */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
-              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} exportName={`shot_${machine}_sensors_2d`} />
+              <Plot height={460} data={traces2d} config={PAN_CONFIG} layout={LAYOUT_2D} onClick={onSensorClick} exportName={`shot_${machine}_sensors_2d`} />
+              <div style={{ fontSize: "0.8em", opacity: 0.7, marginTop: 4 }}>
+                Click a sensor to exclude it from all analysis (bad channel); click
+                again to restore. Excluded sensors stay on the map, greyed.
+              </div>
             </div>
             <div style={{ flex: "1 1 360px", minWidth: 320 }}>
               <Plot height={460} data={traces3d} layout={LAYOUT_3D} exportName={`shot_${machine}_sensors_3d`} />

@@ -7,7 +7,9 @@ import {
   deleteAllMachines,
   deleteMachine,
   fetchDevices,
+  fetchExclusions,
   fetchMachines,
+  saveExclusions,
   type DeviceInfo,
   type MachineInfo,
 } from "./lib/api";
@@ -88,6 +90,12 @@ interface State {
   theme: Theme;
   fetchCreds: FetchCreds; // shared by PullControl + the QS custom-signal panel
   fontScale: number;
+  // Channels the operator marked bad for the current shot (#56). Server-side
+  // state mirrored here for the Sensors view; the analyses read it from the
+  // store on the backend, so `excludedRev` (bumped on every change) is what
+  // makes every open view re-fit — useNode() folds it into its fetch key.
+  excluded: string[];
+  excludedRev: number;
 
   init: () => Promise<void>;
   removeMachine: (id: string) => Promise<void>;
@@ -99,6 +107,9 @@ interface State {
   toggleTheme: () => void;
   setFetchCreds: (patch: Partial<FetchCreds>) => void;
   setFontScale: (n: number) => void;
+  loadExclusions: (shot: string) => Promise<void>;
+  toggleExcluded: (shot: string, channel: string) => Promise<void>;
+  clearExclusions: (shot: string) => Promise<void>;
 }
 
 export const useStore = create<State>((set) => ({
@@ -119,6 +130,8 @@ export const useStore = create<State>((set) => ({
     duoPasscode: "",
   },
   fontScale: loadFontScale(),
+  excluded: [],
+  excludedRev: 0,
 
   async init() {
     // fetchDevices() guards its own errors and returns [] (no live backend / no
@@ -173,6 +186,40 @@ export const useStore = create<State>((set) => ({
     if (key && typeof window !== "undefined") window.localStorage.setItem(FONT_SCALE_KEY, key);
     applyFontScale(n);
     set({ fontScale: n });
+  },
+
+  // ── bad-channel exclusions (#56) ─────────────────────────────────────────
+  // The server is the source of truth (persisted per shot); these keep a mirror
+  // for the Sensors view and bump `excludedRev` so every open view re-fits.
+  async loadExclusions(shot) {
+    try {
+      set({ excluded: await fetchExclusions(shot), excludedRev: 0 });
+    } catch {
+      set({ excluded: [], excludedRev: 0 }); // no live backend / no store yet
+    }
+  },
+  async toggleExcluded(shot, channel) {
+    const cur = useStore.getState().excluded;
+    const next = cur.includes(channel) ? cur.filter((c) => c !== channel) : [...cur, channel];
+    // Optimistic: the sensor greys immediately, then the save confirms the
+    // canonical (sorted) list. Roll back if the write fails so the map never
+    // shows an exclusion the analyses aren't actually honoring.
+    set((s) => ({ excluded: next, excludedRev: s.excludedRev + 1 }));
+    try {
+      const stored = await saveExclusions(shot, next);
+      set((s) => ({ excluded: stored, excludedRev: s.excludedRev + 1 }));
+    } catch {
+      set((s) => ({ excluded: cur, excludedRev: s.excludedRev + 1 }));
+    }
+  },
+  async clearExclusions(shot) {
+    const cur = useStore.getState().excluded;
+    set((s) => ({ excluded: [], excludedRev: s.excludedRev + 1 }));
+    try {
+      await saveExclusions(shot, []);
+    } catch {
+      set((s) => ({ excluded: cur, excludedRev: s.excludedRev + 1 }));
+    }
   },
 }));
 

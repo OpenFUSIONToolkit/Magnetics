@@ -13,6 +13,7 @@
 // transient failure was unrecoverable from the UI (the QS "Plot" button with
 // unchanged params re-ran no effect).
 import { useEffect, useState } from "react";
+import { useStore } from "../store";
 import { fetchNode } from "./api";
 import type { Node } from "./contract";
 
@@ -24,7 +25,12 @@ export function useNode(
   params?: Record<string, string | number>,
   retryKey: number = 0,
 ) {
-  const key = `${machine}::${nodeId}::${params ? JSON.stringify(params) : ""}`;
+  // Bad-channel exclusions (#56) live server-side and change what EVERY node
+  // returns, but appear in no node's params — so fold the revision counter into
+  // the fetch key here rather than threading it through ~30 call sites. One
+  // toggle in the Sensors view then re-fits every open view.
+  const excludedRev = useStore((s) => s.excludedRev);
+  const key = `${machine}::${nodeId}::${params ? JSON.stringify(params) : ""}::x${excludedRev}`;
   const [entry, setEntry] = useState<Entry>({ key, machine, node: null, error: null });
 
   useEffect(() => {

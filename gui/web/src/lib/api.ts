@@ -87,6 +87,26 @@ export async function fetchChannelUsage(shot: string): Promise<ChannelUsage | nu
   return getJSON<ChannelUsage>(`${API_BASE}/api/channels/${shot}`);
 }
 
+/** Channels the operator has marked bad for a shot (#56). Dropped from BOTH
+ *  analyses; still drawn (greyed) on the sensor map so you can see what went. */
+export async function fetchExclusions(shot: string): Promise<string[]> {
+  if (!LIVE) return [];
+  const r = await getJSON<{ excluded: string[] }>(`${API_BASE}/api/exclusions/${shot}`);
+  return r.excluded ?? [];
+}
+
+/** Replace a shot's exclusion set. Returns the stored (sorted) list. */
+export async function saveExclusions(shot: string, excluded: string[]): Promise<string[]> {
+  if (!LIVE) throw new Error("no live backend (run the packaged app or set VITE_API_BASE)");
+  const res = await fetch(`${API_BASE}/api/exclusions/${shot}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ excluded }),
+  });
+  if (!res.ok) throw new Error(`save failed (${res.status}): ${await res.text()}`);
+  return ((await res.json()) as { excluded: string[] }).excluded ?? [];
+}
+
 /** Parameters for a live shot pull (POST /api/fetch). */
 export interface FetchBody {
   shot: number;
