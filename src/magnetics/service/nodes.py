@@ -20,7 +20,7 @@ from functools import lru_cache
 import numpy as np
 
 from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
-from ..data import device_geom, devices, diiid_geometry, h5source
+from ..data import device_geom, devices, diiid_geometry, exclusions, h5source
 
 logger = logging.getLogger(__name__)
 
@@ -233,12 +233,34 @@ def _set_channels(dev, set_name, shot, angle="phi"):
     return out
 
 
+def _excluded(shot) -> tuple[str, ...]:
+    """Channels the operator has marked bad for this shot (issue #56), sorted.
+
+    Read from the per-shot store rather than threaded through every signature:
+    this is the one place rotating channel selection happens, so reading it here
+    makes a single exclusion apply to *every* rotating node automatically — a new
+    call site cannot forget to honor it.
+
+    Returned as a tuple so callers can pass it straight into the ``lru_cache``-d
+    analysis functions whose keys would not otherwise reflect the channel set
+    (``_spec_result``, ``_qs_run``); the rest already key on explicit ``names``.
+    """
+    try:
+        return tuple(exclusions.get(str(shot)))
+    except Exception:  # noqa: BLE001 — a broken store must not break analysis
+        return ()
+
+
 def _array_channels(shot, families: tuple[str, ...]):
     """Channels present in this shot belonging to `families`, with a parseable
     phi, sorted by phi. Returns list of (name, phi). ``families`` are the device's
-    own family tokens (DIII-D pointname families, or NSTX sensor-set names)."""
+    own family tokens (DIII-D pointname families, or NSTX sensor-set names).
+
+    Operator-excluded channels (#56) are dropped here, below every rotating node,
+    so a bad probe cannot bias an SVD / phase-vs-φ fit / n-spectrum anywhere."""
     dg = _dev_geom(str(shot))
-    names = h5source.channel_names(shot)
+    drop = set(_excluded(shot))
+    names = [n for n in h5source.channel_names(shot) if n not in drop]
     if dg.device_id == "diiid":
         sel = [n for n in names if dg.family_of(n) in set(families)]
     else:
@@ -330,6 +352,10 @@ def _geometry(shot, params=None) -> dict:
     if not sensors:
         raise ValueError("no sensors with geometry at this shot")
     points = [{"x": s["r"], "y": s["z"], "label": s["name"], "group": s["kind"]} for s in sensors]
+    # Operator-excluded channels (#56) are still returned and still drawn — the
+    # view greys them, so you can see what was dropped and click it back in —
+    # they are only removed from the analyses (see _array_channels / fit_exclude).
+    excluded = _excluded(shot)
     return contracts.scatter2d(
         points,
         {"x": "R (m)", "y": "Z (m)"},
@@ -343,6 +369,7 @@ def _geometry(shot, params=None) -> dict:
             "coils": geo["coils"],
             "arrays": geo["arrays"],
             "sensor_sets": geo["sensor_sets"],
+            "excluded": list(excluded),
         },
     )
 
@@ -435,14 +462,24 @@ def _pick_pair_prefs(shot) -> tuple[tuple[str, ...], ...]:
 
 
 @lru_cache(maxsize=8)
-def _spec_result(shot: str, slice_duration: float, coherence_smooth: int, max_columns: int = 4000):
+def _spec_result(
+    shot: str,
+    slice_duration: float,
+    coherence_smooth: int,
+    max_columns: int = 4000,
+    exclude: tuple[str, ...] = (),
+):
     """The (expensive) STFT, cached so the spectrogram/n-map/coherence/n-spectrum
     nodes share one compute. Keyed on the STFT-shaping params only; cheap post-ops
     (freq crop, denoise) are applied per node. Returns (result, probes, delta_phi).
 
     ``slice_duration`` sets the frequency resolution (df = 1/slice_duration) and
     ``max_columns`` the time-column cap (decimation lever) — the two knobs that
-    trade off spectrogram sharpness against compute."""
+    trade off spectrogram sharpness against compute.
+
+    ``exclude`` is not read here — ``_pick_pair`` applies it — but it MUST stay in
+    the signature: excluding a channel can change the probe pair, and without it
+    in the cache key this would serve the pre-exclusion STFT (#56)."""
     (n1, phi1), (n2, phi2) = _pick_pair(shot)
     t1, s1 = h5source.load_channel(shot, n1)
     t2, s2 = h5source.load_channel(shot, n2)
@@ -470,7 +507,7 @@ def _prep_spec(shot, params):
     if cs is None:
         cs = _i(params, "smoothing", 5)
     mc = _i(params, "max_columns", 4000)
-    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs), max(2, mc))
+    res, probes, dphi = _spec_result(str(shot), sd, max(2, cs), max(2, mc), _excluded(shot))
     # Optional 2-D Gaussian pre-smoothing on the FULL band, BEFORE the gates, so contiguous
     # coherent structure survives gating (and the display + gate share one smoothed field).
     # σ is in grid cells (resolution-relative); smooth_spectrogram returns a copy — the cached
@@ -869,7 +906,7 @@ def _auto_freq_khz(shot, t0_ms=None, fmin=1.0, fmax=25.0):
     mode as the user scrubs, instead of sitting at a fixed frequency that misses it.
     Global peak when no cursor. Falls back to 5 kHz if the spectrogram is unavailable."""
     try:
-        res, _probes, _dphi = _spec_result(str(shot), 0.001, 5)
+        res, _probes, _dphi = _spec_result(str(shot), 0.001, 5, exclude=_excluded(shot))
     except Exception:  # noqa: BLE001
         logger.warning(
             "auto-freq: spectrogram unavailable for shot %s, using 5 kHz", shot, exc_info=True
@@ -1502,12 +1539,17 @@ def _prep_qs_ds(shot, params):
     sigma_str = params.get("sigma") if params else None
     sigma = float(sigma_str) if sigma_str is not None else None
 
-    # fit_exclude: comma-separated exact channel names the GUI checkbox-panel has
-    # deselected. fit.fit matches with re.match, so anchor + escape each name for a
-    # literal match. Excluded channels stay in prep (still drawn on the maps); only
+    # fit_exclude: exact channel names dropped from the fit. Two sources, unioned:
+    #   * the QS tab's own checkbox panel (`fit_exclude` param) — a per-fit deselect;
+    #   * the shot's operator-marked bad channels (#56), which apply to every
+    #     analysis, so a probe dropped in the Sensors view is dropped here too.
+    # fit.fit matches with re.match, so anchor + escape each name for a literal
+    # match. Excluded channels stay in prep (still drawn on the maps, greyed); only
     # the fit drops them. Sort so the tuple is a stable _qs_run cache key.
     excl_raw = params.get("fit_exclude", "") if params else ""
-    excl_names = sorted(x.strip() for x in str(excl_raw).split(",") if x.strip())
+    excl_names = sorted(
+        {x.strip() for x in str(excl_raw).split(",") if x.strip()} | set(_excluded(shot))
+    )
     fit_exclude = tuple(f"{re.escape(n)}$" for n in excl_names)
 
     # Time trim: read shot-window defaults from HDF5, then apply any user override.

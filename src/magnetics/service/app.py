@@ -30,7 +30,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ..data import h5source
+from ..data import exclusions, h5source
 from . import export, mock, nodes
 
 logger = logging.getLogger(__name__)
@@ -132,6 +132,27 @@ def devices():
             }
         )
     return out
+
+
+class Exclusions(BaseModel):
+    """Channel names to drop from every analysis of a shot (issue #56)."""
+
+    excluded: list[str] = []
+
+
+@app.get("/api/exclusions/{shot}")
+def get_exclusions(shot: str):
+    """Channels excluded from analysis for this shot. The GUI loads these when a
+    shot is opened and then carries them on each /api/node request as
+    ``exclude=`` — storage and transport are deliberately separate so the
+    analysis caches stay keyed on what actually went into the fit."""
+    return {"shot": shot, "excluded": exclusions.get(shot)}
+
+
+@app.put("/api/exclusions/{shot}")
+def put_exclusions(shot: str, body: Exclusions):
+    """Replace this shot's exclusion set (empty list clears it)."""
+    return {"shot": shot, "excluded": exclusions.set_for_shot(shot, body.excluded)}
 
 
 @app.get("/api/node/{shot}/{node_id}")
