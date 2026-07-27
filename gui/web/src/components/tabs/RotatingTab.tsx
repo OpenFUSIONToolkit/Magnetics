@@ -799,7 +799,11 @@ export default function RotatingTab({ machine }: { machine: string }) {
           x1: cursorMs,
           y1: 1,
           line: {
-            color: "var(--accent)", // bright turquoise
+            // Plotly writes this straight into the SVG `stroke`, which does NOT
+            // resolve CSS custom properties — "var(--accent)" was invalid there and
+            // fell back to black, leaving the cursor near-invisible in dark mode.
+            // Use the literal --accent value for each theme.
+            color: dark ? "#2ee6cf" : "#0a8d80",
             width: 2,
             dash: "dash" as const,
           },
@@ -848,7 +852,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         mode: "lines" as const,
         x: freqs,
         y: coh,
-        line: { color: "var(--good)", width: 1.5 },
+        line: { color: dark ? "#54e08a" : "#1f9d57", width: 1.5 }, // --good, literal (see above)
         name: "Coherence",
         xaxis: "x",
         yaxis: "y",
@@ -872,7 +876,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
         mode: "lines" as const,
         x: freqs,
         y: power,
-        line: { color: "var(--accent)", width: 1.5 },
+        line: { color: dark ? "#2ee6cf" : "#0a8d80", width: 1.5 }, // --accent, literal (see above)
         name: "Cross-Power",
         xaxis: "x",
         yaxis: "y3",
