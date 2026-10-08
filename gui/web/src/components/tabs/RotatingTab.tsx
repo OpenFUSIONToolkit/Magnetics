@@ -7,11 +7,14 @@ import Plot from "../../lib/Plot";
 import NodeView from "../../lib/NodeView";
 import DraggableDivider from "../../lib/DraggableDivider";
 import { usingLiveBackend, fetchChannelUsage, type ChannelUsage } from "../../lib/api";
-import type { Node } from "../../lib/contract";
-import { GATE_POS_MAX, gatePosToPct, medianStep, percentile } from "../../lib/rotatingTransforms";
-
-// Slider position that yields ≈70% by default (a sensible noise floor to start).
-const GATE_POS_DEFAULT = 227;
+import type { LineNode, Node } from "../../lib/contract";
+import {
+  GATE_POS_DEFAULT, GATE_POS_MAX, gatePosToPct, medianStep, percentile, rotFetchParams,
+  ROT_DEFAULTS,
+} from "../../lib/rotatingTransforms";
+import { lineTraces, spectrogramTrace } from "../../lib/plotTraces";
+import { withFlattopCut } from "../../lib/flattop";
+import { resetTimeRangeOnDoubleClick, sharedXAxis, timeRangeFromRelayout } from "../../lib/timeRange";
 
 // Offline synthetic-demo constants. These were formerly user-facing knobs (PEST λ and
 // sensor-shielding cutoff) that only ever affected the no-backend demo — they have no
@@ -63,9 +66,19 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // in the left rail's credential fields.
   const cursorMs = useStore((s) => s.cursorMs);
   const setCursorMs = useStore((s) => s.setCursorMs);
+  const setRotParams = useStore((s) => s.setRotParams);
   // Foreground ink that flips with the theme so the raw dB/dt trace stays visible on
   // the light plot background (it was hard-coded white → invisible in light mode).
   const dark = useStore((s) => s.theme === "dark");
+  // Global shared time axis (plasma-signal strip, QS, Compare): the spectrogram and the
+  // time tracks below follow it, and zooming their time axis sets it.
+  const timeRange = useStore((s) => s.timeRange);
+  const setTimeRange = useStore((s) => s.setTimeRange);
+  const onTimeRelayout = useCallback((e: Record<string, unknown>) => {
+    const r = timeRangeFromRelayout(e);
+    if (r !== undefined) setTimeRange(r);
+  }, [setTimeRange]);
+  const onTimeDoubleClick = useMemo(() => resetTimeRangeOnDoubleClick(setTimeRange), [setTimeRange]);
   const ink = dark ? "rgba(255,255,255,0.85)" : "rgba(20,34,46,0.9)";
   
   // View states
@@ -74,10 +87,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
   const [channelInfo, setChannelInfo] = useState<ChannelUsage | null>(null);
 
   // Control Parameter states
-  const [fmin, setFmin] = useState<number>(0);
-  const [fmax, setFmax] = useState<number>(50);
+  const [fmin, setFmin] = useState<number>(ROT_DEFAULTS.fmin);
+  const [fmax, setFmax] = useState<number>(ROT_DEFAULTS.fmax);
   const [fittype, setFittype] = useState<number>(2); // 0 = circular, 1 = toroidicity, 2 = PEST theta*
-  const [smoothing, setSmoothing] = useState<number>(5);
+  const [smoothing, setSmoothing] = useState<number>(ROT_DEFAULTS.smoothing);
   // Power gate: a percentile floor on cell power; hides low-power noise in BOTH the
   // power spectrogram (client-side) and the n-map (server n_amp_pct). The slider stores
   // a linear position; gatePosToPct maps it to a percentile that scrubs finely near 100%.
@@ -88,26 +101,26 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // Coherence gate γ² ∈ [0,1]: drops spectrogram cells whose 2-point magnitude-squared
   // coherence is below this (incoherent electronic noise), via the core denoise_spectrogram.
   // 0 = off, so the default view is unchanged. Applies to the POWER spectrogram only.
-  const [coherenceMin, setCoherenceMin] = useState<number>(0);
+  const [coherenceMin, setCoherenceMin] = useState<number>(ROT_DEFAULTS.coherenceMin);
   // Mode-coherence gate for the n-map: the per-cell harmonic energy fraction ∈ [1/M, 1]
   // (1 = a pure single-n pattern, 1/M = white across harmonics = noise; M = 2·n_max+1).
   // Distinct quantity from the 2-point γ² above — it gates the mode-number plot, not the
   // power view. Default 0.3 (real cells rarely exceed ~0.5, unlike the resultant length).
-  const [nGate, setNGate] = useState<number>(0.3);
+  const [nGate, setNGate] = useState<number>(ROT_DEFAULTS.nGate);
   // Optional 2-D Gaussian pre-smoothing (before the gates): blurs power/coherence (and the
   // n-map quality/amplitude) over (time, frequency) so contiguous coherent structure survives
   // aggressive gating. Off by default (σ=0 ⇒ exact no-op).
-  const [smoothOn, setSmoothOn] = useState<boolean>(false);
+  const [smoothOn, setSmoothOn] = useState<boolean>(ROT_DEFAULTS.smoothOn);
   // σ in *grid cells* (STFT bins), not physical ms/kHz: one cell = one (t, f) bin at the
   // current resolution, so the blur spans the same number of neighbours regardless of the
   // slice/column knobs — and can't collapse to a sub-bin no-op. The readout below the sliders
   // shows the physical equivalent for the live grid. Skewed to σ_time > σ_freq to fill gaps
   // along a ridge without merging neighbouring modes in frequency.
-  const [smoothTcells, setSmoothTcells] = useState<number>(3);
-  const [smoothFcells, setSmoothFcells] = useState<number>(1.5);
+  const [smoothTcells, setSmoothTcells] = useState<number>(ROT_DEFAULTS.smoothTcells);
+  const [smoothFcells, setSmoothFcells] = useState<number>(ROT_DEFAULTS.smoothFcells);
   // STFT window for the LIVE backend spectrogram (ms). Frequency resolution is
   // 1/window, so 2 ms → 500 Hz bins (sharper than the 1 ms / 1 kHz default).
-  const [specSliceMs, setSpecSliceMs] = useState<number>(2);
+  const [specSliceMs, setSpecSliceMs] = useState<number>(ROT_DEFAULTS.specSliceMs);
 
   // Advanced Parameter states
   const [advancedExpanded, setAdvancedExpanded] = useState<boolean>(false);
@@ -164,28 +177,19 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // band ×3 nodes. These don't depend on the time cursor, so scrubbing never refetches.
   // `smoothing` is the coherence-estimation window (backend `coherence_smooth`): it
   // re-runs the core and changes the real coherence map → the sub-interval coherence trace.
-  // Server-side denoise: the coherence gate and the per-frequency power floor both run in
-  // the core (denoise_spectrogram) so the spectrogram, 2-point n-map, and n-spectrum all
-  // threshold on ONE consistent (t, f) grid — no client-side blanking on the live path.
+  // Server-side denoise (coherence gate + per-frequency power floor) and the optional 2-D
+  // Gaussian pre-smoothing are folded into these params by rotFetchParams — see there.
   // The Power Gate slider is a percentile floor: keep cells ≥ the p-th percentile of each
-  // frequency's power over time (power_floor_k=1 × that percentile). 0 on both = no-op.
-  const denoiseOn = coherenceMin > 0 || powerGate > 0;
-  // 2-D Gaussian pre-smoothing params, shared by every spectral node so all views smooth on
-  // one basis. Effective only when the toggle is on and a σ is non-zero (else a server no-op).
-  const smoothActive = smoothOn && (smoothTcells > 0 || smoothFcells > 0);
-  const smoothParams = {
-    smooth: smoothActive ? 1 : 0,
-    smooth_t_cells: smoothActive ? smoothTcells : 0,
-    smooth_f_cells: smoothActive ? smoothFcells : 0,
-  };
-  const specParams = {
-    slice_duration: specSliceMs / 1000, max_columns: 1000, fmin, fmax, smoothing,
-    denoise: denoiseOn ? 1 : 0,
-    coherence_min: coherenceMin,
-    power_floor_k: powerGate > 0 ? 1.0 : 0,
-    floor_percentile: powerGate,
-    ...smoothParams,
-  };
+  // frequency's power over time (power_floor_k=1 × that percentile).
+  const rawRot = rotFetchParams({
+    specSliceMs, fmin, fmax, smoothing, coherenceMin, powerGate, nGate,
+    smoothOn, smoothTcells, smoothFcells,
+  });
+  // Optional analysis cut-off at the Ip flattop end (global toggle in the strip).
+  const cutFlattop = useStore((s) => s.cutFlattop);
+  const specParams = withFlattopCut(rawRot.spec, cutFlattop);
+  const modeParams = withFlattopCut(rawRot.mode, cutFlattop);
+  const trackParams = withFlattopCut({}, cutFlattop);
 
   // Fetch main spectrogram node (real log-power Ḃp(t,f) from the live backend)
   const {
@@ -208,10 +212,15 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // Real toroidal mode-number map n(t,f) — a full-array fit per cell (resolves n=1,2,3,4…
   // that the 2-point estimate aliases away). Backs the "Mode n" toggle, gated server-side.
   // Honors the same resolution knob + band as the power view so the two stay consistent.
-  const { node: modeNumberNode, error: modeNumberError } = useNode(machine, "mode_number", {
-    slice_duration: specSliceMs / 1000, fmin, fmax, n_amp_pct: powerGate, n_gate: nGate,
-    ...smoothParams,
-  });
+  const { node: modeNumberNode, error: modeNumberError } = useNode(machine, "mode_number", modeParams);
+
+  // Publish the spectral params so the Compare view draws this same spectrogram / n-map.
+  // Keyed by value (both objects are rebuilt every render).
+  const rotParamsKey = JSON.stringify([specParams, modeParams]);
+  useEffect(() => {
+    const [spec, mode] = JSON.parse(rotParamsKey) as [Record<string, number>, Record<string, number>];
+    setRotParams({ spec, mode });
+  }, [rotParamsKey, setRotParams]);
 
   // Real 2-point coherence γ²(t,f) ∈ [0,1] — feeds the coherence gate honestly,
   // instead of the previous power-derived stand-in.
@@ -242,13 +251,18 @@ export default function RotatingTab({ machine }: { machine: string }) {
   // Cursor-independent (reference is the strongest-mode slice), so no time param.
   const {
     node: modeTrackNode,
-  } = useNode(machine, "mode_track");
+  } = useNode(machine, "mode_track", trackParams);
 
   // Fetch the best-fit toroidal mode number n(t) over the shot (appears/persists/locks).
   // Cursor-independent (global dominant frequency), so no time param.
   const {
     node: modeOverTimeNode,
-  } = useNode(machine, "mode_over_time");
+  } = useNode(machine, "mode_over_time", trackParams);
+
+  // Rotating-mode amplitude vs time, one trace per toroidal |n| (same slices as n(t)).
+  const {
+    node: modeAmplitudeNode,
+  } = useNode(machine, "mode_amplitude", trackParams);
 
   // Array wave-stripes: raw δBp(φ,t) / δBp(θ,t) over a few mode periods at the cursor.
   const { node: toroidalStripesNode } = useNode(machine, "toroidal_stripes", { time: cursorMs });
@@ -742,50 +756,14 @@ export default function RotatingTab({ machine }: { machine: string }) {
       return null;
     }
 
-    const colorscale: [number, string][] = processedSpecNode.discrete
-      ? (() => {
-          const n = MODE_PALETTE.length;
-          const s: [number, string][] = [];
-          for (let i = 0; i < n; i++) {
-            s.push([i / n, MODE_PALETTE[i]], [(i + 1) / n, MODE_PALETTE[i]]);
-          }
-          return s;
-        })()
-      : POWER_SEQUENTIAL;
-    const zr = processedSpecNode.zrange;
-
-    const data = [
-      {
-        type: "heatmap" as const,
-        x: processedSpecNode.x,
-        y: processedSpecNode.y,
-        z: processedSpecNode.z,
-        colorscale,
-        zmin: zr?.[0],
-        zmax: zr?.[1],
-        zsmooth: (processedSpecNode.discrete ? false : "best") as false | "best" | "fast" | undefined,
-        colorbar: {
-          title: { text: processedSpecNode.axes.z ?? "" },
-          thickness: 12,
-          outlinewidth: 0,
-          ...(processedSpecNode.discrete
-            ? {
-                // one tick per integer mode-number magnitude |n| = 0 … 6
-                tickvals: Array.from({ length: 7 }, (_, i) => i),
-                ticktext: Array.from({ length: 7 }, (_, i) => `${i}`),
-                tickmode: "array" as const,
-              }
-            : {}),
-        },
-      },
-    ];
+    const data = [spectrogramTrace(processedSpecNode)];
 
     const layout = {
       // Preserve the user's zoom/crop across every re-render (slider, toggle, scrub) —
       // Plotly only resets the view when uirevision changes, which we tie to the band, so
       // editing f_min/f_max intentionally re-frames while everything else keeps the crop.
       uirevision: `${machine}:${fmin}:${fmax}`,
-      xaxis: { title: { text: processedSpecNode.axes.x } },
+      xaxis: { title: { text: processedSpecNode.axes.x }, ...sharedXAxis(timeRange) },
       // Pin the band to the knobs so the n-map (mostly null above the modes) doesn't
       // autorange-trim to ~30 kHz — both views show the full requested 0–fmax band.
       yaxis: { title: { text: processedSpecNode.axes.y }, range: [fmin, fmax] as [number, number] },
@@ -823,7 +801,7 @@ export default function RotatingTab({ machine }: { machine: string }) {
     // Fill the card: subtract its 12px padding (×2), ~38px header and the 8px gap, so the
     // plot — and its x-axis title — fit instead of overflowing and getting clipped.
     const plotH = Math.max(220, specHeight - 78);
-    return <Plot data={data} layout={layout} height={plotH} onClick={handlePlotClick} exportName={`shot_${machine}_spectrogram`} download={{ machine, nodeId: "spectrogram", params: specParams }} />;
+    return <Plot data={data} layout={layout} height={plotH} onClick={handlePlotClick} onRelayout={onTimeRelayout} onDoubleClick={onTimeDoubleClick} exportName={`shot_${machine}_spectrogram`} download={{ machine, nodeId: "spectrogram", params: specParams }} />;
   };
 
   const renderSubInterval = () => {
@@ -1068,6 +1046,50 @@ export default function RotatingTab({ machine }: { machine: string }) {
         <div style={{ flex: 1, minHeight: 0 }}>
           <NodeView node={node} height={height} exportName={exportName} download={download} />
         </div>
+      </div>
+    );
+  };
+
+  // A time-track card (n(t), persistence, per-n amplitude): like analysisCard, but on the
+  // global shared time axis with the time cursor, click-to-set-cursor, and an optional
+  // palette/legend (per-|n| traces use the n-map colors).
+  const timeCard = (
+    title: string,
+    node: Node | null,
+    subtitle: string,
+    download: { machine: string; nodeId: string },
+    opts?: { palette?: string[]; legend?: string },
+  ) => {
+    if (!node || node.kind !== "line") return null;
+    const n = node as LineNode;
+    const layout = {
+      uirevision: `${machine}:${download.nodeId}`,
+      xaxis: { title: { text: n.axes.x }, ...sharedXAxis(timeRange) },
+      yaxis: { title: { text: n.axes.y } },
+      showlegend: !!opts?.legend,
+      ...(opts?.legend ? {
+        legend: { title: { text: opts.legend }, orientation: "h" as const, x: 0, y: 1.02, yanchor: "bottom" as const, font: { size: 10 } },
+      } : {}),
+      margin: { t: opts?.legend ? 28 : 10, b: 40, l: 60, r: 16 },
+      shapes: [{
+        type: "line" as const, xref: "x" as const, yref: "paper" as const,
+        x0: cursorMs, x1: cursorMs, y0: 0, y1: 1,
+        line: { color: dark ? "#2ee6cf" : "#0a8d80", width: 1.5, dash: "dash" as const },
+      }],
+    };
+    const onClick = (e: Plotly.PlotMouseEvent) => {
+      const x = e.points?.[0]?.x;
+      if (typeof x === "number") setCursorMs(x);
+    };
+    return (
+      <div className="card" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px", margin: "7px 0 0 0", minHeight: 0 }}>
+        <h4 style={{ margin: 0, fontSize: "calc(11px * var(--font-scale))", fontWeight: 600, textTransform: "uppercase", color: "var(--accent)" }}>
+          {title}
+          <span style={{ color: "var(--text-dim)", fontWeight: 400, textTransform: "none" }}> · {subtitle}</span>
+        </h4>
+        <Plot data={lineTraces(n, { palette: opts?.palette })} layout={layout} height={opts?.legend ? 230 : 200}
+          onClick={onClick} onRelayout={onTimeRelayout} onDoubleClick={onTimeDoubleClick}
+          exportName={`shot_${download.machine}_${download.nodeId}`} download={download} />
       </div>
     );
   };
@@ -1682,12 +1704,12 @@ export default function RotatingTab({ machine }: { machine: string }) {
             </div>
           </div>
         )}
-        {analysisCard("Mode Persistence", modeTrackNode, "line", 200,
+        {timeCard("Mode Persistence", modeTrackNode,
           shapeMeta(modeTrackNode)?.dominant_n != null
             ? `shape similarity to the dominant mode vs time (1 = persists) · n≈${shapeMeta(modeTrackNode)!.dominant_n}`
             : "shape similarity to the dominant mode vs time",
           { machine, nodeId: "mode_track" })}
-        {analysisCard("Toroidal Mode vs Time", modeOverTimeNode, "line", 200,
+        {timeCard("Toroidal Mode vs Time", modeOverTimeNode,
           shapeMeta(modeOverTimeNode)?.dominant_n != null
             ? `n of the strongest mode (freq follows the ridge${
                 Array.isArray(shapeMeta(modeOverTimeNode)?.f_range_kHz)
@@ -1695,6 +1717,10 @@ export default function RotatingTab({ machine }: { machine: string }) {
                   : ""}) · dominant n≈${shapeMeta(modeOverTimeNode)!.dominant_n}`
             : "best-fit toroidal n over time",
           { machine, nodeId: "mode_over_time" })}
+        {timeCard("Mode Amplitude vs Time", modeAmplitudeNode,
+          `one trace per toroidal |n| (n-map colors) · probe-averaged |δḂp| at each n's strongest in-band frequency${
+            shapeMeta(modeAmplitudeNode)?.n_probes != null ? `, ${shapeMeta(modeAmplitudeNode)!.n_probes} probes` : ""}`,
+          { machine, nodeId: "mode_amplitude" }, { palette: MODE_PALETTE, legend: "|n|" })}
       </div>
     </div>
   );

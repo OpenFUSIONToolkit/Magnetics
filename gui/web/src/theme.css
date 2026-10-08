@@ -208,3 +208,26 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .draggable-divider:hover .draggable-divider-line,
 .draggable-divider:focus-visible .draggable-divider-line { background: var(--accent); }
 .draggable-divider:focus-visible { outline: none; }
+
+/* Compare tab: toolbars, inline inputs, colour swatches and the annotation table */
+.cmp-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.923em; }
+.cmp-toolbar .metrics-title { margin: 0; }
+.cmp-check { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); cursor: pointer; }
+.cmp-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.cmp-dim-row { display: flex; gap: 8px; flex-wrap: wrap; font-size: 0.846em; }
+.cmp-dim { color: var(--text-dim); font-size: 0.923em; }
+.cmp-warn { color: var(--warn); font-size: 0.923em; }
+.cmp-input {
+  padding: 2px 6px; font-size: 0.923em; font-family: inherit;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 3px;
+}
+.cmp-swatches { display: inline-flex; gap: 3px; vertical-align: middle; }
+.cmp-swatch { width: 14px; height: 14px; padding: 0; border-radius: 3px; border: 1px solid var(--border); cursor: pointer; }
+.cmp-swatch.active { outline: 2px solid var(--text); outline-offset: 1px; }
+.cmp-ann { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 10px; }
+.cmp-table { border-collapse: collapse; font-size: 0.923em; }
+.cmp-table th { text-align: left; color: var(--text-dim); font-weight: 600; padding: 3px 8px; border-bottom: 1px solid var(--border); }
+.cmp-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); }
+.cmp-del { background: none; border: none; cursor: pointer; color: var(--text-dim); font-size: 16px; line-height: 1; }
+.cmp-del:hover { color: var(--danger, #e5484d); }
+.seg-btn:disabled { opacity: 0.5; cursor: default; }

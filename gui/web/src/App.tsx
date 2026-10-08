@@ -1,5 +1,5 @@
 // App shell: header · left rail (shot picker) · tabbed main.
-// The four tabs are independent files owned by different people — they read from
+// The tabs are independent files owned by different people — they read from
 // the store and render `kind`-nodes via <NodeView>. Adding a view = one file.
 //
 // `gui` is the GUI integration branch: teammates branch off it (gui-<view>) and
@@ -10,15 +10,18 @@ import { useStore, type TabId } from "./store";
 import { usingLiveBackend } from "./lib/api";
 import SettingsMenu from "./components/SettingsMenu";
 import PullControl from "./components/PullControl";
+import PlasmaSignals from "./components/PlasmaSignals";
 import ErrorBoundary from "./components/ErrorBoundary";
 import SensorsTab from "./components/tabs/SensorsTab";
 import QuasiStationaryTab from "./components/tabs/QuasiStationaryTab";
 import RotatingTab from "./components/tabs/RotatingTab";
+import ComparisonTab from "./components/tabs/ComparisonTab";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "sensors", label: "Sensors" },
   { id: "qs", label: "Quasi-stationary" },
   { id: "rotating", label: "Rotating modes" },
+  { id: "compare", label: "Compare" },
 ];
 
 export default function App() {
@@ -174,6 +177,12 @@ export default function App() {
             </button>
           ))}
         </div>
+        {/* Ip / Bt / κ / any channel, on every tab (needs the live backend) */}
+        {machine && !mock && (
+          <ErrorBoundary resetKeys={[machine]} label="The plasma-signal strip">
+            <PlasmaSignals machine={machine} plot={tab !== "compare"} />
+          </ErrorBoundary>
+        )}
         {!machine ? (
           <div className="placeholder">No machine selected.</div>
         ) : (
@@ -182,8 +191,10 @@ export default function App() {
               <SensorsTab machine={machine} />
             ) : tab === "qs" ? (
               <QuasiStationaryTab machine={machine} />
-            ) : (
+            ) : tab === "rotating" ? (
               <RotatingTab machine={machine} />
+            ) : (
+              <ComparisonTab machine={machine} />
             )}
           </ErrorBoundary>
         )}

@@ -12,12 +12,20 @@ import { plotChrome } from "./colormaps";
 import { nodeDownloadUrl } from "./api";
 import { useStore } from "../store";
 
+// Plotly's own double-click window is 300 ms; hold single clicks just past it.
+const DBLCLICK_MS = 320;
+
 export interface PlotProps {
   data: Partial<Plotly.PlotData>[];
   layout?: Partial<Plotly.Layout>;
   height?: number;
   onClick?: (e: Plotly.PlotMouseEvent) => void;
   onRelayout?: (e: Record<string, unknown>) => void;
+  /** Plotly double-click (fires before Plotly's own reset/autosize relayout). When
+   *  set, `onClick` is held for DBLCLICK_MS and dropped if a double-click follows: a
+   *  click handler that re-renders the plot (e.g. moving the time cursor) would
+   *  otherwise redraw it between the two clicks and Plotly never sees the double. */
+  onDoubleClick?: () => void;
   /** Per-plot Plotly config overrides (e.g. scrollZoom, displayModeBar). */
   config?: Partial<Plotly.Config>;
   /** Base filename for the PNG/SVG image exports (e.g. "shot_190000_amplitude");
@@ -52,9 +60,13 @@ function baseLayout(theme: "dark" | "light", fontScale: number): Partial<Plotly.
 }
 
 export default function Plot({
-  data, layout, height = 320, onClick, onRelayout, config, exportName, download,
+  data, layout, height = 320, onClick, onRelayout, onDoubleClick, config, exportName, download,
 }: PlotProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The in-flight Plotly.react: unmount purges only after it settles — purging mid-draw
+  // throws inside Plotly (e.g. a plot unmounted right as it re-renders).
+  const drawing = useRef<Promise<unknown>>(Promise.resolve());
   const [hover, setHover] = useState(false);
   const theme = useStore((s) => s.theme);
   const fontScale = useStore((s) => s.fontScale);
@@ -71,13 +83,19 @@ export default function Plot({
       yaxis: { ...base.yaxis, ...(layout?.yaxis as object) },
     };
     try {
-      Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true, ...config });
-      const clickHandler = (e: Plotly.PlotMouseEvent) => onClick?.(e);
+      drawing.current = Plotly.react(el, data as Plotly.Data[], merged, { displayModeBar: false, responsive: true, ...config });
+      const clickHandler = (e: Plotly.PlotMouseEvent) => {
+        if (!onDoubleClick) { onClick?.(e); return; }
+        clearTimeout(clickTimer.current);
+        clickTimer.current = setTimeout(() => onClick?.(e), DBLCLICK_MS);
+      };
       const relayoutHandler = (e: Record<string, unknown>) => onRelayout?.(e);
       // @ts-expect-error plotly event typing is loose on the dist build
       if (onClick) el.on("plotly_click", clickHandler);
       // @ts-expect-error plotly event typing is loose on the dist build
       if (onRelayout) el.on("plotly_relayout", relayoutHandler);
+      // @ts-expect-error plotly event typing is loose on the dist build
+      if (onDoubleClick) el.on("plotly_doubleclick", () => { clearTimeout(clickTimer.current); onDoubleClick(); });
     } catch {
       /* transient Plotly layout race (e.g. StrictMode remount); next render re-syncs */
     }
@@ -87,20 +105,27 @@ export default function Plot({
         el.removeAllListeners?.("plotly_click");
         // @ts-expect-error plotly cleanup helper is untyped on the dist build
         el.removeAllListeners?.("plotly_relayout");
+        // @ts-expect-error plotly cleanup helper is untyped on the dist build
+        el.removeAllListeners?.("plotly_doubleclick");
       } catch {
         /* noop */
       }
     };
-  }, [data, layout, height, onClick, onRelayout, theme, fontScale, config]);
+  }, [data, layout, height, onClick, onRelayout, onDoubleClick, theme, fontScale, config]);
 
   useEffect(() => {
     const el = ref.current;
+    const timer = clickTimer;
+    const draw = drawing;
     return () => {
-      try {
-        if (el) Plotly.purge(el);
-      } catch {
-        /* noop */
-      }
+      clearTimeout(timer.current); // no deferred click after unmount
+      void draw.current.catch(() => {}).then(() => {
+        try {
+          if (el) Plotly.purge(el);
+        } catch {
+          /* noop */
+        }
+      });
     };
   }, []);
 

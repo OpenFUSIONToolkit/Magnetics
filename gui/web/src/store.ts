@@ -1,6 +1,7 @@
 // Global UI state (zustand). Deliberately small: the selected machine/shot, the
-// active tab, and the shared time cursor that links the quasi-stationary and
-// rotating views (VISION §6.4). Views read what they need and render nodes from
+// active tab, the shared time cursor that links the quasi-stationary and
+// rotating views (VISION §6.4), the analysis params each of those views last ran
+// (so the Compare view plots the same analysis), and the per-shot annotations. Views read what they need and render nodes from
 // the API; heavy data stays in the nodes, not here.
 import { create } from "zustand";
 import {
@@ -11,8 +12,11 @@ import {
   type DeviceInfo,
   type MachineInfo,
 } from "./lib/api";
+import {
+  newAnnotationId, parseAnnotations, type Annotation, type AnnotationInput, type AnnotationPatch,
+} from "./lib/annotations";
 
-export type TabId = "sensors" | "qs" | "rotating";
+export type TabId = "sensors" | "qs" | "rotating" | "compare";
 export type Theme = "dark" | "light";
 
 // Backend + DIII-D credentials for a live pull. Lifted out of PullControl so the
@@ -73,6 +77,47 @@ export function applyFontScale(n: number) {
   document.documentElement.style.setProperty("--font-scale", String(n));
 }
 
+// ── Plasma-signal strip (every tab) ─────────────────────────────────────────
+// Global (not per shot) and persisted: the traces to plot, whether the strip is open,
+// and whether every analysis stops at the Ip flattop end (lib/flattop.ts).
+const TRACE_SIGNALS_KEY = "magnetics-trace-signals";
+const TRACE_OPEN_KEY = "magnetics-trace-open";
+const CUT_FLATTOP_KEY = "magnetics-cut-flattop";
+export const DEFAULT_TRACE_SIGNALS = ["ip", "bt", "kappa"];
+const isBool = (v: string) => v === "true" || v === "false";
+const isNameList = (v: string) => {
+  try { const a: unknown = JSON.parse(v); return Array.isArray(a) && a.every((x) => typeof x === "string"); } catch { return false; }
+};
+const savePref = (key: string, value: unknown) => window.localStorage.setItem(key, JSON.stringify(value));
+
+// ── Per-shot plot annotations (Compare view) ────────────────────────────────
+// Keyed by machine id, persisted as JSON. Every read is validated (parseAnnotations)
+// and storage failures are swallowed — annotations are a convenience, never fatal.
+const ANNOTATIONS_KEY = "magnetics-annotations";
+function loadAnnotations(): Record<string, Annotation[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(ANNOTATIONS_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, Annotation[]> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const list = parseAnnotations(v);
+      if (list.length) out[k] = list;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+function saveAnnotations(all: Record<string, Annotation[]>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ANNOTATIONS_KEY, JSON.stringify(all));
+  } catch {
+    /* quota / private mode — keep the in-memory copy */
+  }
+}
+
 // Apply synchronously at module load so the first paint matches (no flash).
 applyTheme(loadTheme());
 applyFontScale(loadFontScale());
@@ -84,10 +129,22 @@ interface State {
   device: string; // selected device id (single source of truth)
   tab: TabId;
   cursorMs: number; // shared time cursor across views
+  // Shared time axis (ms) of every time-series plot — strip, QS, rotating, Compare;
+  // null = autorange. Zooming any of them sets it; a shot change clears it.
+  timeRange: [number, number] | null;
   loadingMachines: boolean;
   theme: Theme;
   fetchCreds: FetchCreds; // shared by PullControl + the QS custom-signal panel
   fontScale: number;
+  // Params of the last spectrogram / mode-number fetch the Rotating tab made, and of
+  // the last committed quasi-stationary fit — null until that tab has run (the
+  // Compare view then falls back to the same defaults those tabs start from).
+  rotParams: { spec: Record<string, number>; mode: Record<string, number> } | null;
+  qsParams: Record<string, string> | null;
+  annotations: Record<string, Annotation[]>; // keyed by machine id
+  traceSignals: string[]; // plasma-signal strip selection (every tab)
+  traceOpen: boolean;
+  cutFlattop: boolean; // stop every analysis at the Ip flattop end (lib/flattop.ts)
 
   init: () => Promise<void>;
   removeMachine: (id: string) => Promise<void>;
@@ -96,9 +153,19 @@ interface State {
   setDevice: (id: string) => void;
   setTab: (t: TabId) => void;
   setCursorMs: (t: number) => void;
+  setTimeRange: (r: [number, number] | null) => void;
   toggleTheme: () => void;
   setFetchCreds: (patch: Partial<FetchCreds>) => void;
   setFontScale: (n: number) => void;
+  setRotParams: (p: { spec: Record<string, number>; mode: Record<string, number> }) => void;
+  setQsParams: (p: Record<string, string>) => void;
+  addAnnotation: (machine: string, a: AnnotationInput) => void;
+  updateAnnotation: (machine: string, id: string, patch: AnnotationPatch) => void;
+  removeAnnotation: (machine: string, id: string) => void;
+  setAnnotations: (machine: string, list: Annotation[]) => void;
+  setTraceSignals: (names: string[]) => void;
+  setTraceOpen: (open: boolean) => void;
+  setCutFlattop: (on: boolean) => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -108,6 +175,7 @@ export const useStore = create<State>((set) => ({
   device: "",
   tab: "sensors",
   cursorMs: 0,
+  timeRange: null,
   loadingMachines: true,
   theme: loadTheme(),
   // Default to the fast cluster path (remote); PullControl's device snap adjusts it.
@@ -119,6 +187,12 @@ export const useStore = create<State>((set) => ({
     duoPasscode: "",
   },
   fontScale: loadFontScale(),
+  rotParams: null,
+  qsParams: null,
+  annotations: loadAnnotations(),
+  traceSignals: readPref(TRACE_SIGNALS_KEY, isNameList, DEFAULT_TRACE_SIGNALS, (v) => JSON.parse(v) as string[]),
+  traceOpen: readPref(TRACE_OPEN_KEY, isBool, true, (v) => v === "true"),
+  cutFlattop: readPref(CUT_FLATTOP_KEY, isBool, false, (v) => v === "true"),
 
   async init() {
     // fetchDevices() guards its own errors and returns [] (no live backend / no
@@ -154,10 +228,27 @@ export const useStore = create<State>((set) => ({
     const machines = await fetchMachines();
     set({ machines, machine: machines[0]?.id ?? null });
   },
-  setMachine: (id) => set({ machine: id }),
+  setMachine: (id) => set((s) => (s.machine === id ? {} : { machine: id, timeRange: null })),
   setDevice: (id) => set({ device: id }),
   setTab: (t) => set({ tab: t }),
   setCursorMs: (t) => set({ cursorMs: t }),
+  setTimeRange: (r) =>
+    set((s) => (r === s.timeRange || (r && s.timeRange && r[0] === s.timeRange[0] && r[1] === s.timeRange[1])
+      ? {} : { timeRange: r })),
+  setRotParams: (p) => set({ rotParams: p }),
+  setQsParams: (p) => set({ qsParams: p }),
+  addAnnotation: (machine, a) =>
+    set((s) => withAnnotations(s, machine, [...(s.annotations[machine] ?? []), { ...a, id: newAnnotationId() } as Annotation])),
+  updateAnnotation: (machine, id, patch) =>
+    set((s) =>
+      withAnnotations(s, machine, (s.annotations[machine] ?? []).map((a) => (a.id === id ? ({ ...a, ...patch } as Annotation) : a))),
+    ),
+  removeAnnotation: (machine, id) =>
+    set((s) => withAnnotations(s, machine, (s.annotations[machine] ?? []).filter((a) => a.id !== id))),
+  setAnnotations: (machine, list) => set((s) => withAnnotations(s, machine, list)),
+  setTraceSignals: (names) => { savePref(TRACE_SIGNALS_KEY, names); set({ traceSignals: names }); },
+  setTraceOpen: (open) => { savePref(TRACE_OPEN_KEY, open); set({ traceOpen: open }); },
+  setCutFlattop: (on) => { savePref(CUT_FLATTOP_KEY, on); set({ cutFlattop: on }); },
   setFetchCreds: (patch) => set((s) => ({ fetchCreds: { ...s.fetchCreds, ...patch } })),
   toggleTheme: () =>
     set((s) => {
@@ -175,6 +266,15 @@ export const useStore = create<State>((set) => ({
     set({ fontScale: n });
   },
 }));
+
+// Replace one machine's annotation list (dropping the key when empty) and persist.
+function withAnnotations(s: State, machine: string, list: Annotation[]): Pick<State, "annotations"> {
+  const annotations = { ...s.annotations };
+  if (list.length) annotations[machine] = list;
+  else delete annotations[machine];
+  saveAnnotations(annotations);
+  return { annotations };
+}
 
 // Keep the theme in sync across browser tabs: toggleTheme writes localStorage, so a
 // `storage` event fires in every OTHER tab — mirror it into the store + the DOM.

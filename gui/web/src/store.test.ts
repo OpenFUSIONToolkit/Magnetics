@@ -65,3 +65,22 @@ test("the presets are evenly spaced from S up to a boosted XL", () => {
   expect(M - S).toBeCloseTo(L - M);
   expect(L - M).toBeCloseTo(XL - L);
 });
+
+test("annotations: add / update / remove per shot, persisted to localStorage", () => {
+  const s = useStore.getState();
+  s.setAnnotations("190000", []);
+  s.addAnnotation("190000", { kind: "vline", t: 1500, label: "onset" });
+  s.addAnnotation("190000", { kind: "hline", panel: "amplitude", y: 2 });
+  let list = useStore.getState().annotations["190000"];
+  expect(list).toHaveLength(2);
+  expect(list[0].id).toBeTruthy();
+  expect(JSON.parse(window.localStorage.getItem("magnetics-annotations")!)["190000"]).toHaveLength(2);
+
+  useStore.getState().updateAnnotation("190000", list[0].id, { t: 1600 });
+  list = useStore.getState().annotations["190000"];
+  expect(list[0]).toMatchObject({ kind: "vline", t: 1600, label: "onset" });
+
+  useStore.getState().removeAnnotation("190000", list[0].id);
+  useStore.getState().removeAnnotation("190000", list[1].id);
+  expect(useStore.getState().annotations["190000"]).toBeUndefined(); // empty list → key dropped
+});
