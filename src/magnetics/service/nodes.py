@@ -19,7 +19,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from ..core import contracts, geometry, mode_shape, qs_bridge, spectral
+from ..core import contracts, geometry, mode_shape, plasma, qs_bridge, spectral
 from ..data import device_geom, devices, diiid_geometry, h5source
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,7 @@ def refresh() -> None:
         _stack_cached,
         _array_spectrum,
         _array_mode_spec,
+        _flattop,
         _qs_run,
         _dev_geom,
         _real_theta,  # channel→θ map derives from channel_names: stale after a re-pull
@@ -180,6 +181,62 @@ def _device_key(shot):
         return devices.load_device(disp), disp
     except Exception:  # noqa: BLE001 — unknown device → legacy path
         return None, None
+
+
+# ── Ip flattop: the optional analysis cut-off (``cut_flattop=1``) ─────────────
+def _ip_channel(shot) -> str | None:
+    """The shot file's plasma-current channel: the device file's ``plasma pointnames →
+    current`` name (DIII-D ``ip``, KSTAR ``Ip``), else a common spelling; None if absent."""
+    names = set(h5source.channel_names(str(shot)))
+    cands = []
+    try:
+        dev = devices.load_device(_dev_geom(str(shot)).device_id)
+        name = ((dev.get("plasma pointnames") or {}).get("current") or {}).get("name")
+        if name:
+            cands.append(name)
+    except Exception:  # noqa: BLE001 — no device file → common spellings only
+        pass
+    return next((c for c in [*cands, "ip", "Ip", "IP"] if c in names), None)
+
+
+@lru_cache(maxsize=16)
+def _flattop(shot):
+    """The shot's Ip flattop (``plasma.ip_flattop``), or None without a usable Ip."""
+    ch = _ip_channel(shot)
+    if ch is None:
+        return None
+    t_ms, ip = h5source.load_channel(str(shot), ch)
+    try:
+        return plasma.ip_flattop(t_ms, ip)
+    except ValueError:
+        return None
+
+
+def _flattop_cut_s(shot, params) -> float | None:
+    """End of the Ip flattop (s) when the GUI asks to stop the analysis there
+    (``cut_flattop=1``) and the shot has an Ip trace; else None (no cut)."""
+    if not _flag(params, "cut_flattop"):
+        return None
+    ft = _flattop(str(shot))
+    return ft.t_end_ms / 1e3 if ft else None
+
+
+def _flattop_ms(shot) -> list[float] | None:
+    ft = _flattop(str(shot))
+    return [round(ft.t_start_ms, 1), round(ft.t_end_ms, 1)] if ft else None
+
+
+def _crop_time(node: dict, t_end_ms: float) -> dict:
+    """Drop the time columns after ``t_end_ms`` from a time-x heatmap node (z is
+    row-major [i_y][i_x])."""
+    x = node.get("x") or []
+    keep = [i for i, t in enumerate(x) if t <= t_end_ms]
+    if len(keep) == len(x):
+        return node
+    node["x"] = [x[i] for i in keep]
+    node["z"] = [[row[i] for i in keep] for row in node.get("z", [])]
+    node.setdefault("meta", {})["cut_at_ms"] = round(t_end_ms, 1)
+    return node
 
 
 def _arrays(shot):
@@ -1296,6 +1353,9 @@ def _mode_track(shot, params=None) -> dict:
     # Sample finely, but only over the active-signal window — the full record is mostly
     # dead time, which both coarsens the trace and biases the dominant mode toward n=0.
     t_lo, t_hi = mode_shape.active_time_window(spec)
+    cut = _flattop_cut_s(shot, params)
+    if cut is not None:
+        t_hi = max(t_lo, min(t_hi, cut))
     tr = mode_shape.track_from_spectrum(
         spec, phis, f_khz * 1e3, n_slices=n_slices, t_range=(t_lo, t_hi)
     )
@@ -1336,6 +1396,9 @@ def _mode_over_time(shot, params=None) -> dict:
     phis = np.array([p for _, p in arr], dtype=float)
     spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
     t_lo, t_hi = mode_shape.active_time_window(spec)
+    cut = _flattop_cut_s(shot, params)
+    if cut is not None:
+        t_hi = max(t_lo, min(t_hi, cut))
     tr = mode_shape.ridge_track_from_spectrum(spec, phis, n_slices=n_slices, t_range=(t_lo, t_hi))
     vals, counts = np.unique(tr.n_by_time, return_counts=True)
     f_lo, f_hi = (
@@ -1360,6 +1423,46 @@ def _mode_over_time(shot, params=None) -> dict:
             "shot": str(shot),
             "note": "best-fit toroidal n of the strongest in-band mode at each time "
             "(frequency follows the ridge); see the n-map for all modes",
+        },
+    )
+
+
+# ── mode_amplitude: rotating-mode amplitude vs time, one trace per |n| ───────
+def _mode_amplitude(shot, params=None) -> dict:
+    """Rotating-mode amplitude vs time for each toroidal |n| (0…5): the probe-averaged
+    STFT magnitude |δḂp| of the strongest in-band cell whose best-fit n is ±n. Each
+    (t, f) cell counts toward only its own n, so a strong n=1 doesn't echo into n=2;
+    gaps (null) mark times where an |n| owns no cell. Same slices as ``mode_over_time``."""
+    arr = _toroidal_arr(str(shot))
+    phis = np.array([p for _, p in arr], dtype=float)
+    spec = _array_spectrum(str(shot), tuple(n for n, _ in arr))
+    t_lo, t_hi = mode_shape.active_time_window(spec)
+    cut = _flattop_cut_s(shot, params)
+    if cut is not None:
+        t_hi = max(t_lo, min(t_hi, cut))
+    n_slices = _i(params, "n_slices", 300)
+    res = mode_shape.mode_amplitude_by_n(spec, phis, n_slices=n_slices, t_range=(t_lo, t_hi))
+    t = res.t_ms.tolist()
+
+    def _nulls(row):
+        return [None if not np.isfinite(v) else float(v) for v in row]
+
+    series = [
+        {"name": f"n={int(n)}", "x": t, "y": _nulls(res.amplitude[i])}
+        for i, n in enumerate(res.abs_n)
+    ]
+    return contracts.line(
+        series,
+        {"x": "time (ms)", "y": "mean probe |δḂp| (arb.)"},
+        meta={
+            "abs_n": [int(n) for n in res.abs_n],
+            "freq_kHz": [_nulls(np.round(r, 2)) for r in res.freq_khz],
+            "n_probes": len(arr),
+            "n_slices": int(res.t_ms.size),
+            "shot": str(shot),
+            "legend_title": "|n|",
+            "note": "per-|n| probe-averaged STFT magnitude of dBp/dt at that n's strongest "
+            "in-band frequency; each (t, f) cell counts only toward its best-fit n",
         },
     )
 
@@ -1520,6 +1623,9 @@ def _prep_qs_ds(shot, params):
     tmax_ms_str = params.get("tmax_ms") if params else None
     tmin_s = float(tmin_ms_str) / 1e3 if tmin_ms_str else tmin_s_auto
     tmax_s = float(tmax_ms_str) / 1e3 if tmax_ms_str else tmax_s_auto
+    cut = _flattop_cut_s(shot, params)
+    if cut is not None and cut > tmin_s:  # stop the fit at the Ip flattop end
+        tmax_s = min(tmax_s, cut)
 
     # Serialize concurrent calls with the same args: only one thread runs
     # run_steps; the others wait and then read the cached result instantly.
@@ -1662,6 +1768,10 @@ def _fit_residuals(shot, params=None) -> dict:
     return qs_bridge.fit_to_fit_residuals_node(_prep_qs_ds(shot, params).fit)
 
 
+# Native units of the plotted raw signals, for the GUI's display scaling.
+_SIGNAL_UNITS = {"ip": "A", "bt": "T", "coil": "A", "Bp": "T", "Br": "T", "T/s": "T/s"}
+
+
 def _extra_signals(shot, params=None) -> dict:
     """User-requested raw signals (Ip, Dα, …) as time series → LineNode.
 
@@ -1669,11 +1779,20 @@ def _extra_signals(shot, params=None) -> dict:
     HDF5), then reads them here. `signals` is a comma-separated pointname list; each
     found channel becomes one series (downsampled to keep the line light), each
     missing name is reported in ``meta.missing`` so the panel can warn.
+    ``meta.available`` groups every channel in the file (plasma / coil / sensor) for the
+    plasma-signal strip, with ``meta.units`` and the Ip ``meta.flattop_ms``.
     """
     raw = params.get("signals", "") if params else ""
     names = [n.strip() for n in str(raw).split(",") if n.strip()]
     have = set(h5source.channel_names(str(shot)))
-    series, found, missing = [], [], []
+    geom = _dev_geom(str(shot))
+    groups: dict[str, list[str]] = {"plasma": [], "coil": [], "sensor": []}
+    for nm in sorted(have, key=str.lower):
+        kind = geom.kind_of(nm)
+        groups[
+            "plasma" if kind in ("aux", "other") else kind if kind == "coil" else "sensor"
+        ].append(nm)
+    series, found, missing, units = [], [], [], {}
     for name in names:
         if name not in have:
             missing.append(name)
@@ -1686,11 +1805,14 @@ def _extra_signals(shot, params=None) -> dict:
             t_ms, d = t_ms[sel], d[sel]
         series.append({"name": name, "x": t_ms.tolist(), "y": d.tolist()})
         found.append(name)
+        kind = "T/s" if geom.family_of(name) == "MPI_BDOT" else geom.kind_of(name)
+        units[name] = _SIGNAL_UNITS.get(name, _SIGNAL_UNITS.get(kind, ""))
 
     return contracts.line(
         series,
         {"x": "time (ms)", "y": "signal"},
-        meta={"shot": str(shot), "found": found, "missing": missing, "requested": names},
+        meta={"shot": str(shot), "found": found, "missing": missing, "requested": names}
+        | {"available": groups, "units": units, "flattop_ms": _flattop_ms(shot)},
     )
 
 
@@ -1723,6 +1845,7 @@ _BUILDERS = {
     "mode_pattern": _mode_pattern,
     "mode_track": _mode_track,
     "mode_over_time": _mode_over_time,
+    "mode_amplitude": _mode_amplitude,
     # rotating array views: raw wave-stripes + poloidal phase fit + raw trace
     "toroidal_stripes": _toroidal_stripes,
     "poloidal_stripes": _poloidal_stripes,
@@ -1735,4 +1858,14 @@ def build_node(shot: str, node_id: str, params: dict | None = None) -> dict:
     if node_id not in _BUILDERS:
         raise KeyError(f"unknown node {node_id!r}; have {', '.join(sorted(_BUILDERS))}")
     h5source.shot_file(shot)  # raises KeyError if the shot isn't available
-    return _BUILDERS[node_id](shot, params)
+    node = _BUILDERS[node_id](shot, params)
+    # Rotating (t, f) maps run over the whole record; with cut_flattop=1 drop the
+    # columns after the Ip flattop. (The QS fit and the rotating tracks apply the cut
+    # inside their builders, so their fits/metadata see only the flattop.)
+    cut = _flattop_cut_s(shot, params) if node_id in _TF_MAPS else None
+    if cut is not None and node.get("kind") == "heatmap":
+        node = _crop_time(node, cut * 1e3)
+    return node
+
+
+_TF_MAPS = {"spectrogram", "mode_number", "coherence"}

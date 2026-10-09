@@ -5,15 +5,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Plotly from "plotly.js-dist-min";
 import { useStore } from "../../store";
 import { apiBase, startFetch, usingLiveBackend } from "../../lib/api";
+import { resetTimeRangeOnDoubleClick } from "../../lib/timeRange";
 import { useNode } from "../../lib/useNode";
 import NodeView from "../../lib/NodeView";
 import Plot from "../../lib/Plot";
 import type { ContourNode, LineNode, MetricsNode } from "../../lib/contract";
-import { phiPeak as phiPeakFn, phiRms as phiRmsFn } from "../../lib/qsTransforms";
+import { QS_DEFAULTS, phiPeak as phiPeakFn, phiRms as phiRmsFn } from "../../lib/qsTransforms";
 import { fetchDevices, type DeviceInfo } from "../../lib/api";
-
-// ── Colorblind-safe palette (Wong 2011) — for sensor/channel traces ──
-const LINE_PALETTE = ["#0072B2", "#E69F00", "#56B4E9", "#D55E00", "#CC79A7", "#009E73", "#F0E442"];
+import {
+  LINE_PALETTE, QS_MODE_PALETTE as MODE_PALETTE, lineTraces, phiTimeTraces, type PhiColormap,
+} from "../../lib/plotTraces";
 
 // Excluded sensors are drawn on the maps but de-emphasised (thin grey dashes) so
 // the user can still see where the deselected/broken probes sit.
@@ -28,9 +29,6 @@ const CREDS_HINT =
   "Enter your username in the left “Pull a shot” panel (plus password/Duo if your "
   + "account needs them) to fetch new signals.";
 
-// ── Mode-number palette — green/purple/red for n=1,2,3,… ─────────────
-// Clearly distinct hues so each mode reads immediately, not blue/orange.
-const MODE_PALETTE = ["#2ca02c", "#9467bd", "#d62728", "#8c564b", "#e377c2", "#bcbd22", "#17becf"];
 
 // ── Hooks & helpers ───────────────────────────────────────────────────
 // Plotly chrome (axis colors, base font) is themed identically by the shared
@@ -44,55 +42,6 @@ function useDarkMode(): boolean {
 // sites (returns the caller's overrides; the wrapper applies the theme).
 function themedLayout(_dark: boolean, overrides: Partial<Plotly.Layout>): Partial<Plotly.Layout> {
   return overrides;
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-// Build Plotly traces from a LineNode, optionally with per-series visibility overrides.
-function lineTraces(
-  node: LineNode,
-  opts?: { visible?: boolean[]; opacity?: number[]; palette?: string[] },
-): Partial<Plotly.PlotData>[] {
-  const pal = opts?.palette ?? LINE_PALETTE;
-  const traces: Partial<Plotly.PlotData>[] = [];
-
-  node.series.forEach((s, i) => {
-    const color = pal[i % pal.length];
-    const vis = opts?.visible?.[i] !== false;
-    const opacity = opts?.opacity?.[i] ?? 1;
-
-    // ±1σ band from the contract's typed lower/upper fields (also what the
-    // HDF5 export writes, so the band on screen matches the downloaded data).
-    if (s.lower && s.upper && vis) {
-      traces.push({
-        type: "scatter", mode: "lines", x: s.x,
-        y: s.upper,
-        line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
-        opacity,
-      } as Partial<Plotly.PlotData>);
-      traces.push({
-        type: "scatter", mode: "lines", x: s.x,
-        y: s.lower,
-        fill: "tonexty", fillcolor: hexToRgba(color, 0.45 * opacity),
-        line: { width: 0, color }, showlegend: false, hoverinfo: "skip",
-        opacity,
-      } as Partial<Plotly.PlotData>);
-    }
-
-    traces.push({
-      type: "scatter", mode: "lines", name: s.name, x: s.x, y: s.y,
-      line: { color, width: 1.5 },
-      visible: vis ? true : "legendonly",
-      opacity,
-    } as Partial<Plotly.PlotData>);
-  });
-
-  return traces;
 }
 
 // ── Sensor arrays most useful for QS analysis — offline/mock fallback,
@@ -157,26 +106,27 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   // Selective subscriptions: a whole-store destructure re-rendered this heavy tab
   // on EVERY store change (each keystroke in the left rail's credential fields).
   const setCursorMs = useStore((s) => s.setCursorMs);
+  const setQsParams = useStore((s) => s.setQsParams);
   const machines = useStore((s) => s.machines);
 
   // ── Analysis settings ─────────────────────────────────────────────
-  const [ns, setNs]               = useState("1,2,3");
-  const [ms, setMs]               = useState("0");
-  const [channelFilter, setChannelFilter] = useState("Bp LFS midplane");
-  const [detrendType, setDetrendType]     = useState("baseline");
+  const [ns, setNs]               = useState<string>(QS_DEFAULTS.ns);
+  const [ms, setMs]               = useState<string>(QS_DEFAULTS.ms);
+  const [channelFilter, setChannelFilter] = useState<string>(QS_DEFAULTS.channel_filter);
+  const [detrendType, setDetrendType]     = useState<string>(QS_DEFAULTS.detrend_type);
   const [detrendLo, setDetrendLo] = useState("");
   const [detrendHi, setDetrendHi] = useState("");
   const [tminMs, setTminMs]       = useState("");  // "" = auto (read from HDF5)
   const [tmaxMs, setTmaxMs]       = useState("");
-  const [colormapChoice, setColormapChoice] = useState<"rdbu" | "cividis" | "viridis">("rdbu");
+  const [colormapChoice, setColormapChoice] = useState<PhiColormap>("rdbu");
 
   // ── Advanced fit-tuning settings ───────────────────────────────────
-  const [uncertainty, setUncertainty]   = useState("2e-5");
-  const [energyFraction, setEnergyFraction] = useState("0.98");
-  const [fitBasis, setFitBasis]         = useState("sinusoidal-integral");
-  const [fitCond, setFitCond]           = useState("1000"); // OMFIT SLCONTOUR inversion cutoff (1/rcond), not the K>10 trust threshold
-  const [cutoffLo, setCutoffLo]         = useState("5.0");
-  const [cutoffHi, setCutoffHi]         = useState("250.0");
+  const [uncertainty, setUncertainty]   = useState<string>(QS_DEFAULTS.sigma);
+  const [energyFraction, setEnergyFraction] = useState<string>(QS_DEFAULTS.energy);
+  const [fitBasis, setFitBasis]         = useState<string>(QS_DEFAULTS.fit_basis);
+  const [fitCond, setFitCond]           = useState<string>(QS_DEFAULTS.fit_cond); // OMFIT SLCONTOUR inversion cutoff (1/rcond), not the K>10 trust threshold
+  const [cutoffLo, setCutoffLo]         = useState<string>(QS_DEFAULTS.cutoff_lo);
+  const [cutoffHi, setCutoffHi]         = useState<string>(QS_DEFAULTS.cutoff_hi);
 
   // ── Devices (for the Array dropdown's sensor-set list) ─────────────
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -211,6 +161,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
 
   // ── Deferred fetch: only compute when user clicks Plot ────────────
   const [committedParams, setCommittedParams] = useState<Record<string, string> | null>(null);
+  const cutFlattop = useStore((s) => s.cutFlattop);
   // Bumped on every Plot click so an IDENTICAL param set still re-runs the fetch —
   // without it a transient failure was unrecoverable except by jiggling a setting.
   const [plotNonce, setPlotNonce] = useState(0);
@@ -233,28 +184,45 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     }
     if (tminMs) p.tmin_ms = tminMs;
     if (tmaxMs) p.tmax_ms = tmaxMs;
+    if (cutFlattop) p.cut_flattop = "1"; // backend clamps the fit window to the Ip flattop
     // Sorted so the param string is stable (identical exclusion set → same fetch key).
     const excl = Array.from(excludedChannels).sort().join(",");
     if (excl) p.fit_exclude = excl;
     return p;
   }, [
     ns, ms, channelFilter, detrendType, detrendLo, detrendHi, tminMs, tmaxMs,
-    uncertainty, energyFraction, fitBasis, fitCond, cutoffLo, cutoffHi, excludedChannels,
+    uncertainty, energyFraction, fitBasis, fitCond, cutoffLo, cutoffHi, excludedChannels, cutFlattop,
   ]);
 
+  // Toggling the flattop cut-off (strip, any tab) refits right away rather than just
+  // flagging the Plot button — it's a global analysis switch, not a QS-tab setting.
+  const cutRef = useRef(cutFlattop);
+  useEffect(() => {
+    if (cutRef.current === cutFlattop) return;
+    cutRef.current = cutFlattop;
+    setCommittedParams((prev) => (prev ? qsParams : prev));
+  }, [cutFlattop, qsParams]);
 
-  // Linked time-axis zoom (declared here so the trim-window effect below can reset it).
-  const [timeRange, setTimeRange] = useState<[number, number] | null>(null);
+
+  // Linked time-axis zoom — the GLOBAL shared time axis (plasma-signal strip, rotating,
+  // Compare all follow it). Declared here so the trim-window effect below can reset it.
+  const timeRange = useStore((s) => s.timeRange);
+  const setTimeRange = useStore((s) => s.setTimeRange);
 
   // ── Typed y-axis zoom (client-side only — doesn't touch fetched data) ──
   const [phiYMin, setPhiYMin] = useState("");  // "" = auto (0–360°)
   const [phiYMax, setPhiYMax] = useState("");
 
   // When the trim window changes, clear any user zoom so the axis re-fits to the new data.
+  // Only on a real change — not on mount, which would wipe the zoom shared with the
+  // other tabs every time this one opens.
+  const trimKeyRef = useRef(`${tminMs}|${tmaxMs}`);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom to refit the axis on a new trim window
+    const k = `${tminMs}|${tmaxMs}`;
+    if (trimKeyRef.current === k) return;
+    trimKeyRef.current = k;
     setTimeRange(null);
-  }, [tminMs, tmaxMs]);
+  }, [tminMs, tmaxMs, setTimeRange]);
 
   // A different array has different channels, so stale exclusions don't apply.
   useEffect(() => {
@@ -269,11 +237,18 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount only
   }, []);
 
-  // When Plot is clicked (committedParams changes), reset zoom to fit new data.
+  // Publish the committed fit params so the Compare view plots this same fit.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom when new computation is triggered
-    setTimeRange(null);
-  }, [committedParams]);
+    if (committedParams) setQsParams(committedParams);
+  }, [committedParams, setQsParams]);
+
+  // When Plot is clicked (committedParams changes), reset zoom to fit new data — but not
+  // for the automatic first commit on mount (that would wipe the shared zoom).
+  const prevCommitRef = useRef(committedParams);
+  useEffect(() => {
+    if (prevCommitRef.current !== null && prevCommitRef.current !== committedParams) setTimeRange(null);
+    prevCommitRef.current = committedParams;
+  }, [committedParams, setTimeRange]);
 
   // null fetchMachine suppresses all useNode fetches until initial commit fires.
   const fetchMachine = committedParams !== null ? machine : null;
@@ -486,13 +461,15 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   }, [setCursorMs]);
 
   // ── Linked time-axis zoom (state declared above) ──────────────────
+  // Double-click → full range on every tab (see resetTimeRangeOnDoubleClick).
+  const onTimeDoubleClick = useMemo(() => resetTimeRangeOnDoubleClick(setTimeRange), [setTimeRange]);
   const handleTimeRelayout = useCallback((e: Record<string, unknown>) => {
     if (e["xaxis.autorange"] === true) {
       setTimeRange(null);
     } else if (e["xaxis.range[0]"] != null) {
       setTimeRange([Number(e["xaxis.range[0]"]), Number(e["xaxis.range[1]"])]);
     }
-  }, []);
+  }, [setTimeRange]);
 
   // φ(t) contour: also keep the "y (θ°)" boxes in sync when the user zooms/pans/
   // double-click-resets the plot directly (drag-box zoom, scroll, etc.), not just
@@ -528,7 +505,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
       setPhiYMin(String(Math.round(Number(e["yaxis.range[0]"]) * 10) / 10));
       setPhiYMax(String(Math.round(Number(e["yaxis.range[1]"]) * 10) / 10));
     }
-  }, [setPhiYMin, setPhiYMax]);
+  }, [setPhiYMin, setPhiYMax, setTimeRange]);
 
   // ── Shared time axis ──────────────────────────────────────────────
   // Double-click resets to [tMin, tMax] — the union of every linked panel's real
@@ -827,34 +804,10 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
   [fitResNode, sharedSigResRange, timeXAxis]);
 
   // ── Section 8: phi_t waterfall ────────────────────────────────────
-  const cmapProps = useMemo(() => {
-    if (colormapChoice === "cividis") return { colorscale: "Cividis", reversescale: false };
-    if (colormapChoice === "viridis") return { colorscale: "Viridis", reversescale: false };
-    return { colorscale: "RdBu", reversescale: true };  // RdBu_r ≈ notebook matplotlib
-  }, [colormapChoice]);
-
-  const phiTimeData = useMemo((): Partial<Plotly.PlotData>[] => {
-    if (!phiTimePlot) return [];
-    const [zmin, zmax] = phiTimePlot.zrange ?? [-42, 42];
-    const traces: Partial<Plotly.PlotData>[] = [{
-      type: "heatmap" as const,
-      x: phiTimePlot.x, y: phiTimePlot.y, z: phiTimePlot.z,
-      ...cmapProps,
-      zmin, zmax,
-      zsmooth: false,
-      showscale: true,
-      colorbar: { title: { text: "Fit" }, thickness: 12, outlinewidth: 0 },
-    } as Partial<Plotly.PlotData>];
-    if (phiPeak) {
-      traces.push({
-        type: "scatter" as const, mode: "markers" as const,
-        x: phiTimePlot.x, y: phiPeak,
-        marker: { symbol: "circle-open" as const, size: 4, color: "white", line: { width: 1, color: "white" } },
-        hoverinfo: "skip" as const, showlegend: false,
-      } as Partial<Plotly.PlotData>);
-    }
-    return traces;
-  }, [phiTimePlot, phiPeak, cmapProps]);
+  const phiTimeData = useMemo(
+    () => (phiTimePlot ? phiTimeTraces(phiTimePlot, phiPeak, colormapChoice) : []),
+    [phiTimePlot, phiPeak, colormapChoice],
+  );
 
   const phiYRange = useMemo((): [number, number] =>
     (phiYMin !== "" && phiYMax !== "") ? [Number(phiYMin), Number(phiYMax)] : [0, 360],
@@ -1162,18 +1115,18 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                 xaxis: { ...timeXAxis, showticklabels: false },
                 yaxis: { title: { text: "RMS (G)" }, rangemode: "tozero" as const },
                 margin: { t: 4, b: 4, l: 60, r: 80 },
-              } as Partial<Plotly.Layout>} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phi_rms")} download={dl("phi_t")} />
+              } as Partial<Plotly.Layout>} onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick} exportName={xn("phi_rms")} download={dl("phi_t")} />
             )}
-            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handlePhiRelayout} exportName={xn("phi_t")} download={dl("phi_t")} />
+            <Plot height={400} data={phiTimeData} layout={phiTimeLayout} onClick={seekTo} onRelayout={handlePhiRelayout} onDoubleClick={onTimeDoubleClick} exportName={xn("phi_t")} download={dl("phi_t")} />
           </div>
         )}
 
         {/* Section 7: Mode amplitude & phase */}
         {ampNode?.kind === "line" && (
-          <Plot height={200} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("amplitude")} download={dl("amplitude")} />
+          <Plot height={200} data={ampData} layout={ampLayout} onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick} exportName={xn("amplitude")} download={dl("amplitude")} />
         )}
         {phaseTimeNode?.kind === "line" && (
-          <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("phase_t")} download={dl("phase_t")} />
+          <Plot height={200} data={phaseTimeData} layout={phaseTimeLayout} onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick} exportName={xn("phase_t")} download={dl("phase_t")} />
         )}
       </div>
 
@@ -1245,7 +1198,7 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                   showlegend: false,
                   margin: { t: 4, b: 34, l: 64, r: 20 },
                 } as Partial<Plotly.Layout>)}
-                onClick={seekTo} onRelayout={handleTimeRelayout}
+                onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick}
                 exportName={xn(`custom_${s.name}`)} />
             ))}
           </div>
@@ -1294,13 +1247,13 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
                     showlegend: false,
                     margin: { t: 2, b: isLast ? 34 : 2, l: 92, r: 20 },
                   } as Partial<Plotly.Layout>)}
-                  onClick={seekTo} onRelayout={handleTimeRelayout}
+                  onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick}
                   exportName={xn(`signal_${pair.channel}`)} />
               );
             })}
           </div>
         ) : (
-          <Plot height={240} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout}
+          <Plot height={240} data={signalData} layout={signalLayout} onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick}
             exportName={xn("signal_conditioning")} download={dl("signal_conditioning")} />
         )}
       </div>
@@ -1315,12 +1268,12 @@ export default function QuasiStationaryTab({ machine }: { machine: string }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               {/* Residuals — top */}
               {fitResNode
-                ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("fit_residuals")} download={dl("fit_residuals")} />
+                ? <Plot height={150} data={fitResData} layout={fitResLayout} onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick} exportName={xn("fit_residuals")} download={dl("fit_residuals")} />
                 : <div className="placeholder" style={{ height: 150 }}>{fitResError ? `residuals unavailable: ${fitResError.replace(/^Error:\s*/, "")}` : "loading residuals…"}</div>
               }
               {/* Chi² — bottom */}
               {chiSqNode
-                ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} exportName={xn("chi_sq_t")} download={dl("chi_sq_t")} />
+                ? <Plot height={130} data={chiSqData} layout={chiSqLayout} onClick={seekTo} onRelayout={handleTimeRelayout} onDoubleClick={onTimeDoubleClick} exportName={xn("chi_sq_t")} download={dl("chi_sq_t")} />
                 : <div className="placeholder" style={{ height: 130 }}>{chiSqError ? `χ² unavailable: ${chiSqError.replace(/^Error:\s*/, "")}` : "loading χ²…"}</div>
               }
             </div>

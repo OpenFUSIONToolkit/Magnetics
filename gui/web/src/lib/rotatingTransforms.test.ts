@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { gatePosToPct, medianStep, percentile } from "./rotatingTransforms";
+import { ROT_DEFAULTS, gatePosToPct, medianStep, percentile, rotFetchParams } from "./rotatingTransforms";
 
 test("percentile: endpoints and linear interpolation", () => {
   expect(percentile([10, 20, 30, 40], 0)).toBe(10);
@@ -37,4 +37,12 @@ test("gatePosToPct: monotonic, clamped, log-headroom mapping", () => {
   expect(gatePosToPct(-50)).toBeCloseTo(0, 5); // clamped below
   expect(gatePosToPct(5000)).toBeCloseTo(99.5, 1); // clamped above
   expect(gatePosToPct(500)).toBeGreaterThan(gatePosToPct(100)); // monotonic
+});
+
+test("rotFetchParams: defaults gate on the power floor, no smoothing", () => {
+  const { spec, mode } = rotFetchParams(ROT_DEFAULTS);
+  expect(spec).toMatchObject({ slice_duration: 0.002, max_columns: 1000, fmin: 0, fmax: 50, denoise: 1, power_floor_k: 1, smooth: 0 });
+  expect(mode).toMatchObject({ slice_duration: 0.002, n_gate: 0.3, n_amp_pct: ROT_DEFAULTS.powerGate, smooth: 0 });
+  const off = rotFetchParams({ ...ROT_DEFAULTS, powerGate: 0, smoothOn: true });
+  expect(off.spec).toMatchObject({ denoise: 0, power_floor_k: 0, smooth: 1, smooth_t_cells: 3 });
 });

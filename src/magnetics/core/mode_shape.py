@@ -522,6 +522,76 @@ def ridge_track_from_spectrum(
     )
 
 
+@dataclass(slots=True)
+class ModeAmplitudeByN:
+    kind: str  # "mode_amplitude_by_n"
+    t_ms: NDArray[np.floating]  # slice-center times (ms)
+    abs_n: NDArray[np.integer]  # |n| = 0 … n_max, one row of ``amplitude`` each
+    amplitude: NDArray[np.floating]  # (n_abs, n_times); NaN where |n| owns no cell
+    freq_khz: NDArray[np.floating]  # (n_abs, n_times) frequency of each peak; NaN likewise
+
+
+def mode_amplitude_by_n(
+    spectrum,
+    angle_deg: NDArray[np.floating],
+    *,
+    fmin: float = 1000.0,
+    fmax: float = 25000.0,
+    n_slices: int = 240,
+    t_range: tuple[float, float] | None = None,
+    n_max: int = 5,
+) -> ModeAmplitudeByN:
+    """Rotating-mode amplitude vs time for *each* toroidal |n|.
+
+    At every sampled (time, in-band frequency) cell the complex array pattern ``Z_p`` is
+    projected onto each toroidal harmonic, ``R_n = Σ_p Z_p e^{+inφ_p}`` (the same
+    projection as ``spectral.array_mode_spectrogram``), and the cell is assigned to its
+    best-fit n. The |n| amplitude at a time is the largest ``|R_n| / P`` among the cells
+    assigned to ±n — the probe-averaged STFT magnitude of that mode at its own frequency.
+
+    Only cells *owned* by an n count toward it: with unevenly spaced probes a strong n=1
+    pattern also projects partly onto the n=2, 3 templates, so a plain max over
+    frequency of ``|R_2|`` would echo the n=1 trace. Where no in-band cell is owned by
+    an |n| the amplitude is NaN (a gap) — that n is not the dominant structure at any
+    frequency then. Same slices as ``ridge_track_from_spectrum`` for the same
+    ``n_slices``/``t_range``, so the traces line up with n(t).
+    """
+    times = np.asarray(spectrum.time, dtype=np.float64)
+    freqs = np.asarray(spectrum.freq_band, dtype=np.float64)
+    band = np.flatnonzero((freqs >= fmin) & (freqs <= fmax))
+    if band.size == 0:
+        band = np.arange(freqs.size)
+    idx = _slice_indices(times, n_slices, t_range)
+
+    spec = np.asarray(spectrum.spec)
+    z = spec[np.ix_(np.arange(spec.shape[0]), idx, band)]  # (P, T, F)
+    phi = np.deg2rad(np.asarray(angle_deg, dtype=np.float64))
+    ns = np.arange(-int(n_max), int(n_max) + 1)
+    basis = np.exp(1j * ns[:, None] * phi[None, :])  # (M, P)
+    amp = np.abs(np.einsum("mp,ptf->mtf", basis, z)) / max(z.shape[0], 1)  # (M, T, F)
+    owner = np.abs(ns[np.argmax(amp, axis=0)])  # |n*| per cell (T, F)
+    best = amp.max(axis=0)  # |R_{n*}|/P per cell (T, F)
+
+    abs_n = np.arange(int(n_max) + 1)
+    out = np.full((abs_n.size, idx.size), np.nan)
+    fout = np.full((abs_n.size, idx.size), np.nan)
+    for i, n in enumerate(abs_n):
+        masked = np.where(owner == n, best, -np.inf)  # (T, F)
+        j = np.argmax(masked, axis=1)  # strongest owned cell per time
+        peak = masked[np.arange(idx.size), j]
+        ok = np.isfinite(peak)
+        out[i, ok] = peak[ok]
+        fout[i, ok] = freqs[band[j[ok]]] / 1e3
+
+    return ModeAmplitudeByN(
+        kind="mode_amplitude_by_n",
+        t_ms=times[idx] * 1e3,
+        abs_n=abs_n,
+        amplitude=out,
+        freq_khz=fout,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2-D (θ, φ) modal pattern (eq 23)
 # ---------------------------------------------------------------------------

@@ -250,7 +250,13 @@ a separate spectrogram pipeline and the IDL SLCONTOUR/MODESPEC tools). What a mo
      phase vs time, prominent K/χ² quality.
   3. **Rotating modes** — n-colored spectrogram with linked cursor, phase-vs-φ / phase-vs-θ fits,
      coherence, the θ\* / fittype controls.
-  4. **Fit registry / export** — all analyses for a shot in one place with quality flags.
+  4. **Compare** — the rotating-mode spectrogram (n-map or log power) and the quasi-stationary
+     φ–t contour / amplitude / phase stacked on one shared time axis (zoom in any panel moves
+     all), using the params last run in the Rotating and Quasi-stationary views. User
+     annotations — vertical lines, shaded time spans, per-panel horizontal levels and points —
+     are added by clicking or by typing values, persist per shot in the browser, and
+     export/import as JSON.
+  5. **Fit registry / export** — all analyses for a shot in one place with quality flags.
 - **Multi-device** from the same UI (DIII-D, NSTX-U, synthetic) — the UI is data-driven.
 - A **3D view** (torus colored by the fitted δB(φ,θ), rotating/locked animation) is a strong
   optional/educational mode.

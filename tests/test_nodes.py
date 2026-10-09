@@ -175,6 +175,19 @@ def test_mode_over_time_node():
     assert n["meta"].get("dominant_n") is not None
 
 
+def test_mode_amplitude_node_one_trace_per_n():
+    # amplitude(t) per |n| = 0…5: same slices as n(t); values >= 0 or null (gap)
+    shot = _first_shot()
+    n = nodes.build_node(shot, "mode_amplitude")
+    assert n["kind"] == "line"
+    assert [s["name"] for s in n["series"]] == [f"n={k}" for k in range(6)]
+    x = nodes.build_node(shot, "mode_over_time")["series"][0]["x"]
+    for s in n["series"]:
+        assert s["x"] == x and len(s["y"]) == len(x)
+        assert all(y is None or y >= 0.0 for y in s["y"])
+    assert any(y is not None for s in n["series"] for y in s["y"])
+
+
 def test_mode_number_amp_pct_knob_widens_visible_cells():
     # n_amp_pct is the amplitude-percentile floor: a lower percentile keeps weaker
     # cells, so the n-map shows at least as many as a stricter (higher) floor.
@@ -300,6 +313,20 @@ def test_extra_signals_serves_found_and_reports_missing():
     assert len(node["series"][0]["x"]) == len(node["series"][0]["y"])
 
 
+def test_extra_signals_lists_channels_units_and_flattop():
+    """With no `signals` the node is just the plasma-strip listing: every channel grouped
+    plasma / coil / sensor, plus the Ip flattop; a requested series carries its units."""
+    from magnetics.data import h5source
+
+    shot = _first_shot()
+    meta = nodes.build_node(shot, "extra_signals")["meta"]
+    assert sorted(sum(meta["available"].values(), [])) == sorted(h5source.channel_names(shot))
+    assert "ip" in meta["available"]["plasma"] and meta["flattop_ms"][0] < meta["flattop_ms"][1]
+    assert nodes.build_node(shot, "extra_signals", {"signals": "ip"})["meta"]["units"] == {
+        "ip": "A"
+    }
+
+
 def test_quality_for_k_thresholds():
     # mirrors contract.ts qualityForK
     assert contracts.quality_for_k(5) == "good"
@@ -404,3 +431,26 @@ def test_mode_number_band_follows_fmax(synthetic_shot, monkeypatch):
         assert captured["fmax"] == 50_000.0  # within the default step
     finally:
         nodes.refresh()  # don't leak spy-built cache entries
+
+
+def test_cut_flattop_stops_every_time_analysis_at_the_flattop_end(monkeypatch):
+    """cut_flattop=1 ends the rotating maps and tracks and the QS fit at the Ip
+    flattop end; without it (or without an Ip flattop) nothing is cut."""
+    from magnetics.core.plasma import Flattop
+
+    shot = _first_shot()
+    full = nodes.build_node(shot, "spectrogram")
+    t0, t1 = full["x"][0], full["x"][-1]
+    end = t0 + 0.6 * (t1 - t0)
+    monkeypatch.setattr(nodes, "_flattop", lambda s: Flattop("ip_flattop", t0, end, 1.0e6, 0.95))
+    cut = {"cut_flattop": "1"}
+
+    spec = nodes.build_node(shot, "spectrogram", cut)
+    assert spec["x"][-1] <= end < t1 and spec["meta"]["cut_at_ms"] == round(end, 1)
+    assert len(spec["z"][0]) == len(spec["x"])
+    for nid in ("mode_over_time", "mode_amplitude", "mode_track"):
+        xs = nodes.build_node(shot, nid, cut)["series"][0]["x"]
+        assert xs[-1] <= end + 1e-6, nid
+    amp = nodes.build_node(shot, "amplitude", cut)
+    assert amp["series"][0]["x"][-1] <= end + 1.0  # QS fit window clamped (rounded ms)
+    assert nodes.build_node(shot, "spectrogram")["x"][-1] == t1  # flag off → uncut
